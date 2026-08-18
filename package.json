@@ -1,0 +1,11 @@
+{
+  "name": "oms-orders-sync",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "csv-parse": "^5.5.6",
+    "firebase-admin": "^12.1.0"
+  }
+}
