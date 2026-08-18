@@ -1,0 +1,28 @@
+name: Sync OMS Guru Orders
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 minutes
+  workflow_dispatch: {}      # lets you also trigger it manually from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Run sync
+        env:
+          OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
+          OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          OMS_DAYS_BACK: '15'
+        run: node sync.js
