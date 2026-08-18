@@ -148,6 +148,7 @@ function slimOrder(row) {
     orderDate: row['Order Date'] || '',
     invoiceNumber: cleanId(row['Invoice Number']),
     channelOrderId: cleanId(row['Channel Order Id']),
+    channelSubOrderId: cleanId(row['Channel Sub Order Id']),
     buyerName: row['Buyer Name'] || '',
     buyerCity: row['Buyer City'] || '',
     buyerState: row['Buyer State'] || '',
