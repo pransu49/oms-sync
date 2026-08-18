@@ -136,11 +136,18 @@ function parseOrders(buf) {
 
 // Keep only the fields the admin console actually needs — Firestore documents
 // have a 1MB cap, and trimming keeps writes fast.
+// OMS Guru's raw CSV export prepends a stray backtick (`) to some columns
+// (Channel Order Id, Shipment Tracker) as an Excel-text-formatting artifact —
+// strip it here, same as the manual master-sheet upload path already does,
+// or these IDs will never match what a person actually scans or types.
+function cleanId(v) {
+  return (v || '').toString().replace(/^`+/, '').trim();
+}
 function slimOrder(row) {
   return {
     orderDate: row['Order Date'] || '',
-    invoiceNumber: row['Invoice Number'] || '',
-    channelOrderId: row['Channel Order Id'] || '',
+    invoiceNumber: cleanId(row['Invoice Number']),
+    channelOrderId: cleanId(row['Channel Order Id']),
     buyerName: row['Buyer Name'] || '',
     buyerCity: row['Buyer City'] || '',
     buyerState: row['Buyer State'] || '',
@@ -158,7 +165,7 @@ function slimOrder(row) {
     mobile: row['Buyer Phone'] || '',
     orderType: row['Order Type'] || '',
     status: row['Order Status'] || '',
-    awb: row['Shipment Tracker'] || '',
+    awb: cleanId(row['Shipment Tracker']),
     courier: row['Shipping Company'] || '',
     deliveryDate: row['Delivery Date'] || '',
     shipmentDate: row['Shipment Date'] || '',
