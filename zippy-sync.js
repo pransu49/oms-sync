@@ -58,9 +58,12 @@ async function getOmsOrders() {
 }
 
 // Self-ship rule matches the one already used in the console (Order/AWB Scanner,
-// Amazon Self-Ship tab): Amazon channel + a buyer phone present.
+// Amazon Self-Ship tab): Amazon channel + a buyer phone present. Also require an
+// AWB — Zippy's own tracking page confirms AWB (not the marketplace order number)
+// is one of the identifiers it accepts, so orders without an AWB yet (not picked
+// up by a courier) can't be looked up here regardless.
 function isSelfShip(o) {
-  return (o.channel || "").toLowerCase().includes("amazon") && !!o.buyerPhone;
+  return (o.channel || "").toLowerCase().includes("amazon") && !!o.buyerPhone && !!o.awb;
 }
 
 async function run() {
@@ -74,18 +77,24 @@ async function run() {
   const orderIds = [
     ...new Set(
       selfShip
-        .map((o) => (o.channelOrderId || o.invoiceNumber || "").trim().toUpperCase())
+        .map((o) => (o.awb || "").trim().toUpperCase())
         .filter(Boolean)
     ),
   ];
-  console.log(`${omsOrders.length} OMS orders, ${selfShip.length} self-ship, ${orderIds.length} unique order ids to check.`);
+  console.log(`${omsOrders.length} OMS orders, ${selfShip.length} self-ship with AWB, ${orderIds.length} unique AWBs to check.`);
+  // Keep a lookup back to the human-readable order number for display in the console.
+  const orderNumberByAwb = {};
+  selfShip.forEach((o) => {
+    const awb = (o.awb || "").trim().toUpperCase();
+    if (awb) orderNumberByAwb[awb] = o.channelOrderId || o.invoiceNumber || awb;
+  });
 
   let ok = 0, failed = 0;
   for (const orderId of orderIds) {
     try {
       const shipment = await getShipment(orderId, token);
       await db.collection("zippyShipments").doc(orderId).set(
-        { ...shipment, syncedAt: admin.firestore.FieldValue.serverTimestamp() },
+        { ...shipment, awb: orderId, orderNumber: orderNumberByAwb[orderId] || orderId, syncedAt: admin.firestore.FieldValue.serverTimestamp() },
         { merge: true }
       );
       shipment.error ? failed++ : ok++;
