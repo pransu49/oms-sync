@@ -1,9 +1,11 @@
 name: Sync OMS Guru Orders
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'   # every 15 minutes
-  workflow_dispatch: {}      # lets you also trigger it manually from the Actions tab
+  workflow_dispatch: {}      # triggered every 15 min by cron-job.org — GitHub's own
+                              # free-tier `schedule:` trigger was removed here: running
+                              # both side-by-side caused overlapping runs that raced each
+                              # other writing to Firestore, leaving stale data behind
+                              # even though every individual run reported success.
 
 jobs:
   sync:
