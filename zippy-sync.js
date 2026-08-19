@@ -32,15 +32,18 @@ async function zippyLogin() {
 }
 
 async function getShipment(orderId, token) {
-  const res = await fetch(`${ZIPPY_BASE}/v1/external/shipments?orderId=${encodeURIComponent(orderId)}`, {
+  const res = await fetch(`${ZIPPY_BASE}/v1/external/shipments?orderIds=${encodeURIComponent(orderId)}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return { error: String(res.status) };
-  const data = await res.json();
+  const arr = await res.json();
+  const s = Array.isArray(arr) ? arr[0] : null;
+  if (!s) return { error: "not_found" };
   return {
-    status: data.status || data.currentStatus || data.trackingStatus || null,
-    awbNumber: data.awbNumber || data.awb || null,
-    courierName: data.courierName || data.courier || null,
+    status: s.status || null,
+    subStatus: s.subStatus || null,
+    awbNumber: s.trackingCode || (s.metadata && s.metadata.waybill) || null,
+    courierName: (s.selectedRate && s.selectedRate.carrier) || null,
   };
 }
 
