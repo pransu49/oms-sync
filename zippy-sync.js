@@ -33,6 +33,7 @@ async function zippyLogin() {
       ClientId: COGNITO_CLIENT_ID,
       AuthParameters: {
         REFRESH_TOKEN: process.env.ZIPPY_REFRESH_TOKEN,
+        DEVICE_KEY: null,
       },
     }),
   });
@@ -97,6 +98,7 @@ function chunk(arr, size) {
 
 async function run() {
   console.log("Logging into Zippy...");
+  console.log(`ZIPPY_REFRESH_TOKEN length seen by script: ${(process.env.ZIPPY_REFRESH_TOKEN || "").length} (should be 1778)`);
   const idToken = await zippyLogin();
 
   console.log("Reading OMS Guru orders...");
