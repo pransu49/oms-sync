@@ -18,9 +18,14 @@ jobs:
       - name: Install dependencies
         run: npm install firebase-admin node-fetch@2
 
+      - name: Debug secret (bash-level, before Node)
+        env:
+          ZIPPY_REFRESH_TOKEN: ${{ secrets.ZIPPY_REFRESH_TOKEN }}
+        run: |
+          echo "Bash sees ZIPPY_REFRESH_TOKEN length: ${#ZIPPY_REFRESH_TOKEN}"
+
       - name: Run Zippy sync
         env:
-          ZIPPY_EMAIL: ${{ secrets.ZIPPY_EMAIL }}
-          ZIPPY_PASSWORD: ${{ secrets.ZIPPY_PASSWORD }}
+          ZIPPY_REFRESH_TOKEN: ${{ secrets.ZIPPY_REFRESH_TOKEN }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: node zippy-sync.js
