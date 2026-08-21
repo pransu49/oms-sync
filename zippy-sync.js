@@ -1,14 +1,21 @@
 // zippy-sync.js
-// Add this file to the SAME repo as your OMS Guru sync: github.com/pransu49/oms-sync
+// github.com/pransu49/oms-sync
 //
-// FREE-TIER FIX (writes): only writes to Firestore when a shipment's status actually
-// changed, and skips re-checking orders already in a final state (Delivered / RTO
-// Delivered / Cancelled) since those can never change again.
+// LOGIN: uses Zippy's real internal dashboard API (AWS Cognito, via a captured
+// refresh token) — the public "external" REST API (sellingpartnerapi-in.zippyy.ai)
+// was tried extensively and never worked for this account; this is confirmed
+// working against real data.
 //
-// FREE-TIER FIX (reads): compares against a single small "index" document instead of
-// reading the entire zippyShipments collection every run. Reading ~1,455 documents
-// every 15 minutes was costing ~87,000 reads/day on its own — blowing past Firestore's
-// free 50,000 reads/day cap. The index document costs 1 read + 1 write per run instead.
+// MATCHING: looks up shipments by orderNumber (Zippy's own field, which is
+// literally the Amazon order number, e.g. "407-2150650-8521917") — confirmed by
+// inspecting real API responses, far more reliable than AWB matching.
+//
+// FREE-TIER FIX (writes): only writes to Firestore when a shipment's status
+// actually changed, and skips re-checking orders already in a final state
+// (Delivered / RTO Delivered / Cancelled).
+//
+// FREE-TIER FIX (reads): compares against a single small "index" document
+// instead of reading the entire zippyShipments collection every run.
 
 const admin = require("firebase-admin");
 const fetch = require("node-fetch");
@@ -18,51 +25,62 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
-const ZIPPY_BASE = "https://sellingpartnerapi-in.zippyy.ai";
-const FINAL_STATUSES = ["delivered", "rto delivered", "cancelled", "cancelled by customer"];
+const COGNITO_URL = "https://cognito-idp.us-east-2.amazonaws.com/";
+const COGNITO_CLIENT_ID = "38brrnlch2igpjussov7ue7tqr";
+const ZIPPY_API_BASE = "https://api.in.zippyy.ai";
+const FINAL_STATUSES = ["delivered", "rto_delivered", "cancelled", "cancelled_by_customer"];
 const INDEX_DOC = db.collection("aikm_admin").doc("zippyShipmentsIndex");
 
 async function zippyLogin() {
-  const res = await fetch(`${ZIPPY_BASE}/v1/external/auth/login`, {
+  const res = await fetch(COGNITO_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "x-api-version": "1" },
+    headers: {
+      "Content-Type": "application/x-amz-json-1.1",
+      "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
+    },
     body: JSON.stringify({
-      emailAddress: process.env.ZIPPY_EMAIL,
-      password: process.env.ZIPPY_PASSWORD,
+      AuthFlow: "REFRESH_TOKEN_AUTH",
+      ClientId: COGNITO_CLIENT_ID,
+      AuthParameters: {
+        REFRESH_TOKEN: process.env.ZIPPY_REFRESH_TOKEN,
+        DEVICE_KEY: null,
+      },
     }),
   });
-  if (!res.ok) throw new Error(`Zippy login failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
-  return data.accessToken;
+  if (!res.ok || !data.AuthenticationResult) {
+    throw new Error(`Zippy (Cognito refresh) login failed: ${res.status} ${JSON.stringify(data)}`);
+  }
+  return data.AuthenticationResult.IdToken;
 }
 
-async function getShipment(orderId, token) {
-  const res = await fetch(`${ZIPPY_BASE}/v1/external/shipments?orderIds=${encodeURIComponent(orderId)}`, {
-    headers: { Authorization: `Bearer ${token}` },
+async function fetchShipmentsByOrderNumbers(idToken, orderNumbers) {
+  const res = await fetch(`${ZIPPY_API_BASE}/list`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+    body: JSON.stringify({
+      status: null, filterType: "SHIPMENT_PURCHASED_AT", isAscending: false,
+      subStatuses: null, manifestStatuses: null, carriers: null, carrierServices: null,
+      storeIds: null, awbs: null, startTimestamp: null, endTimestamp: null,
+      orderNumbers, orderSources: null, orderTypes: null, orderTags: null,
+      productNames: null, skuIds: null, excludeOrderTags: null,
+      pageSize: orderNumbers.length, startOffset: null,
+    }),
   });
-  if (!res.ok) return { error: String(res.status) };
-  const arr = await res.json();
-  const s = Array.isArray(arr) ? arr[0] : null;
-  if (!s) return { error: "not_found" };
-  return {
-    status: s.status || null,
-    subStatus: s.subStatus || null,
-    awbNumber: s.trackingCode || (s.metadata && s.metadata.waybill) || null,
-    courierName: (s.selectedRate && s.selectedRate.carrier) || null,
-  };
+  if (!res.ok) throw new Error(`/list failed: ${res.status} ${await res.text()}`);
+  const data = await res.json();
+  return data.shipments || [];
 }
 
 async function getOmsOrders() {
   const snap = await db.collection("aikm_admin").doc("omsOrders").collection("chunks").get();
   let orders = [];
-  snap.forEach((doc) => {
-    orders = orders.concat(doc.data().orders || []);
-  });
+  snap.forEach((doc) => { orders = orders.concat(doc.data().orders || []); });
   return orders;
 }
 
 function isSelfShip(o) {
-  return (o.channel || "").toLowerCase().includes("amazon") && !!o.buyerPhone && !!o.awb;
+  return (o.channel || "").toLowerCase().includes("amazon") && !!o.buyerPhone;
 }
 
 function isFinal(status) {
@@ -75,71 +93,80 @@ function changed(prev, next) {
     prev.status !== next.status ||
     prev.subStatus !== next.subStatus ||
     prev.awbNumber !== next.awbNumber ||
-    prev.courierName !== next.courierName
+    prev.courierName !== next.courierName ||
+    prev.error !== next.error
   );
+}
+
+function chunk(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
 }
 
 async function run() {
   console.log("Logging into Zippy...");
-  const token = await zippyLogin();
+  const idToken = await zippyLogin();
 
   console.log("Reading OMS Guru orders...");
   const omsOrders = await getOmsOrders();
   const selfShip = omsOrders.filter(isSelfShip);
-
-  const orderIds = [
-    ...new Set(selfShip.map((o) => (o.awb || "").trim().toUpperCase()).filter(Boolean)),
+  const orderNumbers = [
+    ...new Set(selfShip.map((o) => (o.channelOrderId || o.invoiceNumber || "").trim()).filter(Boolean)),
   ];
-  const orderNumberByAwb = {};
-  selfShip.forEach((o) => {
-    const awb = (o.awb || "").trim().toUpperCase();
-    if (awb) orderNumberByAwb[awb] = o.channelOrderId || o.invoiceNumber || awb;
-  });
 
   console.log("Reading shipment status index (1 read, not a full collection scan)...");
   const indexSnap = await INDEX_DOC.get();
   const existing = (indexSnap.exists && indexSnap.data().index) || {};
 
-  const toCheck = orderIds.filter((id) => !isFinal(existing[id] && existing[id].status));
-  console.log(`${omsOrders.length} OMS orders, ${orderIds.length} unique AWBs, ${toCheck.length} still need a status check (rest already final).`);
+  const toCheck = orderNumbers.filter((num) => !isFinal(existing[num] && existing[num].status));
+  console.log(`${omsOrders.length} OMS orders, ${orderNumbers.length} unique self-ship order numbers, ${toCheck.length} still need a check (rest already final).`);
 
   let batch = db.batch();
   let batchCount = 0;
   let written = 0, unchanged = 0, failed = 0;
   const newIndex = { ...existing };
 
-  for (const orderId of toCheck) {
+  for (const group of chunk(toCheck, 100)) {
     try {
-      const shipment = await getShipment(orderId, token);
-      const next = { ...shipment, awb: orderId, orderNumber: orderNumberByAwb[orderId] || orderId };
+      const shipments = await fetchShipmentsByOrderNumbers(idToken, group);
+      const foundBy = {};
+      shipments.forEach((s) => { foundBy[s.orderNumber] = s; });
 
-      if (changed(existing[orderId], next)) {
-        const ref = db.collection("zippyShipments").doc(orderId);
-        batch.set(ref, { ...next, syncedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-        batchCount++;
-        written++;
-        if (batchCount >= 400) {
-          await batch.commit();
-          batch = db.batch();
-          batchCount = 0;
+      for (const num of group) {
+        const s = foundBy[num];
+        const next = s
+          ? {
+              status: s.status || null,
+              subStatus: s.subStatus || null,
+              awbNumber: s.trackingCode || null,
+              courierName: (s.selectedRate && s.selectedRate.carrier) || null,
+              orderNumber: num,
+            }
+          : { error: "not_found", orderNumber: num };
+
+        if (changed(existing[num], next)) {
+          const ref = db.collection("zippyShipments").doc(num);
+          batch.set(ref, { ...next, syncedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+          batchCount++;
+          written++;
+          if (batchCount >= 400) { await batch.commit(); batch = db.batch(); batchCount = 0; }
+        } else {
+          unchanged++;
         }
-      } else {
-        unchanged++;
+        newIndex[num] = next;
       }
-      newIndex[orderId] = { status: next.status, subStatus: next.subStatus, awbNumber: next.awbNumber, courierName: next.courierName };
     } catch (e) {
-      console.error(`Order ${orderId} failed:`, e.message);
-      failed++;
+      console.error("Batch failed:", e.message);
+      failed += group.length;
     }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 300));
   }
   if (batchCount > 0) await batch.commit();
 
-  // Single index write — keeps future runs down to 1 read instead of scanning
-  // the whole collection every time.
   await INDEX_DOC.set({ index: newIndex, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
 
-  console.log(`Done. Written: ${written}, Unchanged (skipped): ${unchanged}, Failed: ${failed}. (Final-state orders skipped entirely: ${orderIds.length - toCheck.length})`);
+  console.log(`Done. Written: ${written}, Unchanged (skipped): ${unchanged}, Failed: ${failed}. (Final-state orders skipped entirely: ${orderNumbers.length - toCheck.length})`);
 }
 
 run().catch((e) => {
