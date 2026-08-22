@@ -111,10 +111,23 @@ async function requestExport(daysBack) {
     throw new Error('Export was not queued — OMS Guru may have changed the export form.');
   }
 
-  const m = html.match(
+  // Try the exact match first (in case it still works).
+  let m = html.match(
     /href="(https:\/\/client\.omsguru\.com\/orders\/download\/\d+)"[^>]*>\s*<i[^>]*><\/i>\s*<span class="content"><strong>Click to download the exported orders/
   );
-  if (!m) throw new Error('Could not find the export download link in the response.');
+  // Fallback: OMS Guru's page markup may have changed slightly — just look for ANY
+  // link to the download endpoint, regardless of the surrounding icon/span structure.
+  if (!m) {
+    m = html.match(/href="(https:\/\/client\.omsguru\.com\/orders\/download\/\d+)"/);
+  }
+  if (!m) {
+    // Still nothing — print the part of the page around "download" so we can see
+    // exactly what changed and fix the pattern precisely next time.
+    const idx = html.toLowerCase().indexOf('download');
+    const snippet = idx !== -1 ? html.slice(Math.max(0, idx - 200), idx + 400) : html.slice(0, 600);
+    console.log('DEBUG — could not find download link. Nearby HTML:\n' + snippet);
+    throw new Error('Could not find the export download link in the response.');
+  }
   return m[1];
 }
 
