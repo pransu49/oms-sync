@@ -73,8 +73,20 @@ async function requestExport(daysBack) {
   let res = await fetch(BASE + '/reports/export_data', { headers: { 'Cookie': cookieHeader() } });
   updateCookies(res);
   let html = await res.text();
-  const csrf = html.match(/name="data\[Invoice\]\[oms_token\]" value="([^"]+)"/)?.[1];
-  if (!csrf) throw new Error('Could not find CSRF token on export page — OMS Guru may have changed its form.');
+  let csrf = html.match(/name="data\[Invoice\]\[oms_token\]" value="([^"]+)"/)?.[1];
+  // Fallback: OMS Guru's export form markup may have changed — look for ANY hidden
+  // input whose name mentions "token", regardless of the exact field name used.
+  if (!csrf) {
+    csrf = html.match(/name="([^"]*[Tt]oken[^"]*)"\s+value="([^"]+)"/)?.[2];
+  }
+  if (!csrf) {
+    // Still nothing — print the part of the page around "token" so we can see
+    // exactly what changed and fix the pattern precisely next time.
+    const idx = html.toLowerCase().indexOf('token');
+    const snippet = idx !== -1 ? html.slice(Math.max(0, idx - 200), idx + 400) : html.slice(0, 600);
+    console.log('DEBUG — could not find CSRF token. Nearby HTML:\n' + snippet);
+    throw new Error('Could not find CSRF token on export page — OMS Guru may have changed its form.');
+  }
 
   const end = new Date();
   const start = new Date();
