@@ -16,6 +16,15 @@ const PASSWORD = process.env.OMS_PASSWORD;
 const DAYS_BACK = parseInt(process.env.OMS_DAYS_BACK || '15', 10);
 const BASE = 'https://client.omsguru.com';
 
+// Reduces the chance of being flagged as a bot and served a different/degraded
+// page (which looks exactly like "the form keeps changing" but really means the
+// site quietly detected automated traffic). Applied to every request below.
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
 if (!EMAIL || !PASSWORD) {
   console.error('Missing OMS_EMAIL / OMS_PASSWORD env vars.');
   process.exit(1);
@@ -41,7 +50,7 @@ function fmtDate(d) {
 }
 
 async function login() {
-  let res = await fetch(BASE + '/login', { redirect: 'manual' });
+  let res = await fetch(BASE + '/login', { redirect: 'manual', headers: { ...BROWSER_HEADERS } });
   updateCookies(res);
 
   const body = new URLSearchParams({
@@ -55,6 +64,7 @@ async function login() {
   res = await fetch(BASE + '/login', {
     method: 'POST',
     headers: {
+      ...BROWSER_HEADERS,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Cookie': cookieHeader(),
       'Referer': BASE + '/login',
@@ -70,7 +80,7 @@ async function login() {
 }
 
 async function requestExport(daysBack) {
-  let res = await fetch(BASE + '/reports/export_data', { headers: { 'Cookie': cookieHeader() } });
+  let res = await fetch(BASE + '/reports/export_data', { headers: { ...BROWSER_HEADERS, 'Cookie': cookieHeader() } });
   updateCookies(res);
   let html = await res.text();
   let csrf = html.match(/name="data\[Invoice\]\[oms_token\]" value="([^"]+)"/)?.[1];
@@ -110,6 +120,7 @@ async function requestExport(daysBack) {
   res = await fetch(BASE + '/reports/export_data', {
     method: 'POST',
     headers: {
+      ...BROWSER_HEADERS,
       'Content-Type': 'application/x-www-form-urlencoded',
       'Cookie': cookieHeader(),
       'Referer': BASE + '/reports/export_data',
@@ -120,7 +131,17 @@ async function requestExport(daysBack) {
   html = await res.text();
 
   if (!html.includes('queued successfully')) {
-    throw new Error('Export was not queued — OMS Guru may have changed the export form.');
+    // Fallback: OMS Guru may have reworded the confirmation message — try a couple
+    // of other likely phrasings before giving up.
+    const altPhrases = ['queued', 'export request', 'has been generated', 'will be emailed', 'processing your request'];
+    const foundAlt = altPhrases.some(p => html.toLowerCase().includes(p));
+    if (!foundAlt) {
+      const idx = html.toLowerCase().indexOf('export');
+      const snippet = idx !== -1 ? html.slice(Math.max(0, idx - 200), idx + 500) : html.slice(0, 700);
+      console.log('DEBUG — export confirmation not recognized. Nearby HTML:\n' + snippet);
+      throw new Error('Export was not queued — OMS Guru may have changed the export form.');
+    }
+    console.log('NOTE: exact phrase "queued successfully" not found, but a similar confirmation phrase was — continuing.');
   }
 
   // Try the exact match first (in case it still works).
@@ -145,7 +166,7 @@ async function requestExport(daysBack) {
 
 async function pollAndDownload(url, tries = 15, delayMs = 4000) {
   for (let i = 0; i < tries; i++) {
-    const res = await fetch(url, { headers: { 'Cookie': cookieHeader() }, redirect: 'follow' });
+    const res = await fetch(url, { headers: { ...BROWSER_HEADERS, 'Cookie': cookieHeader() }, redirect: 'follow' });
     const ct = res.headers.get('content-type') || '';
     if (ct.includes('zip') || ct.includes('octet-stream')) {
       return Buffer.from(await res.arrayBuffer());
@@ -266,6 +287,7 @@ async function pushToFirestore(orders) {
 async function main() {
   console.log(`Logging into OMS Guru as ${EMAIL}...`);
   await login();
+  await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 1500))); // brief pause, less bot-like than an instant next request
   console.log(`Requesting export for last ${DAYS_BACK} days...`);
   const link = await requestExport(DAYS_BACK);
   console.log('Export queued, polling for download...');
