@@ -46,9 +46,18 @@ async function zippyLogin() {
         DEVICE_KEY: null,
       },
     }),
-  });
-  const data = await res.json();
+  });  const data = await res.json();
   if (!res.ok || !data.AuthenticationResult) {
+    const isExpired = JSON.stringify(data).toLowerCase().includes("refresh token has expired")
+      || JSON.stringify(data).toLowerCase().includes("invalid refresh token")
+      || JSON.stringify(data).toLowerCase().includes("notauthorized");
+    if (isExpired) {
+      throw new Error(
+        `ZIPPY REFRESH TOKEN EXPIRED — likely password was changed on Zippy. ` +
+        `Fix: log into Zippy dashboard, grab new refresh_token from DevTools > Network > cognito request, ` +
+        `update ZIPPY_REFRESH_TOKEN secret in GitHub. Raw error: ${res.status} ${JSON.stringify(data)}`
+      );
+    }
     throw new Error(`Zippy (Cognito refresh) login failed: ${res.status} ${JSON.stringify(data)}`);
   }
   return data.AuthenticationResult.IdToken;
