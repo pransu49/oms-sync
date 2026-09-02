@@ -207,10 +207,17 @@ function findField(row, candidates) {
   return '';
 }
 
+// Strips a trailing time component like " 3:12:28 PM" from OMS Guru's
+// "August 18, 2026 3:12:28 PM" style dates, keeping just the date part.
+function dateOnly(str) {
+  if (!str) return '';
+  return String(str).replace(/\s+\d{1,2}:\d{2}(:\d{2})?\s*[AP]M\s*$/i, '').trim();
+}
+
 function slimOrder(row) {
   return {
-    orderDate: row['Order Date'] || '',
-    slaDate: findField(row, ['SLA Date', 'Sla Date', 'SLA', 'Delivery SLA', 'SLA Delivery Date']),
+    orderDate: dateOnly(row['Order Date'] || ''),
+    slaDate: dateOnly(findField(row, ['SLA Date', 'Sla Date', 'SLA', 'Delivery SLA', 'SLA Delivery Date'])),
     invoiceNumber: cleanId(row['Invoice Number']),
     channelOrderId: cleanId(row['Channel Order Id']),
     channelSubOrderId: cleanId(row['Channel Sub Order Id']),
