@@ -195,10 +195,22 @@ function parseOrders(buf) {
 function cleanId(v) {
   return (v || '').toString().replace(/^`+/, '').trim();
 }
+// Matches a column name loosely (ignoring case/extra spaces) in case OMS Guru's
+// exact header text has slight variations from what's hardcoded below.
+function findField(row, candidates) {
+  const keys = Object.keys(row);
+  for (const candidate of candidates) {
+    const norm = candidate.trim().toLowerCase();
+    const match = keys.find(k => k.trim().toLowerCase() === norm);
+    if (match && row[match]) return row[match];
+  }
+  return '';
+}
+
 function slimOrder(row) {
   return {
     orderDate: row['Order Date'] || '',
-    slaDate: row['SLA Date'] || '',
+    slaDate: findField(row, ['SLA Date', 'Sla Date', 'SLA', 'Delivery SLA', 'SLA Delivery Date']),
     invoiceNumber: cleanId(row['Invoice Number']),
     channelOrderId: cleanId(row['Channel Order Id']),
     channelSubOrderId: cleanId(row['Channel Sub Order Id']),
@@ -304,6 +316,9 @@ async function main() {
   console.log('Downloaded, parsing CSV...');
   const rawRows = parseOrders(buf);
   console.log(`Parsed ${rawRows.length} rows.`);
+  if (rawRows.length) {
+    console.log('DEBUG — actual column headers in this export:', Object.keys(rawRows[0]).join(' | '));
+  }
   const orders = rawRows.map(slimOrder);
   await pushToFirestore(orders);
   console.log('Done.');
