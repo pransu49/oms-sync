@@ -198,6 +198,7 @@ function cleanId(v) {
 function slimOrder(row) {
   return {
     orderDate: row['Order Date'] || '',
+    slaDate: row['SLA Date'] || '',
     invoiceNumber: cleanId(row['Invoice Number']),
     channelOrderId: cleanId(row['Channel Order Id']),
     channelSubOrderId: cleanId(row['Channel Sub Order Id']),
