@@ -164,16 +164,24 @@ async function requestExport(daysBack) {
   return m[1];
 }
 
-async function pollAndDownload(url, tries = 15, delayMs = 4000) {
+async function pollAndDownload(url, tries = 30, delayMs = 6000) {
   for (let i = 0; i < tries; i++) {
     const res = await fetch(url, { headers: { ...BROWSER_HEADERS, 'Cookie': cookieHeader() }, redirect: 'follow' });
     const ct = res.headers.get('content-type') || '';
-    if (ct.includes('zip') || ct.includes('octet-stream')) {
+    const cd = res.headers.get('content-disposition') || '';
+    // Larger order volumes mean a bigger export file, which can take OMS Guru longer
+    // to generate — wait up to 3 minutes (was 1 minute) before giving up. Also accept
+    // a Content-Disposition: attachment header as a second sign the file is ready,
+    // in case OMS Guru serves it with a content-type this check doesn't recognize.
+    if (ct.includes('zip') || ct.includes('octet-stream') || cd.includes('attachment')) {
       return Buffer.from(await res.arrayBuffer());
+    }
+    if (i > 0 && i % 5 === 0) {
+      console.log(`Still waiting for export file... (${i * delayMs / 1000}s elapsed, content-type so far: "${ct}")`);
     }
     await new Promise((r) => setTimeout(r, delayMs));
   }
-  throw new Error('Export file never became ready for download (timed out).');
+  throw new Error('Export file never became ready for download (timed out after ' + (tries * delayMs / 1000) + 's).');
 }
 
 function parseOrders(buf) {
