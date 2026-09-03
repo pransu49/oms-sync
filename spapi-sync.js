@@ -161,11 +161,13 @@ async function syncInventory() {
 
   const lines = docText.split('\n').filter(Boolean);
   const headers = lines[0].split('\t');
+  console.log('Report headers:', JSON.stringify(headers));
   const skuIdx = headers.indexOf('seller-sku');
   const qtyIdx = headers.indexOf('quantity');
   const priceIdx = headers.indexOf('price');
   const asinIdx = headers.indexOf('asin1');
   const nameIdx = headers.indexOf('item-name');
+  console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx);
 
   const batch = db.batch();
   let count = 0;
@@ -201,6 +203,7 @@ async function syncCompetitivePricing(asinList) {
   if (!asinList.length) return;
 
   const batch = db.batch();
+  let firstLogged = false;
 
   for (const asin of asinList) {
     let offers = [];
@@ -215,7 +218,14 @@ async function syncCompetitivePricing(asinList) {
         },
       });
 
-      offers = (res.payload?.Offers || []).map((o) => ({
+      if (!firstLogged) {
+        console.log('Sample getItemOffers response shape for', asin, ':', JSON.stringify(res).slice(0, 500));
+        firstLogged = true;
+      }
+
+      // Handle both possible response shapes - library may or may not unwrap the payload envelope.
+      const rawOffers = res.Offers || res.payload?.Offers || [];
+      offers = rawOffers.map((o) => ({
         sellerId: o.SellerId || '',
         price: parseFloat(o.ListingPrice?.Amount) || null,
         shipping: parseFloat(o.Shipping?.Amount) || 0,
