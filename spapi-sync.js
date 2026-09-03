@@ -106,8 +106,10 @@ async function syncInventory() {
     options: { file: true }, // library downloads+decompresses the file for us
   });
 
-  // doc is the raw report content (tab-separated). Parse it.
-  const lines = doc.split('\n').filter(Boolean);
+  console.log('Report doc type:', typeof doc, Buffer.isBuffer(doc) ? '(Buffer)' : '');
+  // doc is the raw report content (Buffer or string depending on library version). Normalize to string.
+  const docText = Buffer.isBuffer(doc) ? doc.toString('utf-8') : String(doc);
+  const lines = docText.split('\n').filter(Boolean);
   const headers = lines[0].split('\t');
   const skuIdx = headers.indexOf('seller-sku');
   const qtyIdx = headers.indexOf('quantity');
