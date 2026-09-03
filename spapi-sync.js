@@ -96,19 +96,41 @@ async function syncInventory() {
 
   if (!reportDocumentId) {
     console.log('Report not ready within polling window - will retry on next scheduled run.');
-    return;
+    return [];
   }
 
   const doc = await spClient.callAPI({
     operation: 'getReportDocument',
     endpoint: 'reports',
     path: { reportDocumentId },
-    options: { file: true }, // library downloads+decompresses the file for us
   });
 
-  console.log('Report doc type:', typeof doc, Buffer.isBuffer(doc) ? '(Buffer)' : '');
-  // doc is the raw report content (Buffer or string depending on library version). Normalize to string.
-  const docText = Buffer.isBuffer(doc) ? doc.toString('utf-8') : String(doc);
+  console.log('Report doc type:', typeof doc, Buffer.isBuffer(doc) ? '(Buffer)' : JSON.stringify(Object.keys(doc || {})));
+
+  let docText;
+  if (Buffer.isBuffer(doc)) {
+    docText = doc.toString('utf-8');
+  } else if (typeof doc === 'string') {
+    docText = doc;
+  } else if (doc && doc.url) {
+    // Library returned metadata only - download and decompress manually.
+    const zlib = require('zlib');
+    const https = require('https');
+    const rawBuffer = await new Promise((resolve, reject) => {
+      https.get(doc.url, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      }).on('error', reject);
+    });
+    const isGzip = (doc.compressionAlgorithm || '').toUpperCase() === 'GZIP';
+    docText = isGzip ? zlib.gunzipSync(rawBuffer).toString('utf-8') : rawBuffer.toString('utf-8');
+  } else {
+    console.log('Unrecognized report document shape:', JSON.stringify(doc).slice(0, 300));
+    return [];
+  }
+
   const lines = docText.split('\n').filter(Boolean);
   const headers = lines[0].split('\t');
   const skuIdx = headers.indexOf('seller-sku');
@@ -118,17 +140,21 @@ async function syncInventory() {
 
   const batch = db.batch();
   let count = 0;
+  const asins = [];
 
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split('\t');
     const sku = cols[skuIdx];
     if (!sku) continue;
 
+    const asin = cols[asinIdx] || null;
+    if (asin) asins.push(asin);
+
     const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
     batch.set(ref, {
       account: ACCOUNT_LABEL,
       sku,
-      asin: cols[asinIdx] || null,
+      asin,
       quantity: parseInt(cols[qtyIdx], 10) || 0,
       price: parseFloat(cols[priceIdx]) || null,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -138,6 +164,7 @@ async function syncInventory() {
 
   await batch.commit();
   console.log(`Inventory synced: ${count} SKUs`);
+  return [...new Set(asins)];
 }
 
 async function syncCompetitivePricing(asinList) {
@@ -197,11 +224,10 @@ async function run() {
   const orders = await syncOrders();
 
   console.log('Step 2: syncing inventory...');
-  await syncInventory();
+  const asinsFromInventory = await syncInventory();
 
   console.log('Step 3: syncing competitive pricing...');
-  const asins = [...new Set(orders.map((o) => o.OrderItems?.[0]?.ASIN).filter(Boolean))];
-  await syncCompetitivePricing(asins);
+  await syncCompetitivePricing(asinsFromInventory);
 
   console.log('SP-API sync complete.');
 }
