@@ -148,5 +148,6 @@ async function run() {
 
 run().catch((err) => {
   console.error('spapi-sync failed:', err.message || err);
+  console.error('Full error details:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
   process.exit(1);
 });
