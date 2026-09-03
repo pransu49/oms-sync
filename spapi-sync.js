@@ -59,32 +59,83 @@ async function syncOrders() {
 }
 
 async function syncInventory() {
-  const res = await spClient.callAPI({
-    operation: 'getInventorySummaries',
-    endpoint: 'fbaInventory',
-    query: {
-      granularityType: 'Marketplace',
-      granularityId: MARKETPLACE_ID,
+  // Self-ship/Easy Ship sellers don't use FBA inventory - use the Reports API instead,
+  // which gives SKU + quantity + price for every listing in one file.
+
+  console.log('Requesting merchant listings report...');
+  const createRes = await spClient.callAPI({
+    operation: 'createReport',
+    endpoint: 'reports',
+    body: {
+      reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA',
       marketplaceIds: [MARKETPLACE_ID],
     },
   });
 
-  const items = res.inventorySummaries || [];
-  const batch = db.batch();
+  const reportId = createRes.reportId;
+  console.log('Report requested, id:', reportId);
 
-  for (const item of items) {
-    const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${item.sellerSku}`);
+  // Poll until the report is ready (usually 30s-2min)
+  let reportDocumentId;
+  for (let attempt = 0; attempt < 12; attempt++) {
+    await new Promise((r) => setTimeout(r, 15000)); // wait 15s between checks
+    const status = await spClient.callAPI({
+      operation: 'getReport',
+      endpoint: 'reports',
+      path: { reportId },
+    });
+    console.log(`Poll ${attempt + 1}: status = ${status.processingStatus}`);
+    if (status.processingStatus === 'DONE') {
+      reportDocumentId = status.reportDocumentId;
+      break;
+    }
+    if (status.processingStatus === 'FATAL' || status.processingStatus === 'CANCELLED') {
+      throw new Error(`Report generation failed: ${status.processingStatus}`);
+    }
+  }
+
+  if (!reportDocumentId) {
+    console.log('Report not ready within polling window - will retry on next scheduled run.');
+    return;
+  }
+
+  const doc = await spClient.callAPI({
+    operation: 'getReportDocument',
+    endpoint: 'reports',
+    path: { reportDocumentId },
+    options: { file: true }, // library downloads+decompresses the file for us
+  });
+
+  // doc is the raw report content (tab-separated). Parse it.
+  const lines = doc.split('\n').filter(Boolean);
+  const headers = lines[0].split('\t');
+  const skuIdx = headers.indexOf('seller-sku');
+  const qtyIdx = headers.indexOf('quantity');
+  const priceIdx = headers.indexOf('price');
+  const asinIdx = headers.indexOf('asin1');
+
+  const batch = db.batch();
+  let count = 0;
+
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split('\t');
+    const sku = cols[skuIdx];
+    if (!sku) continue;
+
+    const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
     batch.set(ref, {
       account: ACCOUNT_LABEL,
-      sku: item.sellerSku,
-      asin: item.asin,
-      totalQuantity: item.totalQuantity,
+      sku,
+      asin: cols[asinIdx] || null,
+      quantity: parseInt(cols[qtyIdx], 10) || 0,
+      price: parseFloat(cols[priceIdx]) || null,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
+    count++;
   }
 
   await batch.commit();
-  console.log(`Inventory synced: ${items.length}`);
+  console.log(`Inventory synced: ${count} SKUs`);
 }
 
 async function syncCompetitivePricing(asinList) {
