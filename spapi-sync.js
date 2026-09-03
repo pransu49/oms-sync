@@ -26,6 +26,19 @@ const spClient = new SellingPartnerAPI({
 const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1'; // lets us tag data per seller account later
 
 async function syncOrders() {
+  // Quick standalone test of Finances API access, isolated from the per-order loop,
+  // so a real error message surfaces clearly instead of being buried in 30+ repeats.
+  try {
+    const testFin = await spClient.callAPI({
+      operation: 'listFinancialEvents',
+      endpoint: 'finances',
+      query: { MaxResultsPerPage: 5 },
+    });
+    console.log('Finances API basic test: SUCCESS', JSON.stringify(testFin).slice(0, 200));
+  } catch (e) {
+    console.warn('Finances API basic test FAILED:', e.message || e, JSON.stringify(e, Object.getOwnPropertyNames(e)).slice(0, 400));
+  }
+
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // last 24h
   const res = await spClient.callAPI({
     operation: 'getOrders',
