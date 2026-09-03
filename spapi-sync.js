@@ -258,6 +258,40 @@ async function syncInventory() {
   return [...new Set(asins)];
 }
 
+// Fetches Amazon's actual product category/type per ASIN (needed for referral fee lookup -
+// the merchant listings report's zshop-category1 field is a legacy field Amazon leaves blank).
+async function fetchProductCategories(asinList) {
+  const categories = {}; // asin -> category/productType string
+  let firstLogged = false;
+  let failCount = 0;
+  for (const asin of asinList) {
+    try {
+      const res = await spClient.callAPI({
+        operation: 'getCatalogItem',
+        endpoint: 'catalogItems',
+        path: { asin },
+        query: {
+          marketplaceIds: [MARKETPLACE_ID],
+          includedData: ['productTypes', 'summaries'],
+        },
+      });
+      if (!firstLogged) {
+        console.log('Sample getCatalogItem (category) response for', asin, ':', JSON.stringify(res).slice(0, 800));
+        firstLogged = true;
+      }
+      const productTypes = res.productTypes || res.payload?.productTypes;
+      const summaries = res.summaries || res.payload?.summaries;
+      const cat = productTypes?.[0]?.productType || summaries?.[0]?.websiteDisplayGroup || null;
+      if (cat) categories[asin] = cat;
+    } catch (e) {
+      failCount++;
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  if (failCount > 0) console.log(`Category fetch failed for ${failCount}/${asinList.length} ASINs`);
+  return categories;
+}
+
 async function syncCompetitivePricing(asinList) {
   if (!asinList.length) return;
 
@@ -327,6 +361,16 @@ async function run() {
 
   console.log('Step 2: syncing inventory...');
   const asinsFromInventory = await syncInventory();
+
+  console.log('Step 2b: fetching real product categories for referral fee calc...');
+  const categoriesByAsin = await fetchProductCategories(asinsFromInventory);
+  console.log('Sample categories:', JSON.stringify(Object.entries(categoriesByAsin).slice(0, 10)));
+  const catBatch = db.batch();
+  for (const [asin, category] of Object.entries(categoriesByAsin)) {
+    const invSnapshot = await db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).where('asin', '==', asin).limit(1).get();
+    invSnapshot.forEach((doc) => catBatch.update(doc.ref, { amazonProductType: category }));
+  }
+  await catBatch.commit();
 
   console.log('Step 3: syncing competitive pricing...');
   await syncCompetitivePricing(asinsFromInventory);
