@@ -49,8 +49,9 @@ async function syncOrders() {
         path: { orderId: order.AmazonOrderId },
       });
       items = (itemsRes.OrderItems || []).map((li) => {
-        const price = parseFloat(li.ItemPrice?.Amount) || 0;
+        const price = parseFloat(li.ItemPrice?.Amount) || 0; // tax-inclusive price Amazon charged the buyer
         const tax = parseFloat(li.ItemTax?.Amount) || 0;
+        const exclTaxPrice = price - tax; // back out the base price to get the real GST rate
         return {
           title: li.Title || '',
           asin: li.ASIN || '',
@@ -58,13 +59,42 @@ async function syncOrders() {
           qty: li.QuantityOrdered || 0,
           price,
           tax,
-          taxPercent: price > 0 ? Math.round((tax / price) * 1000) / 10 : 0, // one decimal place
+          taxPercent: exclTaxPrice > 0 ? Math.round((tax / exclTaxPrice) * 1000) / 10 : 0, // one decimal place
         };
       });
     } catch (e) {
       console.warn(`getOrderItems failed for ${order.AmazonOrderId}:`, e.message || e);
     }
     // Amazon rate-limits GetOrderItems fairly tightly - small delay between calls.
+    await new Promise((r) => setTimeout(r, 600));
+
+    // Fetch actual Amazon fees for this order via Finances API. Recently-placed orders
+    // may not have settled financial events yet - that's normal, not an error.
+    let amazonFees = null;
+    try {
+      const finRes = await spClient.callAPI({
+        operation: 'listFinancialEventsByOrderId',
+        endpoint: 'finances',
+        path: { orderId: order.AmazonOrderId },
+      });
+      const shipmentEvents = finRes.payload?.FinancialEvents?.ShipmentEventList
+        || finRes.FinancialEvents?.ShipmentEventList || [];
+      let feeTotal = 0;
+      let hasFeeData = false;
+      shipmentEvents.forEach((se) => {
+        (se.ShipmentItemList || []).forEach((item) => {
+          (item.ItemFeeList || []).forEach((fee) => {
+            const amt = parseFloat(fee.FeeAmount?.Amount);
+            if (!isNaN(amt)) { feeTotal += amt; hasFeeData = true; }
+          });
+        });
+      });
+      // Amazon reports fees as negative amounts (money taken from seller) - store as a
+      // positive "cost" figure so it's intuitive to subtract in profit calculations.
+      if (hasFeeData) amazonFees = Math.abs(feeTotal);
+    } catch (e) {
+      console.warn(`listFinancialEventsByOrderId failed for ${order.AmazonOrderId}:`, e.message || e);
+    }
     await new Promise((r) => setTimeout(r, 600));
 
     const ref = db.collection('spapiOrders').doc(`${ACCOUNT_LABEL}_${order.AmazonOrderId}`);
@@ -77,6 +107,7 @@ async function syncOrders() {
       purchaseDate: order.PurchaseDate,
       fulfillmentChannel: order.FulfillmentChannel, // AFN=FBA, MFN=self-ship
       items,
+      amazonFees, // total referral/closing/shipping fees Amazon charged - null if not yet settled
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
   }
