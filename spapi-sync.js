@@ -118,7 +118,9 @@ async function syncOrders() {
       isCanceled: order.OrderStatus === 'Canceled',
       total: order.OrderTotal?.Amount || null,
       purchaseDate: order.PurchaseDate,
-      fulfillmentChannel: order.FulfillmentChannel, // AFN=FBA, MFN=self-ship
+      fulfillmentChannel: order.FulfillmentChannel, // AFN=FBA, MFN=self-ship/EasyShip
+      isEasyShip: !!order.EasyShipShipmentStatus, // presence of this field means Easy Ship, not plain Self-Ship
+      shipServiceLevel: order.ShipServiceLevel || null,
       items,
       amazonFees, // total referral/closing/shipping fees Amazon charged - null if not yet settled
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -211,7 +213,8 @@ async function syncInventory() {
   const priceIdx = headers.indexOf('price');
   const asinIdx = headers.indexOf('asin1');
   const nameIdx = headers.indexOf('item-name');
-  console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx);
+  const categoryIdx = headers.indexOf('zshop-category1');
+  console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx);
 
   const batch = db.batch();
   let count = 0;
@@ -231,6 +234,7 @@ async function syncInventory() {
       sku,
       name: cols[nameIdx] || '',
       asin,
+      category: cols[categoryIdx] || '',
       quantity: parseInt(cols[qtyIdx], 10) || 0,
       price: parseFloat(cols[priceIdx]) || null,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -240,7 +244,59 @@ async function syncInventory() {
 
   await batch.commit();
   console.log(`Inventory synced: ${count} SKUs`);
+
+  // Fetch product weights (for Easy Ship fee calc) and merge into the same inventory docs.
+  const uniqueAsins = [...new Set(asins)];
+  console.log(`Fetching package weights for ${uniqueAsins.length} ASINs...`);
+  const weightsByAsin = await fetchProductWeights(uniqueAsins);
+  const weightBatch = db.batch();
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split('\t');
+    const sku = cols[skuIdx];
+    const asin = cols[asinIdx];
+    if (!sku || !asin || weightsByAsin[asin] == null) continue;
+    const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
+    weightBatch.set(ref, { weightKg: weightsByAsin[asin] }, { merge: true });
+  }
+  await weightBatch.commit();
+  console.log(`Weights merged for ${Object.keys(weightsByAsin).length} ASINs`);
+
   return [...new Set(asins)];
+}
+
+// Fetches package weight per ASIN from Amazon's own catalog data (Catalog Items API) -
+// needed to calculate Easy Ship weight-handling fees, since Amazon charges by shipment
+// weight, not order value.
+async function fetchProductWeights(asinList) {
+  const weights = {}; // asin -> weightKg
+  for (const asin of asinList) {
+    try {
+      const res = await spClient.callAPI({
+        operation: 'getCatalogItem',
+        endpoint: 'catalogItems',
+        path: { asin },
+        query: {
+          marketplaceIds: [MARKETPLACE_ID],
+          includedData: ['dimensions'],
+        },
+      });
+      const dims = res.dimensions?.[0]?.package || res.payload?.dimensions?.[0]?.package;
+      const weightObj = dims?.weight;
+      if (weightObj && weightObj.value != null) {
+        let kg = parseFloat(weightObj.value);
+        const unit = (weightObj.unit || '').toLowerCase();
+        if (unit.includes('gram') && !unit.includes('kilo')) kg = kg / 1000;
+        // pounds/ounces are rare for Indian marketplace but handle just in case
+        if (unit.includes('pound')) kg = kg * 0.453592;
+        if (unit.includes('ounce')) kg = kg * 0.0283495;
+        weights[asin] = kg;
+      }
+    } catch (e) {
+      console.warn(`getCatalogItem (weight) failed for ${asin}:`, e.message || e);
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  return weights;
 }
 
 async function syncCompetitivePricing(asinList) {
