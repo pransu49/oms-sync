@@ -160,7 +160,7 @@ async function syncInventory() {
   }
 
   const lines = docText.split('\n').filter(Boolean);
-  const headers = lines[0].split('\t');
+  const headers = lines[0].split('\t').map(h => h.replace(/^\uFEFF/, '').trim());
   console.log('Report headers:', JSON.stringify(headers));
   const skuIdx = headers.indexOf('seller-sku');
   const qtyIdx = headers.indexOf('quantity');
