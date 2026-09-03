@@ -269,6 +269,7 @@ async function syncInventory() {
 // weight, not order value.
 async function fetchProductWeights(asinList) {
   const weights = {}; // asin -> weightKg
+  let firstLogged = false;
   for (const asin of asinList) {
     try {
       const res = await spClient.callAPI({
@@ -276,17 +277,20 @@ async function fetchProductWeights(asinList) {
         endpoint: 'catalogItems',
         path: { asin },
         query: {
-          marketplaceIds: [MARKETPLACE_ID],
-          includedData: ['dimensions'],
+          marketplaceIds: MARKETPLACE_ID,
+          includedData: 'dimensions',
         },
       });
+      if (!firstLogged) {
+        console.log('Sample getCatalogItem response for', asin, ':', JSON.stringify(res).slice(0, 500));
+        firstLogged = true;
+      }
       const dims = res.dimensions?.[0]?.package || res.payload?.dimensions?.[0]?.package;
       const weightObj = dims?.weight;
       if (weightObj && weightObj.value != null) {
         let kg = parseFloat(weightObj.value);
         const unit = (weightObj.unit || '').toLowerCase();
         if (unit.includes('gram') && !unit.includes('kilo')) kg = kg / 1000;
-        // pounds/ounces are rare for Indian marketplace but handle just in case
         if (unit.includes('pound')) kg = kg * 0.453592;
         if (unit.includes('ounce')) kg = kg * 0.0283495;
         weights[asin] = kg;
