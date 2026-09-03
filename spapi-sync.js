@@ -133,10 +133,13 @@ async function syncCompetitivePricing(asinList) {
 }
 
 async function run() {
+  console.log('Step 1: syncing orders...');
   const orders = await syncOrders();
+
+  console.log('Step 2: syncing inventory...');
   await syncInventory();
 
-  // Pull competitor pricing for ASINs seen in recent orders (expand later to full catalog)
+  console.log('Step 3: syncing competitive pricing...');
   const asins = [...new Set(orders.map((o) => o.OrderItems?.[0]?.ASIN).filter(Boolean))];
   await syncCompetitivePricing(asins);
 
