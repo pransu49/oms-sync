@@ -149,10 +149,10 @@ async function syncInventory() {
   const reportId = createRes.reportId;
   console.log('Report requested, id:', reportId);
 
-  // Poll until the report is ready (usually 30s-2min)
+  // Poll until the report is ready (usually 30s-2min, occasionally longer under load)
   let reportDocumentId;
-  for (let attempt = 0; attempt < 12; attempt++) {
-    await new Promise((r) => setTimeout(r, 15000)); // wait 15s between checks
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await new Promise((r) => setTimeout(r, 20000)); // wait 20s between checks
     const status = await spClient.callAPI({
       operation: 'getReport',
       endpoint: 'reports',
@@ -277,19 +277,19 @@ async function fetchProductWeights(asinList) {
         endpoint: 'catalogItems',
         path: { asin },
         query: {
-          marketplaceIds: MARKETPLACE_ID,
-          includedData: 'dimensions',
+          MarketplaceId: MARKETPLACE_ID,
         },
       });
       if (!firstLogged) {
-        console.log('Sample getCatalogItem response for', asin, ':', JSON.stringify(res).slice(0, 500));
+        console.log('Sample getCatalogItem response for', asin, ':', JSON.stringify(res).slice(0, 800));
         firstLogged = true;
       }
-      const dims = res.dimensions?.[0]?.package || res.payload?.dimensions?.[0]?.package;
-      const weightObj = dims?.weight;
-      if (weightObj && weightObj.value != null) {
-        let kg = parseFloat(weightObj.value);
-        const unit = (weightObj.unit || '').toLowerCase();
+      // v0 API shape: payload.AttributeSets[0].PackageDimensions.Weight / ItemDimensions.Weight
+      const attrSet = res.AttributeSets?.[0] || res.payload?.AttributeSets?.[0];
+      const weightObj = attrSet?.PackageDimensions?.Weight || attrSet?.ItemDimensions?.Weight;
+      if (weightObj && weightObj.Value != null) {
+        let kg = parseFloat(weightObj.Value);
+        const unit = (weightObj.Units || '').toLowerCase();
         if (unit.includes('gram') && !unit.includes('kilo')) kg = kg / 1000;
         if (unit.includes('pound')) kg = kg * 0.453592;
         if (unit.includes('ounce')) kg = kg * 0.0283495;
