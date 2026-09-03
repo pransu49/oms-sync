@@ -84,8 +84,10 @@ async function fetchShipmentsByOrderNumbers(idToken, orderNumbers) {
       warehouseId: null, pageSize: orderNumbers.length, startOffset: null,
     }),
   });
-  if (!res.ok) throw new Error(`/cnvt/shipment/list failed: ${res.status} ${await res.text()}`);
-  const data = await res.json();
+  if (!res.ok) {
+    const headers = JSON.stringify([...res.headers.entries()]);
+    throw new Error(`/cnvt/shipment/list failed: ${res.status} | headers: ${headers} | body: ${await res.text()}`);
+  }  const data = await res.json();
   return data.shipments || [];
 }
 
