@@ -1,4 +1,4 @@
-name: SP-API Sync (Account 1)
+name: SP-API Sync (Praso)
 
 on:
   schedule:
@@ -24,5 +24,5 @@ jobs:
           SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
           SPAPI_REFRESH_TOKEN: ${{ secrets.SPAPI_REFRESH_TOKEN }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          ACCOUNT_LABEL: account1
+          ACCOUNT_LABEL: praso
         run: node spapi-sync.js
