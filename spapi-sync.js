@@ -253,6 +253,8 @@ async function syncInventory() {
 
   await batch.commit();
   console.log(`Inventory synced: ${count} SKUs`);
+  const uniqueCategories = [...new Set(lines.slice(1).map(l => l.split('\t')[categoryIdx]).filter(Boolean))];
+  console.log('Unique categories found:', JSON.stringify(uniqueCategories));
   return [...new Set(asins)];
 }
 
