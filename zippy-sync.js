@@ -46,7 +46,8 @@ async function zippyLogin() {
         DEVICE_KEY: null,
       },
     }),
-  });  const data = await res.json();
+  });
+  const data = await res.json();
   if (!res.ok || !data.AuthenticationResult) {
     const isExpired = JSON.stringify(data).toLowerCase().includes("refresh token has expired")
       || JSON.stringify(data).toLowerCase().includes("invalid refresh token")
@@ -64,19 +65,23 @@ async function zippyLogin() {
 }
 
 async function fetchShipmentsByOrderNumbers(idToken, orderNumbers) {
-  const res = await fetch(`${ZIPPY_API_BASE}/list`, {
+  const res = await fetch(`${ZIPPY_API_BASE}/cnvt/shipment/list`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${idToken}`,
+      "x-api-version": "1",
+    },
     body: JSON.stringify({
       status: null, filterType: "SHIPMENT_PURCHASED_AT", isAscending: false,
       subStatuses: null, manifestStatuses: null, carriers: null, carrierServices: null,
       storeIds: null, awbs: null, startTimestamp: null, endTimestamp: null,
       orderNumbers, orderSources: null, orderTypes: null, orderTags: null,
       productNames: null, skuIds: null, excludeOrderTags: null,
-      pageSize: orderNumbers.length, startOffset: null,
+      warehouseId: null, pageSize: orderNumbers.length, startOffset: null,
     }),
   });
-  if (!res.ok) throw new Error(`/list failed: ${res.status} ${await res.text()}`);
+  if (!res.ok) throw new Error(`/cnvt/shipment/list failed: ${res.status} ${await res.text()}`);
   const data = await res.json();
   return data.shipments || [];
 }
