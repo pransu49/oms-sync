@@ -277,24 +277,37 @@ async function fetchProductWeights(asinList) {
         endpoint: 'catalogItems',
         path: { asin },
         query: {
-          MarketplaceId: MARKETPLACE_ID,
+          marketplaceIds: [MARKETPLACE_ID],
+          includedData: 'dimensions',
         },
       });
       if (!firstLogged) {
         console.log('Sample getCatalogItem response for', asin, ':', JSON.stringify(res).slice(0, 800));
         firstLogged = true;
       }
-      // v0 API shape: payload.AttributeSets[0].PackageDimensions.Weight / ItemDimensions.Weight
-      const attrSet = res.AttributeSets?.[0] || res.payload?.AttributeSets?.[0];
-      const weightObj = attrSet?.PackageDimensions?.Weight || attrSet?.ItemDimensions?.Weight;
-      if (weightObj && weightObj.Value != null) {
-        let kg = parseFloat(weightObj.Value);
-        const unit = (weightObj.Units || '').toLowerCase();
+      // 2022-04-01 API shape: payload.dimensions[0].package.weight (or top-level if unwrapped)
+      const dims = res.dimensions?.[0]?.package || res.payload?.dimensions?.[0]?.package;
+      const weightObj = dims?.weight;
+      let kg = null;
+      if (weightObj && weightObj.value != null) {
+        kg = parseFloat(weightObj.value);
+        const unit = (weightObj.unit || '').toLowerCase();
         if (unit.includes('gram') && !unit.includes('kilo')) kg = kg / 1000;
         if (unit.includes('pound')) kg = kg * 0.453592;
         if (unit.includes('ounce')) kg = kg * 0.0283495;
-        weights[asin] = kg;
+      } else {
+        // fallback: try v0-style shape in case the response is unwrapped differently
+        const attrSet = res.AttributeSets?.[0] || res.payload?.AttributeSets?.[0];
+        const w0 = attrSet?.PackageDimensions?.Weight || attrSet?.ItemDimensions?.Weight;
+        if (w0 && w0.Value != null) {
+          kg = parseFloat(w0.Value);
+          const unit = (w0.Units || '').toLowerCase();
+          if (unit.includes('gram') && !unit.includes('kilo')) kg = kg / 1000;
+          if (unit.includes('pound')) kg = kg * 0.453592;
+          if (unit.includes('ounce')) kg = kg * 0.0283495;
+        }
       }
+      if (kg != null) weights[asin] = kg;
     } catch (e) {
       console.warn(`getCatalogItem (weight) failed for ${asin}:`, e.message || e);
     }
