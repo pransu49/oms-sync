@@ -40,6 +40,33 @@ async function syncOrders() {
   const batch = db.batch();
 
   for (const order of orders) {
+    // Fetch line-item detail (name, price, tax) - not included in the base Orders call.
+    let items = [];
+    try {
+      const itemsRes = await spClient.callAPI({
+        operation: 'getOrderItems',
+        endpoint: 'orders',
+        path: { orderId: order.AmazonOrderId },
+      });
+      items = (itemsRes.OrderItems || []).map((li) => {
+        const price = parseFloat(li.ItemPrice?.Amount) || 0;
+        const tax = parseFloat(li.ItemTax?.Amount) || 0;
+        return {
+          title: li.Title || '',
+          asin: li.ASIN || '',
+          sku: li.SellerSKU || '',
+          qty: li.QuantityOrdered || 0,
+          price,
+          tax,
+          taxPercent: price > 0 ? Math.round((tax / price) * 1000) / 10 : 0, // one decimal place
+        };
+      });
+    } catch (e) {
+      console.warn(`getOrderItems failed for ${order.AmazonOrderId}:`, e.message || e);
+    }
+    // Amazon rate-limits GetOrderItems fairly tightly - small delay between calls.
+    await new Promise((r) => setTimeout(r, 600));
+
     const ref = db.collection('spapiOrders').doc(`${ACCOUNT_LABEL}_${order.AmazonOrderId}`);
     batch.set(ref, {
       account: ACCOUNT_LABEL,
@@ -49,6 +76,7 @@ async function syncOrders() {
       total: order.OrderTotal?.Amount || null,
       purchaseDate: order.PurchaseDate,
       fulfillmentChannel: order.FulfillmentChannel, // AFN=FBA, MFN=self-ship
+      items,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
   }
@@ -137,6 +165,7 @@ async function syncInventory() {
   const qtyIdx = headers.indexOf('quantity');
   const priceIdx = headers.indexOf('price');
   const asinIdx = headers.indexOf('asin1');
+  const nameIdx = headers.indexOf('item-name');
 
   const batch = db.batch();
   let count = 0;
@@ -154,6 +183,7 @@ async function syncInventory() {
     batch.set(ref, {
       account: ACCOUNT_LABEL,
       sku,
+      name: cols[nameIdx] || '',
       asin,
       quantity: parseInt(cols[qtyIdx], 10) || 0,
       price: parseFloat(cols[priceIdx]) || null,
@@ -170,42 +200,45 @@ async function syncInventory() {
 async function syncCompetitivePricing(asinList) {
   if (!asinList.length) return;
 
-  // API allows up to 20 ASINs per call
-  const chunks = [];
-  for (let i = 0; i < asinList.length; i += 20) chunks.push(asinList.slice(i, i + 20));
-
   const batch = db.batch();
 
-  for (const chunk of chunks) {
-    const res = await spClient.callAPI({
-      operation: 'getCompetitivePricing',
-      endpoint: 'productPricing',
-      query: {
-        MarketplaceId: MARKETPLACE_ID,
-        Asins: chunk,
-        ItemType: 'Asin',
-      },
-    });
+  for (const asin of asinList) {
+    let offers = [];
+    try {
+      const res = await spClient.callAPI({
+        operation: 'getItemOffers',
+        endpoint: 'productPricing',
+        path: { Asin: asin },
+        query: {
+          MarketplaceId: MARKETPLACE_ID,
+          ItemCondition: 'New',
+        },
+      });
 
-    for (const result of res || []) {
-      const asin = result.Product?.Identifiers?.MarketplaceASIN?.ASIN;
-      const prices = result.Product?.CompetitivePricing?.CompetitivePrices || [];
-      const lowest = prices
-        .map((p) => p.Price?.LandedPrice?.Amount)
-        .filter((v) => v !== undefined)
-        .sort((a, b) => a - b)[0];
-
-      if (asin) {
-        const ref = db.collection('spapiCompetitivePricing').doc(`${ACCOUNT_LABEL}_${asin}`);
-        batch.set(ref, {
-          account: ACCOUNT_LABEL,
-          asin,
-          lowestCompetitorPrice: lowest ?? null,
-          rawOffers: prices.length,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true });
-      }
+      offers = (res.payload?.Offers || []).map((o) => ({
+        sellerId: o.SellerId || '',
+        price: parseFloat(o.ListingPrice?.Amount) || null,
+        shipping: parseFloat(o.Shipping?.Amount) || 0,
+        isBuyBoxWinner: !!o.IsBuyBoxWinner,
+        isFeatured: !!o.IsFeaturedMerchant,
+        condition: o.SubCondition || 'New',
+      })).sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+    } catch (e) {
+      console.warn(`getItemOffers failed for ${asin}:`, e.message || e);
     }
+    // Rate-limit friendly delay between ASINs.
+    await new Promise((r) => setTimeout(r, 1200));
+
+    const lowest = offers[0]?.price ?? null;
+    const ref = db.collection('spapiCompetitivePricing').doc(`${ACCOUNT_LABEL}_${asin}`);
+    batch.set(ref, {
+      account: ACCOUNT_LABEL,
+      asin,
+      lowestCompetitorPrice: lowest,
+      rawOffers: offers.length,
+      offers, // full list: every seller's price, shipping, buy-box status
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
   }
 
   await batch.commit();
