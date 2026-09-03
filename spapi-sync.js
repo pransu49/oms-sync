@@ -133,6 +133,13 @@ async function syncCompetitivePricing(asinList) {
 }
 
 async function run() {
+  console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
+  const test = await spClient.callAPI({
+    operation: 'getMarketplaceParticipations',
+    endpoint: 'sellers',
+  });
+  console.log('Step 0 result:', JSON.stringify(test));
+
   console.log('Step 1: syncing orders...');
   const orders = await syncOrders();
 
