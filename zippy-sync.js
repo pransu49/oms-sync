@@ -67,10 +67,13 @@ async function zippyLogin() {
 async function fetchShipmentsByOrderNumbers(idToken, orderNumbers) {
   const res = await fetch(`${ZIPPY_API_BASE}/cnvt/shipment/list`, {
     method: "POST",
-    headers: {
+        headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${idToken}`,
       "x-api-version": "1",
+      "Origin": "https://in.app.zippyy.ai",
+      "Referer": "https://in.app.zippyy.ai/",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     },
     body: JSON.stringify({
       status: null, filterType: "SHIPMENT_PURCHASED_AT", isAscending: false,
