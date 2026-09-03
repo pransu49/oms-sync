@@ -26,19 +26,6 @@ const spClient = new SellingPartnerAPI({
 const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1'; // lets us tag data per seller account later
 
 async function syncOrders() {
-  // Quick standalone test of Finances API access, isolated from the per-order loop,
-  // so a real error message surfaces clearly instead of being buried in 30+ repeats.
-  try {
-    const testFin = await spClient.callAPI({
-      operation: 'listFinancialEvents',
-      endpoint: 'finances',
-      query: { MaxResultsPerPage: 5 },
-    });
-    console.log('Finances API basic test: SUCCESS', JSON.stringify(testFin).slice(0, 200));
-  } catch (e) {
-    console.warn('Finances API basic test FAILED:', e.message || e, JSON.stringify(e, Object.getOwnPropertyNames(e)).slice(0, 400));
-  }
-
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // last 24h
   const res = await spClient.callAPI({
     operation: 'getOrders',
@@ -51,6 +38,7 @@ async function syncOrders() {
 
   const orders = res.Orders || [];
   const batch = db.batch();
+  let financeFailCount = 0;
 
   for (const order of orders) {
     // Fetch line-item detail (name, price, tax) - not included in the base Orders call.
@@ -106,7 +94,7 @@ async function syncOrders() {
       // positive "cost" figure so it's intuitive to subtract in profit calculations.
       if (hasFeeData) amazonFees = Math.abs(feeTotal);
     } catch (e) {
-      console.warn(`listFinancialEventsByOrderId failed for ${order.AmazonOrderId}:`, e.message || e);
+      financeFailCount++;
     }
     await new Promise((r) => setTimeout(r, 600));
 
@@ -129,7 +117,27 @@ async function syncOrders() {
 
   await batch.commit();
   console.log(`Orders synced: ${orders.length}`);
+  if (financeFailCount > 0) {
+    console.log(`Finances API still blocked (${financeFailCount}/${orders.length} orders) - fees will be null until Amazon Support enables access.`);
+  }
   return orders;
+}
+
+// Extracts an approximate package weight (in kg) from a product name, e.g.
+// "Surf Excel 500 g" -> 0.5, "Listerine 500ml" -> 0.5 (assumes ~1g/ml for liquids,
+// a reasonable approximation for most FMCG/personal care products), "Dabur Oil 1L" -> 1.
+// Returns null if no weight/volume pattern is found in the name.
+function extractWeightKg(name) {
+  if (!name) return null;
+  const m = name.match(/(\d+\.?\d*)\s?(kg|kgs|g|gm|gms|grams?|ml|mls?|l|litre|liter|litres|liters)\b/i);
+  if (!m) return null;
+  const num = parseFloat(m[1]);
+  const unit = m[2].toLowerCase();
+  if (unit.startsWith('kg')) return num;
+  if (unit.startsWith('g')) return num / 1000;
+  if (unit.startsWith('ml')) return num / 1000; // ~1g/ml approximation
+  if (unit.startsWith('l')) return num; // 1 litre ~ 1kg approximation
+  return null;
 }
 
 async function syncInventory() {
@@ -235,6 +243,7 @@ async function syncInventory() {
       name: cols[nameIdx] || '',
       asin,
       category: cols[categoryIdx] || '',
+      weightKg: extractWeightKg(cols[nameIdx] || ''), // approximate, parsed from product name
       quantity: parseInt(cols[qtyIdx], 10) || 0,
       price: parseFloat(cols[priceIdx]) || null,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -244,76 +253,7 @@ async function syncInventory() {
 
   await batch.commit();
   console.log(`Inventory synced: ${count} SKUs`);
-
-  // Fetch product weights (for Easy Ship fee calc) and merge into the same inventory docs.
-  const uniqueAsins = [...new Set(asins)];
-  console.log(`Fetching package weights for ${uniqueAsins.length} ASINs...`);
-  const weightsByAsin = await fetchProductWeights(uniqueAsins);
-  const weightBatch = db.batch();
-  for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split('\t');
-    const sku = cols[skuIdx];
-    const asin = cols[asinIdx];
-    if (!sku || !asin || weightsByAsin[asin] == null) continue;
-    const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
-    weightBatch.set(ref, { weightKg: weightsByAsin[asin] }, { merge: true });
-  }
-  await weightBatch.commit();
-  console.log(`Weights merged for ${Object.keys(weightsByAsin).length} ASINs`);
-
   return [...new Set(asins)];
-}
-
-// Fetches package weight per ASIN from Amazon's own catalog data (Catalog Items API) -
-// needed to calculate Easy Ship weight-handling fees, since Amazon charges by shipment
-// weight, not order value.
-async function fetchProductWeights(asinList) {
-  const weights = {}; // asin -> weightKg
-  let firstLogged = false;
-  for (const asin of asinList) {
-    try {
-      const res = await spClient.callAPI({
-        operation: 'getCatalogItem',
-        endpoint: 'catalogItems',
-        path: { asin },
-        query: {
-          marketplaceIds: [MARKETPLACE_ID],
-          includedData: 'dimensions',
-        },
-      });
-      if (!firstLogged) {
-        console.log('Sample getCatalogItem response for', asin, ':', JSON.stringify(res).slice(0, 800));
-        firstLogged = true;
-      }
-      // 2022-04-01 API shape: payload.dimensions[0].package.weight (or top-level if unwrapped)
-      const dims = res.dimensions?.[0]?.package || res.payload?.dimensions?.[0]?.package;
-      const weightObj = dims?.weight;
-      let kg = null;
-      if (weightObj && weightObj.value != null) {
-        kg = parseFloat(weightObj.value);
-        const unit = (weightObj.unit || '').toLowerCase();
-        if (unit.includes('gram') && !unit.includes('kilo')) kg = kg / 1000;
-        if (unit.includes('pound')) kg = kg * 0.453592;
-        if (unit.includes('ounce')) kg = kg * 0.0283495;
-      } else {
-        // fallback: try v0-style shape in case the response is unwrapped differently
-        const attrSet = res.AttributeSets?.[0] || res.payload?.AttributeSets?.[0];
-        const w0 = attrSet?.PackageDimensions?.Weight || attrSet?.ItemDimensions?.Weight;
-        if (w0 && w0.Value != null) {
-          kg = parseFloat(w0.Value);
-          const unit = (w0.Units || '').toLowerCase();
-          if (unit.includes('gram') && !unit.includes('kilo')) kg = kg / 1000;
-          if (unit.includes('pound')) kg = kg * 0.453592;
-          if (unit.includes('ounce')) kg = kg * 0.0283495;
-        }
-      }
-      if (kg != null) weights[asin] = kg;
-    } catch (e) {
-      console.warn(`getCatalogItem (weight) failed for ${asin}:`, e.message || e);
-    }
-    await new Promise((r) => setTimeout(r, 800));
-  }
-  return weights;
 }
 
 async function syncCompetitivePricing(asinList) {
