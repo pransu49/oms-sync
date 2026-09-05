@@ -375,6 +375,38 @@ async function run() {
   console.log('Step 3: syncing competitive pricing...');
   await syncCompetitivePricing(asinsFromInventory);
 
+  console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
+  try {
+    // Placeholder data - purely to check whether this API is authorized at all for this
+    // app/account. A permission/role error looks very different from a data-validation
+    // error, so even a "wrong" address here still tells us what we need to know.
+    const mfnTest = await spClient.callAPI({
+      operation: 'getEligibleShipmentServices',
+      endpoint: 'merchantFulfillment',
+      body: {
+        ShipmentRequestDetails: {
+          AmazonOrderId: orders[0] ? orders[0].AmazonOrderId : '000-0000000-0000000',
+          ItemList: [{ OrderItemId: 'TEST', Quantity: 1 }],
+          ShipFromAddress: {
+            Name: 'Praso Enterprises',
+            AddressLine1: 'Test Address Line 1',
+            City: 'Delhi',
+            StateOrRegion: 'Delhi',
+            PostalCode: '110001',
+            CountryCode: 'IN',
+            Phone: '9999999999',
+          },
+          PackageDimensions: { Length: 10, Width: 10, Height: 10, Unit: 'centimeters' },
+          Weight: { Value: 200, Unit: 'grams' },
+          ShippingServiceOptions: { DeliveryExperience: 'NoTracking', CarrierWillPickUp: false },
+        },
+      },
+    });
+    console.log('Merchant Fulfillment test SUCCESS:', JSON.stringify(mfnTest).slice(0, 500));
+  } catch (e) {
+    console.warn('Merchant Fulfillment test FAILED:', e.message || e, JSON.stringify(e, Object.getOwnPropertyNames(e)).slice(0, 500));
+  }
+
   console.log('SP-API sync complete.');
 }
 
