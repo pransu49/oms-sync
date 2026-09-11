@@ -109,6 +109,8 @@ async function syncOrders() {
       fulfillmentChannel: order.FulfillmentChannel, // AFN=FBA, MFN=self-ship/EasyShip
       isEasyShip: !!order.EasyShipShipmentStatus, // presence of this field means Easy Ship, not plain Self-Ship
       shipServiceLevel: order.ShipServiceLevel || null,
+      earliestShipDate: order.EarliestShipDate || null,
+      latestShipDate: order.LatestShipDate || null, // the "ship by" deadline shown in Seller Central
       items,
       amazonFees, // total referral/closing/shipping fees Amazon charged - null if not yet settled
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
