@@ -350,6 +350,79 @@ async function syncCompetitivePricing(asinList) {
   console.log(`Competitive pricing synced for ${asinList.length} ASINs`);
 }
 
+// Applies any pending price-change requests queued by the admin console (Firestore
+// collection `spapiPriceUpdates`, one doc per request) to the REAL Amazon listing via
+// the Listings Items API. Each doc gets its status written back (applied/failed) so the
+// admin console can show the person what actually happened, instead of assuming success.
+//
+// NOTE: this patch body (purchasable_offer -> our_price -> schedule -> value_with_tax) is
+// Amazon's standard documented shape for a price-only update, but SP-API's exact schema can
+// vary by product type/category. This has NOT been run against a real listing yet - the
+// first few updates should be watched closely (check Seller Central after each one) before
+// trusting this unattended.
+async function applyPendingPriceUpdates(sellerId) {
+  const pendingSnap = await db.collection('spapiPriceUpdates')
+    .where('account', '==', ACCOUNT_LABEL)
+    .where('status', '==', 'pending')
+    .get();
+
+  if (pendingSnap.empty) {
+    console.log('No pending price updates.');
+    return;
+  }
+  console.log(`Applying ${pendingSnap.size} pending price update(s)...`);
+
+  for (const doc of pendingSnap.docs) {
+    const { sku, newPrice } = doc.data();
+    try {
+      // Need the product type for this SKU - already stored from the inventory sync's
+      // category lookup (Step 2b in run()).
+      const invSnap = await db.collection('spapiInventory')
+        .where('account', '==', ACCOUNT_LABEL)
+        .where('sku', '==', sku)
+        .limit(1)
+        .get();
+      const productType = invSnap.empty ? null : invSnap.docs[0].data().amazonProductType;
+      if (!productType) {
+        throw new Error('No known product type for this SKU yet - wait for the next inventory sync, or update manually in Seller Central first.');
+      }
+
+      await spClient.callAPI({
+        operation: 'patchListingsItem',
+        endpoint: 'listingsItems',
+        path: { sellerId, sku },
+        query: { marketplaceIds: [MARKETPLACE_ID] },
+        body: {
+          productType,
+          patches: [{
+            op: 'replace',
+            path: '/attributes/purchasable_offer',
+            value: [{
+              marketplace_id: MARKETPLACE_ID,
+              currency: 'INR',
+              our_price: [{ schedule: [{ value_with_tax: newPrice }] }],
+            }],
+          }],
+        },
+      });
+
+      await doc.ref.update({
+        status: 'applied',
+        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log(`Price updated for SKU ${sku}: now ${newPrice}`);
+    } catch (e) {
+      await doc.ref.update({
+        status: 'failed',
+        error: e.message || String(e),
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.warn(`Price update FAILED for SKU ${sku}:`, e.message || e);
+    }
+    await new Promise((r) => setTimeout(r, 800)); // rate-limit friendly delay
+  }
+}
+
 async function run() {
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
   const test = await spClient.callAPI({
@@ -357,6 +430,18 @@ async function run() {
     endpoint: 'sellers',
   });
   console.log('Step 0 result:', JSON.stringify(test));
+
+  // Needed for price updates (Listings Items API path parameter) - this is your fixed
+  // Merchant Token, found in Seller Central under Settings -> Account Info. It is NOT
+  // something the connectivity check above actually returns, so it has to come from a
+  // secret rather than being parsed out of that response.
+  const sellerId = process.env.SPAPI_SELLER_ID;
+  if (sellerId) {
+    console.log('Step 0b: applying any pending price updates...');
+    await applyPendingPriceUpdates(sellerId);
+  } else {
+    console.log('Step 0b: SPAPI_SELLER_ID not set - skipping price updates this run.');
+  }
 
   console.log('Step 1: syncing orders...');
   const orders = await syncOrders();
