@@ -3,7 +3,26 @@
 //   - Orders (incl. status/cancellations)
 //   - Inventory levels
 //   - Competitive pricing (other sellers on your ASINs)
-// Profit calc (needs Lots cost export + GST mapping) added once those files are shared.
+// Also applies pending write-back requests queued by the admin console:
+//   - Price updates      (spapiPriceUpdates)      - existing
+//   - MRP updates        (spapiMrpUpdates)         - new
+//   - HSN/tax code       (spapiHsnUpdates)         - new
+//   - New listing create/map (spapiNewListingRequests) - new
+//   - Refund requests    (spapiRefundRequests)     - new, MANUAL ONLY (see note below)
+//
+// IMPORTANT — REFUNDS: Amazon's SP-API does not offer a reliable, generally-available
+// operation for a third-party (MFN) seller to programmatically issue a buyer refund.
+// Refunds are normally done through Seller Central's Manage Returns/Refunds flow, or
+// through Amazon's return workflow. Rather than guess at an API call that moves real
+// money, applyPendingRefundRequests() below only FLAGS the request for you to action
+// manually in Seller Central - it never calls Amazon. If Amazon later documents a
+// proper refund endpoint for your account type, this can be upgraded.
+//
+// CAUTION ON THE OTHER NEW WRITE-BACK OPERATIONS: like the existing price-update code,
+// the exact attribute names/shapes for MRP and HSN below follow Amazon's commonly
+// documented pattern, but SP-API schemas can vary by product category. These have NOT
+// been run against a real listing yet - watch Seller Central closely after the first
+// few updates of each type before trusting this unattended.
 
 const SellingPartnerAPI = require('amazon-sp-api');
 const admin = require('firebase-admin');
@@ -350,6 +369,17 @@ async function syncCompetitivePricing(asinList) {
   console.log(`Competitive pricing synced for ${asinList.length} ASINs`);
 }
 
+// Looks up the stored Amazon product type for a SKU (needed by every Listings Items
+// API call below - Amazon requires it on every patch/put, category-specific schema).
+async function getProductTypeForSku(sku) {
+  const invSnap = await db.collection('spapiInventory')
+    .where('account', '==', ACCOUNT_LABEL)
+    .where('sku', '==', sku)
+    .limit(1)
+    .get();
+  return invSnap.empty ? null : (invSnap.docs[0].data().amazonProductType || null);
+}
+
 // Applies any pending price-change requests queued by the admin console (Firestore
 // collection `spapiPriceUpdates`, one doc per request) to the REAL Amazon listing via
 // the Listings Items API. Each doc gets its status written back (applied/failed) so the
@@ -375,14 +405,7 @@ async function applyPendingPriceUpdates(sellerId) {
   for (const doc of pendingSnap.docs) {
     const { sku, newPrice } = doc.data();
     try {
-      // Need the product type for this SKU - already stored from the inventory sync's
-      // category lookup (Step 2b in run()).
-      const invSnap = await db.collection('spapiInventory')
-        .where('account', '==', ACCOUNT_LABEL)
-        .where('sku', '==', sku)
-        .limit(1)
-        .get();
-      const productType = invSnap.empty ? null : invSnap.docs[0].data().amazonProductType;
+      const productType = await getProductTypeForSku(sku);
       if (!productType) {
         throw new Error('No known product type for this SKU yet - wait for the next inventory sync, or update manually in Seller Central first.');
       }
@@ -423,6 +446,228 @@ async function applyPendingPriceUpdates(sellerId) {
   }
 }
 
+// NEW: MRP updates. Same pattern as price updates. Amazon's commonly documented
+// attribute for MRP on India listings is "list_price" - this can vary by category,
+// so watch the first few of these closely in Seller Central.
+async function applyPendingMrpUpdates(sellerId) {
+  const pendingSnap = await db.collection('spapiMrpUpdates')
+    .where('account', '==', ACCOUNT_LABEL)
+    .where('status', '==', 'pending')
+    .get();
+
+  if (pendingSnap.empty) {
+    console.log('No pending MRP updates.');
+    return;
+  }
+  console.log(`Applying ${pendingSnap.size} pending MRP update(s)...`);
+
+  for (const doc of pendingSnap.docs) {
+    const { sku, newMrp } = doc.data();
+    try {
+      const productType = await getProductTypeForSku(sku);
+      if (!productType) {
+        throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
+      }
+
+      await spClient.callAPI({
+        operation: 'patchListingsItem',
+        endpoint: 'listingsItems',
+        path: { sellerId, sku },
+        query: { marketplaceIds: [MARKETPLACE_ID] },
+        body: {
+          productType,
+          patches: [{
+            op: 'replace',
+            path: '/attributes/list_price',
+            value: [{
+              marketplace_id: MARKETPLACE_ID,
+              currency: 'INR',
+              value: newMrp,
+            }],
+          }],
+        },
+      });
+
+      await doc.ref.update({
+        status: 'applied',
+        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log(`MRP updated for SKU ${sku}: now ${newMrp}`);
+    } catch (e) {
+      await doc.ref.update({
+        status: 'failed',
+        error: e.message || String(e),
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.warn(`MRP update FAILED for SKU ${sku}:`, e.message || e);
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+}
+
+// NEW: HSN / GST tax-code updates. Amazon India's attribute for this is
+// "product_tax_code" - the GST% applied at checkout follows automatically from the
+// HSN code you set here (there isn't a separate "set tax percent directly" field).
+async function applyPendingHsnUpdates(sellerId) {
+  const pendingSnap = await db.collection('spapiHsnUpdates')
+    .where('account', '==', ACCOUNT_LABEL)
+    .where('status', '==', 'pending')
+    .get();
+
+  if (pendingSnap.empty) {
+    console.log('No pending HSN/tax code updates.');
+    return;
+  }
+  console.log(`Applying ${pendingSnap.size} pending HSN update(s)...`);
+
+  for (const doc of pendingSnap.docs) {
+    const { sku, newHsn } = doc.data();
+    try {
+      const productType = await getProductTypeForSku(sku);
+      if (!productType) {
+        throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
+      }
+
+      await spClient.callAPI({
+        operation: 'patchListingsItem',
+        endpoint: 'listingsItems',
+        path: { sellerId, sku },
+        query: { marketplaceIds: [MARKETPLACE_ID] },
+        body: {
+          productType,
+          patches: [{
+            op: 'replace',
+            path: '/attributes/product_tax_code',
+            value: [{ value: String(newHsn) }],
+          }],
+        },
+      });
+
+      await doc.ref.update({
+        status: 'applied',
+        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
+    } catch (e) {
+      await doc.ref.update({
+        status: 'failed',
+        error: e.message || String(e),
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.warn(`HSN update FAILED for SKU ${sku}:`, e.message || e);
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+}
+
+// NEW: Create or map a new listing via putListingsItem. This is the riskiest write-back
+// operation here - a full listing needs many required attributes that vary heavily by
+// category (title, bullet points, images, brand, barcode, etc.). This implementation
+// only sends the fields the admin console form actually collects; Amazon will reject
+// the request if required category-specific attributes are missing, and the error
+// message (stored back on the doc) will say which ones. Treat every one of these as
+// needing a manual check in Seller Central afterward, at least for the first several.
+async function applyPendingNewListings(sellerId) {
+  const pendingSnap = await db.collection('spapiNewListingRequests')
+    .where('account', '==', ACCOUNT_LABEL)
+    .where('status', '==', 'pending')
+    .get();
+
+  if (pendingSnap.empty) {
+    console.log('No pending new-listing requests.');
+    return;
+  }
+  console.log(`Applying ${pendingSnap.size} pending new-listing request(s)...`);
+
+  for (const doc of pendingSnap.docs) {
+    const data = doc.data();
+    const { sku, productType, title, brand, price, mrp, hsn, barcode, barcodeType, quantity } = data;
+    try {
+      if (!sku || !productType) {
+        throw new Error('Missing SKU or productType - both are required to create/map a listing.');
+      }
+
+      const attributes = {};
+      if (title) attributes.item_name = [{ value: title, marketplace_id: MARKETPLACE_ID }];
+      if (brand) attributes.brand = [{ value: brand, marketplace_id: MARKETPLACE_ID }];
+      if (price != null) {
+        attributes.purchasable_offer = [{
+          marketplace_id: MARKETPLACE_ID,
+          currency: 'INR',
+          our_price: [{ schedule: [{ value_with_tax: price }] }],
+        }];
+      }
+      if (mrp != null) {
+        attributes.list_price = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: mrp }];
+      }
+      if (hsn) {
+        attributes.product_tax_code = [{ value: String(hsn) }];
+      }
+      if (barcode) {
+        attributes.externally_assigned_product_identifier = [{
+          type: (barcodeType || 'ean').toLowerCase(),
+          value: String(barcode),
+          marketplace_id: MARKETPLACE_ID,
+        }];
+      }
+      if (quantity != null) {
+        attributes.fulfillment_availability = [{
+          fulfillment_channel_code: 'DEFAULT',
+          quantity: quantity,
+        }];
+      }
+
+      await spClient.callAPI({
+        operation: 'putListingsItem',
+        endpoint: 'listingsItems',
+        path: { sellerId, sku },
+        query: { marketplaceIds: [MARKETPLACE_ID] },
+        body: { productType, attributes },
+      });
+
+      await doc.ref.update({
+        status: 'applied',
+        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log(`New listing created/mapped for SKU ${sku}`);
+    } catch (e) {
+      await doc.ref.update({
+        status: 'failed',
+        error: e.message || String(e),
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.warn(`New listing request FAILED for SKU ${sku}:`, e.message || e);
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+}
+
+// NEW: Refund requests. Does NOT call Amazon - see the top-of-file note for why.
+// Just flips status so the admin console can show "flagged for manual action" instead
+// of leaving the request stuck as "pending" forever.
+async function flagPendingRefundRequests() {
+  const pendingSnap = await db.collection('spapiRefundRequests')
+    .where('account', '==', ACCOUNT_LABEL)
+    .where('status', '==', 'pending')
+    .get();
+
+  if (pendingSnap.empty) {
+    console.log('No pending refund requests.');
+    return;
+  }
+  console.log(`Flagging ${pendingSnap.size} refund request(s) for manual action (no Amazon API call is made)...`);
+
+  const batch = db.batch();
+  pendingSnap.docs.forEach((doc) => {
+    batch.update(doc.ref, {
+      status: 'flagged_for_manual_action',
+      flaggedAt: admin.firestore.FieldValue.serverTimestamp(),
+      note: 'SP-API has no reliable programmatic refund for MFN orders - process this manually in Seller Central > Manage Returns/Refunds.',
+    });
+  });
+  await batch.commit();
+}
+
 async function run() {
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
   const test = await spClient.callAPI({
@@ -431,17 +676,24 @@ async function run() {
   });
   console.log('Step 0 result:', JSON.stringify(test));
 
-  // Needed for price updates (Listings Items API path parameter) - this is your fixed
-  // Merchant Token, found in Seller Central under Settings -> Account Info. It is NOT
-  // something the connectivity check above actually returns, so it has to come from a
-  // secret rather than being parsed out of that response.
+  // Needed for all Listings Items API calls (price/MRP/HSN/new listing) - this is your
+  // fixed Merchant Token, found in Seller Central under Settings -> Account Info.
   const sellerId = process.env.SPAPI_SELLER_ID;
   if (sellerId) {
     console.log('Step 0b: applying any pending price updates...');
     await applyPendingPriceUpdates(sellerId);
+    console.log('Step 0c: applying any pending MRP updates...');
+    await applyPendingMrpUpdates(sellerId);
+    console.log('Step 0d: applying any pending HSN/tax code updates...');
+    await applyPendingHsnUpdates(sellerId);
+    console.log('Step 0e: applying any pending new-listing requests...');
+    await applyPendingNewListings(sellerId);
   } else {
-    console.log('Step 0b: SPAPI_SELLER_ID not set - skipping price updates this run.');
+    console.log('Step 0b-0e: SPAPI_SELLER_ID not set - skipping all listing write-backs this run.');
   }
+
+  console.log('Step 0f: flagging any pending refund requests for manual action...');
+  await flagPendingRefundRequests();
 
   console.log('Step 1: syncing orders...');
   const orders = await syncOrders();
