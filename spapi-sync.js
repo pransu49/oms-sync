@@ -754,3 +754,67 @@ run().catch((err) => {
   console.error('Full error details:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
   process.exit(1);
 });
+// ================= ADD TO spapi-sync.js =================
+// Paste this function anywhere among your other applyPending... functions,
+// and add the call shown at the bottom into run() (next to the other applyPending calls).
+
+async function applyPendingListingDeletions(sellerId) {
+  const pendingSnap = await db.collection('spapiListingDeletions')
+    .where('account', '==', ACCOUNT_LABEL)
+    .where('status', '==', 'pending')
+    .get();
+
+  if (pendingSnap.empty) {
+    console.log('No pending listing deletions.');
+    return;
+  }
+  console.log(`Applying ${pendingSnap.size} pending listing deletion(s)...`);
+
+  for (const doc of pendingSnap.docs) {
+    const { sku } = doc.data();
+    try {
+      // Snapshot the listing's current data before deleting, so we can archive it.
+      const invSnap = await db.collection('spapiInventory')
+        .where('account', '==', ACCOUNT_LABEL)
+        .where('sku', '==', sku)
+        .limit(1)
+        .get();
+      const invData = invSnap.empty ? null : invSnap.docs[0].data();
+
+      await spClient.callAPI({
+        operation: 'deleteListingsItem',
+        endpoint: 'listingsItems',
+        path: { sellerId, sku },
+        query: { marketplaceIds: [MARKETPLACE_ID] },
+      });
+
+      await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${sku}_${Date.now()}`).set({
+        account: ACCOUNT_LABEL,
+        sku,
+        name: invData ? invData.name : null,
+        asin: invData ? invData.asin : null,
+        price: invData ? invData.price : null,
+        quantity: invData ? invData.quantity : null,
+        deletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      await doc.ref.update({
+        status: 'applied',
+        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.log(`Listing deleted for SKU ${sku}`);
+    } catch (e) {
+      await doc.ref.update({
+        status: 'failed',
+        error: e.message || String(e),
+        failedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      console.warn(`Listing deletion FAILED for SKU ${sku}:`, e.message || e);
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+}
+
+// ---- Add this line inside run(), right after the other applyPending... calls ----
+// console.log('Step 0f: applying any pending listing deletions...');
+// await applyPendingListingDeletions(sellerId);
