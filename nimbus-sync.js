@@ -23,8 +23,17 @@ async function login() {
     body: JSON.stringify({ email: NIMBUS_EMAIL, password: NIMBUS_PASSWORD }),
   });
   const data = await res.json();
-  if (!data?.data) throw new Error('NimbusPost login failed: ' + JSON.stringify(data));
-  return data.data; // bearer token
+
+  // TEMP DEBUG — prints the full login response shape so we can find the real token field
+  console.log('--- DEBUG: login response status ---', res.status);
+  console.log('--- DEBUG: login response body ---', JSON.stringify(data));
+
+  const token = data?.data || data?.data?.token || data?.token;
+  if (!token || typeof token !== 'string') {
+    throw new Error('NimbusPost login: could not find a string token in response: ' + JSON.stringify(data));
+  }
+  console.log('--- DEBUG: token type/length ---', typeof token, token.length);
+  return token;
 }
 
 async function fetchAllShipments(token) {
