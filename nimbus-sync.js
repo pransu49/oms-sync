@@ -30,11 +30,21 @@ async function login() {
 async function fetchAllShipments(token) {
   let page = 1;
   let all = [];
+  let debugged = false;
   while (true) {
     const res = await fetch(`${NIMBUS_BASE}/shipments?page=${page}&per_page=100`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const json = await res.json();
+
+    if (!debugged) {
+      // TEMP DEBUG — prints exactly what NimbusPost returned on page 1, so we can see the real shape
+      console.log('--- DEBUG: raw response status ---', res.status);
+      console.log('--- DEBUG: raw response body (first 2000 chars) ---');
+      console.log(JSON.stringify(json).slice(0, 2000));
+      debugged = true;
+    }
+
     const rows = json?.data?.shipments || json?.data || [];
     if (!Array.isArray(rows) || rows.length === 0) break;
     all = all.concat(rows);
