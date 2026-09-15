@@ -37,26 +37,41 @@ async function login() {
 }
 
 async function fetchAllOrders(token) {
+  // TEMP DEBUG — try a few header formats NimbusPost might expect, and report which one works
+  const variants = [
+    { label: 'Authorization: Bearer <token>', headers: { Authorization: `Bearer ${token}` } },
+    { label: 'Authorization: <token> (no Bearer)', headers: { Authorization: token } },
+    { label: 'token: <token> header', headers: { token: token } },
+    { label: 'Authorization: Bearer <token>, Accept: application/json', headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } },
+  ];
+
+  let workingHeaders = null;
+  for (const v of variants) {
+    const res = await fetch(`${NIMBUS_BASE}/orders?page=1&per_page=5`, { headers: v.headers });
+    const text = await res.text();
+    console.log(`--- DEBUG: variant "${v.label}" --- status ${res.status}`);
+    console.log(text.slice(0, 500));
+    if (res.status === 200) {
+      workingHeaders = v.headers;
+      console.log(`--- DEBUG: WORKING VARIANT FOUND: "${v.label}" ---`);
+      break;
+    }
+  }
+
+  if (!workingHeaders) {
+    console.log('--- DEBUG: none of the header variants worked ---');
+    return [];
+  }
+
   let page = 1;
   let all = [];
-  let debugged = false;
   while (true) {
-    const res = await fetch(`${NIMBUS_BASE}/orders?page=${page}&per_page=100`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+    const res = await fetch(`${NIMBUS_BASE}/orders?page=${page}&per_page=100`, { headers: workingHeaders });
     const json = await res.json();
-
-    if (!debugged) {
-      console.log('--- DEBUG: orders response status ---', res.status);
-      console.log('--- DEBUG: orders response body (first 2000 chars) ---');
-      console.log(JSON.stringify(json).slice(0, 2000));
-      debugged = true;
-    }
-
     const rows = json?.data?.orders || json?.data || [];
     if (!Array.isArray(rows) || rows.length === 0) break;
     all = all.concat(rows);
-    if (rows.length < 100) break; // last page
+    if (rows.length < 100) break;
     page++;
   }
   return all;
