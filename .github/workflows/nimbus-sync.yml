@@ -1,0 +1,21 @@
+name: NimbusPost Sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'   # backup — main trigger is cron-job.org like your other syncs
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install firebase-admin node-fetch@2
+      - run: node nimbus-sync.js
+        env:
+          NIMBUS_EMAIL: ${{ secrets.NIMBUS_EMAIL }}
+          NIMBUS_PASSWORD: ${{ secrets.NIMBUS_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
