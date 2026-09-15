@@ -36,25 +36,24 @@ async function login() {
   return token;
 }
 
-async function fetchAllShipments(token) {
+async function fetchAllOrders(token) {
   let page = 1;
   let all = [];
   let debugged = false;
   while (true) {
-    const res = await fetch(`${NIMBUS_BASE}/shipments?page=${page}&per_page=100`, {
+    const res = await fetch(`${NIMBUS_BASE}/orders?page=${page}&per_page=100`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const json = await res.json();
 
     if (!debugged) {
-      // TEMP DEBUG — prints exactly what NimbusPost returned on page 1, so we can see the real shape
-      console.log('--- DEBUG: raw response status ---', res.status);
-      console.log('--- DEBUG: raw response body (first 2000 chars) ---');
+      console.log('--- DEBUG: orders response status ---', res.status);
+      console.log('--- DEBUG: orders response body (first 2000 chars) ---');
       console.log(JSON.stringify(json).slice(0, 2000));
       debugged = true;
     }
 
-    const rows = json?.data?.shipments || json?.data || [];
+    const rows = json?.data?.orders || json?.data || [];
     if (!Array.isArray(rows) || rows.length === 0) break;
     all = all.concat(rows);
     if (rows.length < 100) break; // last page
@@ -65,8 +64,8 @@ async function fetchAllShipments(token) {
 
 async function syncShipments() {
   const token = await login();
-  const shipments = await fetchAllShipments(token);
-  console.log(`Fetched ${shipments.length} shipments from NimbusPost`);
+  const shipments = await fetchAllOrders(token);
+  console.log(`Fetched ${shipments.length} orders from NimbusPost`);
 
   // Load existing index (1 read instead of N) to skip unchanged/final-state rows
   const indexRef = db.collection('nimbusIndex').doc('statusIndex');
