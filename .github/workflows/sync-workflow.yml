@@ -24,6 +24,6 @@ jobs:
         env:
           OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          OMS_DAYS_BACK: '15'
+   FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+   OMS_DAYS_BACK: '15'
         run: node sync.js
