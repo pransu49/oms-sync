@@ -28,6 +28,6 @@ jobs:
           SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
           SPAPI_REFRESH_TOKEN: ${{ secrets.SPAPI_REFRESH_TOKEN_SASTASTORE }}
           SPAPI_SELLER_ID: ${{ secrets.SPAPI_SELLER_ID_SASTASTORE }}
-FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
-ACCOUNT_LABEL: sastastore
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
+          ACCOUNT_LABEL: sastastore
         run: node spapi-sync.js
