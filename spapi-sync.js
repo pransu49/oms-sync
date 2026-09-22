@@ -43,7 +43,7 @@ const spClient = new SellingPartnerAPI({
 });
 
 const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1'; // lets us tag data per seller account later
-
+const skuToAsinMap = {};
 async function syncOrders() {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // last 24h
   const res = await spClient.callAPI({
