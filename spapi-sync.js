@@ -23,6 +23,12 @@
 // documented pattern, but SP-API schemas can vary by product category. These have NOT
 // been run against a real listing yet - watch Seller Central closely after the first
 // few updates of each type before trusting this unattended.
+//
+// QUOTA FIX (this version): syncInventory() and syncCompetitivePricing() now read what's
+// already stored first and only write docs that actually changed, instead of rewriting
+// every SKU/ASIN on every run. Step 2b (category backfill) now reuses the sku<->asin map
+// built during inventory sync instead of running one Firestore query per ASIN. This is
+// the same "delta write" fix already used in sync.js (OMS) and nimbus-sync.js.
 
 const SellingPartnerAPI = require('amazon-sp-api');
 const admin = require('firebase-admin');
@@ -43,7 +49,8 @@ const spClient = new SellingPartnerAPI({
 });
 
 const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1'; // lets us tag data per seller account later
-const skuToAsinMap = {};
+const skuToAsinMap = {}; // filled during syncInventory, reused in Step 2b to avoid per-ASIN queries
+
 async function syncOrders() {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // last 24h
   const res = await spClient.callAPI({
@@ -245,8 +252,16 @@ async function syncInventory() {
   const categoryIdx = headers.indexOf('zshop-category1');
   console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx);
 
+  // QUOTA FIX: read what's already stored ONCE, so we only write rows that actually
+  // changed instead of rewriting every SKU (with a fresh timestamp) on every run.
+  console.log('Fetching existing inventory docs for delta comparison...');
+  const existingSnap = await db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).get();
+  const existingBySku = {};
+  existingSnap.forEach((d) => { existingBySku[d.id] = d.data(); });
+
   const batch = db.batch();
-  let count = 0;
+  let changedCount = 0;
+  let skippedCount = 0;
   const asins = [];
 
   for (let i = 1; i < lines.length; i++) {
@@ -255,10 +270,13 @@ async function syncInventory() {
     if (!sku) continue;
 
     const asin = cols[asinIdx] || null;
-    if (asin) asins.push(asin);
+    if (asin) {
+      asins.push(asin);
+      skuToAsinMap[sku] = asin;
+    }
 
-    const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
-    batch.set(ref, {
+    const docId = `${ACCOUNT_LABEL}_${sku}`;
+    const newData = {
       account: ACCOUNT_LABEL,
       sku,
       name: cols[nameIdx] || '',
@@ -267,13 +285,26 @@ async function syncInventory() {
       weightKg: extractWeightKg(cols[nameIdx] || ''), // approximate, parsed from product name
       quantity: parseInt(cols[qtyIdx], 10) || 0,
       price: parseFloat(cols[priceIdx]) || null,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
-    count++;
+    };
+    const old = existingBySku[docId];
+    const changed = !old
+      || old.quantity !== newData.quantity
+      || old.price !== newData.price
+      || old.name !== newData.name
+      || old.asin !== newData.asin
+      || old.category !== newData.category;
+
+    if (changed) {
+      const ref = db.collection('spapiInventory').doc(docId);
+      batch.set(ref, { ...newData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      changedCount++;
+    } else {
+      skippedCount++;
+    }
   }
 
-  await batch.commit();
-  console.log(`Inventory synced: ${count} SKUs`);
+  if (changedCount > 0) await batch.commit();
+  console.log(`Inventory synced: ${changedCount} changed, ${skippedCount} unchanged (skipped write)`);
   const uniqueCategories = [...new Set(lines.slice(1).map(l => l.split('\t')[categoryIdx]).filter(Boolean))];
   console.log('Unique categories found:', JSON.stringify(uniqueCategories));
   return [...new Set(asins)];
@@ -316,8 +347,17 @@ async function fetchProductCategories(asinList) {
 async function syncCompetitivePricing(asinList) {
   if (!asinList.length) return;
 
+  // QUOTA FIX: same delta-write treatment as inventory - competitor prices don't
+  // change every 4 hours for every ASIN, so skip rewriting the ones that didn't move.
+  console.log('Fetching existing competitive pricing docs for delta comparison...');
+  const existingSnap = await db.collection('spapiCompetitivePricing').where('account', '==', ACCOUNT_LABEL).get();
+  const existingByAsin = {};
+  existingSnap.forEach((d) => { existingByAsin[d.id] = d.data(); });
+
   const batch = db.batch();
   let firstLogged = false;
+  let changedCount = 0;
+  let skippedCount = 0;
 
   for (const asin of asinList) {
     let offers = [];
@@ -354,19 +394,28 @@ async function syncCompetitivePricing(asinList) {
     await new Promise((r) => setTimeout(r, 1200));
 
     const lowest = offers[0]?.price ?? null;
-    const ref = db.collection('spapiCompetitivePricing').doc(`${ACCOUNT_LABEL}_${asin}`);
-    batch.set(ref, {
-      account: ACCOUNT_LABEL,
-      asin,
-      lowestCompetitorPrice: lowest,
-      rawOffers: offers.length,
-      offers, // full list: every seller's price, shipping, buy-box status
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    const docId = `${ACCOUNT_LABEL}_${asin}`;
+    const old = existingByAsin[docId];
+    const changed = !old || old.lowestCompetitorPrice !== lowest || old.rawOffers !== offers.length;
+
+    if (changed) {
+      const ref = db.collection('spapiCompetitivePricing').doc(docId);
+      batch.set(ref, {
+        account: ACCOUNT_LABEL,
+        asin,
+        lowestCompetitorPrice: lowest,
+        rawOffers: offers.length,
+        offers, // full list: every seller's price, shipping, buy-box status
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      changedCount++;
+    } else {
+      skippedCount++;
+    }
   }
 
-  await batch.commit();
-  console.log(`Competitive pricing synced for ${asinList.length} ASINs`);
+  if (changedCount > 0) await batch.commit();
+  console.log(`Competitive pricing synced: ${changedCount} changed, ${skippedCount} unchanged (skipped) of ${asinList.length} ASINs`);
 }
 
 // Looks up the stored Amazon product type for a SKU (needed by every Listings Items
@@ -668,96 +717,7 @@ async function flagPendingRefundRequests() {
   await batch.commit();
 }
 
-async function run() {
-  console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
-  const test = await spClient.callAPI({
-    operation: 'getMarketplaceParticipations',
-    endpoint: 'sellers',
-  });
-  console.log('Step 0 result:', JSON.stringify(test));
-
-  // Needed for all Listings Items API calls (price/MRP/HSN/new listing) - this is your
-  // fixed Merchant Token, found in Seller Central under Settings -> Account Info.
-  const sellerId = process.env.SPAPI_SELLER_ID;
-  if (sellerId) {
-    console.log('Step 0b: applying any pending price updates...');
-    await applyPendingPriceUpdates(sellerId);
-    console.log('Step 0c: applying any pending MRP updates...');
-    await applyPendingMrpUpdates(sellerId);
-    console.log('Step 0d: applying any pending HSN/tax code updates...');
-    await applyPendingHsnUpdates(sellerId);
-    console.log('Step 0e: applying any pending new-listing requests...');
-    await applyPendingNewListings(sellerId);
-  } else {
-    console.log('Step 0b-0e: SPAPI_SELLER_ID not set - skipping all listing write-backs this run.');
-  }
-
-  console.log('Step 0f: flagging any pending refund requests for manual action...');
-  await flagPendingRefundRequests();
-
-  console.log('Step 1: syncing orders...');
-  const orders = await syncOrders();
-
-  console.log('Step 2: syncing inventory...');
-  const asinsFromInventory = await syncInventory();
-
-  console.log('Step 2b: fetching real product categories for referral fee calc...');
-  const categoriesByAsin = await fetchProductCategories(asinsFromInventory);
-  console.log('Sample categories:', JSON.stringify(Object.entries(categoriesByAsin).slice(0, 10)));
-  const catBatch = db.batch();
-  for (const [asin, category] of Object.entries(categoriesByAsin)) {
-    const invSnapshot = await db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).where('asin', '==', asin).limit(1).get();
-    invSnapshot.forEach((doc) => catBatch.update(doc.ref, { amazonProductType: category }));
-  }
-  await catBatch.commit();
-
-  console.log('Step 3: syncing competitive pricing...');
-  await syncCompetitivePricing(asinsFromInventory);
-
-  console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
-  try {
-    // Placeholder data - purely to check whether this API is authorized at all for this
-    // app/account. A permission/role error looks very different from a data-validation
-    // error, so even a "wrong" address here still tells us what we need to know.
-    const mfnTest = await spClient.callAPI({
-      operation: 'getEligibleShipmentServices',
-      endpoint: 'merchantFulfillment',
-      body: {
-        ShipmentRequestDetails: {
-          AmazonOrderId: orders[0] ? orders[0].AmazonOrderId : '000-0000000-0000000',
-          ItemList: [{ OrderItemId: 'TEST', Quantity: 1 }],
-          ShipFromAddress: {
-            Name: 'Praso Enterprises',
-            AddressLine1: 'Test Address Line 1',
-            City: 'Delhi',
-            StateOrRegion: 'Delhi',
-            PostalCode: '110001',
-            CountryCode: 'IN',
-            Phone: '9999999999',
-          },
-          PackageDimensions: { Length: 10, Width: 10, Height: 10, Unit: 'centimeters' },
-          Weight: { Value: 200, Unit: 'grams' },
-          ShippingServiceOptions: { DeliveryExperience: 'NoTracking', CarrierWillPickUp: false },
-        },
-      },
-    });
-    console.log('Merchant Fulfillment test SUCCESS:', JSON.stringify(mfnTest).slice(0, 500));
-  } catch (e) {
-    console.warn('Merchant Fulfillment test FAILED:', e.message || e, JSON.stringify(e, Object.getOwnPropertyNames(e)).slice(0, 500));
-  }
-
-  console.log('SP-API sync complete.');
-}
-
-run().catch((err) => {
-  console.error('spapi-sync failed:', err.message || err);
-  console.error('Full error details:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
-  process.exit(1);
-});
-// ================= ADD TO spapi-sync.js =================
-// Paste this function anywhere among your other applyPending... functions,
-// and add the call shown at the bottom into run() (next to the other applyPending calls).
-
+// Applies any pending listing-deletion requests queued by the admin console.
 async function applyPendingListingDeletions(sellerId) {
   const pendingSnap = await db.collection('spapiListingDeletions')
     .where('account', '==', ACCOUNT_LABEL)
@@ -815,6 +775,100 @@ async function applyPendingListingDeletions(sellerId) {
   }
 }
 
-// ---- Add this line inside run(), right after the other applyPending... calls ----
-// console.log('Step 0f: applying any pending listing deletions...');
-// await applyPendingListingDeletions(sellerId);
+async function run() {
+  console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
+  const test = await spClient.callAPI({
+    operation: 'getMarketplaceParticipations',
+    endpoint: 'sellers',
+  });
+  console.log('Step 0 result:', JSON.stringify(test));
+
+  // Needed for all Listings Items API calls (price/MRP/HSN/new listing) - this is your
+  // fixed Merchant Token, found in Seller Central under Settings -> Account Info.
+  const sellerId = process.env.SPAPI_SELLER_ID;
+  if (sellerId) {
+    console.log('Step 0b: applying any pending price updates...');
+    await applyPendingPriceUpdates(sellerId);
+    console.log('Step 0c: applying any pending MRP updates...');
+    await applyPendingMrpUpdates(sellerId);
+    console.log('Step 0d: applying any pending HSN/tax code updates...');
+    await applyPendingHsnUpdates(sellerId);
+    console.log('Step 0e: applying any pending new-listing requests...');
+    await applyPendingNewListings(sellerId);
+    console.log('Step 0f: applying any pending listing deletions...');
+    await applyPendingListingDeletions(sellerId);
+  } else {
+    console.log('Step 0b-0f: SPAPI_SELLER_ID not set - skipping all listing write-backs this run.');
+  }
+
+  console.log('Step 0g: flagging any pending refund requests for manual action...');
+  await flagPendingRefundRequests();
+
+  console.log('Step 1: syncing orders...');
+  const orders = await syncOrders();
+
+  console.log('Step 2: syncing inventory...');
+  const asinsFromInventory = await syncInventory();
+
+  console.log('Step 2b: fetching real product categories for referral fee calc...');
+  const categoriesByAsin = await fetchProductCategories(asinsFromInventory);
+  console.log('Sample categories:', JSON.stringify(Object.entries(categoriesByAsin).slice(0, 10)));
+  // QUOTA FIX: reuse the sku<->asin map built during syncInventory instead of running
+  // one Firestore query per ASIN (that was the single biggest read source).
+  const asinToSku = {};
+  for (const [sku, asin] of Object.entries(skuToAsinMap)) { asinToSku[asin] = sku; }
+  const catBatch = db.batch();
+  let catWrites = 0;
+  for (const [asin, category] of Object.entries(categoriesByAsin)) {
+    const sku = asinToSku[asin];
+    if (!sku) continue;
+    const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
+    catBatch.update(ref, { amazonProductType: category });
+    catWrites++;
+  }
+  if (catWrites > 0) await catBatch.commit();
+  console.log(`Step 2b done: ${catWrites} category update(s) written.`);
+
+  console.log('Step 3: syncing competitive pricing...');
+  await syncCompetitivePricing(asinsFromInventory);
+
+  console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
+  try {
+    // Placeholder data - purely to check whether this API is authorized at all for this
+    // app/account. A permission/role error looks very different from a data-validation
+    // error, so even a "wrong" address here still tells us what we need to know.
+    const mfnTest = await spClient.callAPI({
+      operation: 'getEligibleShipmentServices',
+      endpoint: 'merchantFulfillment',
+      body: {
+        ShipmentRequestDetails: {
+          AmazonOrderId: orders[0] ? orders[0].AmazonOrderId : '000-0000000-0000000',
+          ItemList: [{ OrderItemId: 'TEST', Quantity: 1 }],
+          ShipFromAddress: {
+            Name: 'Praso Enterprises',
+            AddressLine1: 'Test Address Line 1',
+            City: 'Delhi',
+            StateOrRegion: 'Delhi',
+            PostalCode: '110001',
+            CountryCode: 'IN',
+            Phone: '9999999999',
+          },
+          PackageDimensions: { Length: 10, Width: 10, Height: 10, Unit: 'centimeters' },
+          Weight: { Value: 200, Unit: 'grams' },
+          ShippingServiceOptions: { DeliveryExperience: 'NoTracking', CarrierWillPickUp: false },
+        },
+      },
+    });
+    console.log('Merchant Fulfillment test SUCCESS:', JSON.stringify(mfnTest).slice(0, 500));
+  } catch (e) {
+    console.warn('Merchant Fulfillment test FAILED:', e.message || e, JSON.stringify(e, Object.getOwnPropertyNames(e)).slice(0, 500));
+  }
+
+  console.log('SP-API sync complete.');
+}
+
+run().catch((err) => {
+  console.error('spapi-sync failed:', err.message || err);
+  console.error('Full error details:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
+  process.exit(1);
+});
