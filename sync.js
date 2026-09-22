@@ -227,6 +227,7 @@ function slimOrder(row) {
     buyerPincode: row['Buyer Pin Code'] || '',
     buyerPhone: row['Buyer Phone'] || '',
     sku: row['Product Sku Code'] || '',
+    asin: findField(row, ['ASIN', 'Asin', 'Extra Field', 'Product Asin']),
     productName: row['Product Name'] || '',
     channel: row['Channel Name'] || '',
     category: row['Category Name'] || '',
