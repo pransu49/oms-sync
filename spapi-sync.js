@@ -367,8 +367,10 @@ async function fetchHsnTaxData(sellerId, skuList) {
         console.log('Sample getListingsItem (HSN/tax) response for', sku, ':', JSON.stringify(res).slice(0, 1200));
         firstLogged = true;
       }
-      const attrs = res.attributes || res.payload?.attributes || {};
-      const hsnCode = attrs.hsn_code?.[0]?.value ?? attrs.product_tax_code?.[0]?.value ?? null;
+            const attrs = res.attributes || res.payload?.attributes || {};
+      const externalInfo = attrs.external_product_information || [];
+      const hsnEntry = externalInfo.find(e => (e.entity || '').toLowerCase().includes('hsn'));
+      const hsnCode = hsnEntry ? hsnEntry.value : null;
       const taxCode = attrs.product_tax_code?.[0]?.value ?? null;
       if (hsnCode || taxCode) results[sku] = { hsnCode, taxCode };
     } catch (e) {
