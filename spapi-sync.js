@@ -344,10 +344,10 @@ async function fetchProductCategories(asinList) {
   return categories;
 }
 // Fetches HSN code + tax classification per SKU via the Listings Items API.
-// NOTE: like fetchProductCategories above, the exact attribute name Amazon uses for
-// HSN/tax on Indian listings can vary by category. This logs the raw response for the
-// first SKU so you can verify the real field name in the GitHub Actions log before
-// trusting the parsed value - the ?? fallbacks below are my best guess, not confirmed.
+// CONFIRMED (verified against a real listing, Sept 2026): HSN is stored under the
+// generic "external_product_information" pair, entity="HSN Code" / value=<the number>.
+// "product_tax_code" (e.g. "A_GEN_STANDARDtoREDUCED2025") is a separate thing - Amazon's
+// own GST-bracket classification, not the HSN number itself. Both are stored below.
 async function fetchHsnTaxData(sellerId, skuList) {
   const results = {}; // sku -> { hsnCode, taxCode }
   let firstLogged = false;
