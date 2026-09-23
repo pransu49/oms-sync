@@ -57,6 +57,7 @@ const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
 // Zero Firestore reads needed for write-back calls that need productType or asin.
 const skuToAsinMap = {};        // sku -> asin  (filled in syncInventory)
 const productTypeCache = {};    // sku -> amazonProductType  (loaded once at startup)
+const changedSkus = new Set();  // SKUs whose data changed this run — HSN/tax fetched only for these
 
 // ─── QUOTA FIX: load productType for every SKU in ONE collection read at startup ───
 // Called once before any write-back functions run. Costs 1 read per existing doc
@@ -268,7 +269,8 @@ async function syncInventory() {
   const asinIdx = headers.indexOf('asin1');
   const nameIdx = headers.indexOf('item-name');
   const categoryIdx = headers.indexOf('zshop-category1');
-  console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx);
+  const mrpIdx = headers.indexOf('maximum-retail-price'); // MRP column confirmed in report
+  console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx, 'mrp:', mrpIdx);
 
   // QUOTA FIX: read existing docs ONCE for delta comparison (already implemented).
   console.log('Fetching existing inventory docs for delta comparison...');
@@ -308,14 +310,20 @@ async function syncInventory() {
       weightKg: extractWeightKg(cols[nameIdx] || ''),
       quantity: parseInt(cols[qtyIdx], 10) || 0,
       price: parseFloat(cols[priceIdx]) || null,
+      mrp: mrpIdx >= 0 ? (parseFloat(cols[mrpIdx]) || null) : null,
     };
     const old = existingBySku[docId];
     const changed = !old
       || old.quantity !== newData.quantity
       || old.price !== newData.price
+      || old.mrp !== newData.mrp
       || old.name !== newData.name
       || old.asin !== newData.asin
       || old.category !== newData.category;
+
+    // Also flag SKUs with no hsnCode yet — fetch on first run even if nothing changed.
+    const hsnMissing = !old || (old.hsnCode == null && old.taxCode == null);
+    if (changed || hsnMissing) changedSkus.add(sku);
 
     if (changed) {
       const ref = db.collection('spapiInventory').doc(docId);
@@ -407,6 +415,16 @@ async function fetchHsnTaxData(sellerId, skuList) {
 async function syncCompetitivePricing(asinList) {
   if (!asinList.length) return;
 
+  // Build asin -> [skus] map from skuToAsinMap to detect duplicate listings
+  // (same ASIN sold under multiple SKUs by you — common after re-listing or catalog merges).
+  const asinToSkus = {};
+  for (const [sku, asin] of Object.entries(skuToAsinMap)) {
+    if (!asinToSkus[asin]) asinToSkus[asin] = [];
+    asinToSkus[asin].push(sku);
+  }
+
+  const mySellerId = process.env.SPAPI_SELLER_ID || null;
+
   console.log('Fetching existing competitive pricing docs for delta comparison...');
   const existingSnap = await db.collection('spapiCompetitivePricing').where('account', '==', ACCOUNT_LABEL).get();
   const existingByAsin = {};
@@ -416,6 +434,8 @@ async function syncCompetitivePricing(asinList) {
   let firstLogged = false;
   let changedCount = 0;
   let skippedCount = 0;
+  // Summary counters for log
+  let buyBoxHeld = 0, buyBoxLost = 0, buyBoxNone = 0, duplicatesFound = 0;
 
   for (const asin of asinList) {
     let offers = [];
@@ -440,8 +460,10 @@ async function syncCompetitivePricing(asinList) {
         sellerId: o.SellerId || '',
         price: parseFloat(o.ListingPrice?.Amount) || null,
         shipping: parseFloat(o.Shipping?.Amount) || 0,
+        landedPrice: parseFloat(o.LandedPrice?.Amount) || null,
         isBuyBoxWinner: !!o.IsBuyBoxWinner,
         isFeatured: !!o.IsFeaturedMerchant,
+        isMine: mySellerId ? (o.SellerId === mySellerId) : false,
         condition: o.SubCondition || 'New',
       })).sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
     } catch (e) {
@@ -450,18 +472,61 @@ async function syncCompetitivePricing(asinList) {
     await new Promise((r) => setTimeout(r, 1200));
 
     const lowest = offers[0]?.price ?? null;
+    const buyBoxWinner = offers.find(o => o.isBuyBoxWinner) || null;
+    const myOffer = mySellerId ? offers.find(o => o.isMine) : null;
+    const iHoldBuyBox = !!buyBoxWinner?.isMine;
+    const myPrice = myOffer?.price ?? null;
+    const myLandedPrice = myOffer?.landedPrice ?? null;
+
+    // Buy box status
+    let buyBoxStatus = 'no_offer'; // I have no listing for this ASIN
+    if (myOffer) {
+      buyBoxStatus = iHoldBuyBox ? 'held' : 'lost';
+    }
+    if (buyBoxStatus === 'held') buyBoxHeld++;
+    else if (buyBoxStatus === 'lost') buyBoxLost++;
+    else buyBoxNone++;
+
+    // Duplicate listing detection — same ASIN, multiple SKUs from me
+    const mySkusForAsin = asinToSkus[asin] || [];
+    const isDuplicate = mySkusForAsin.length > 1;
+    if (isDuplicate) duplicatesFound++;
+
+    // Price gap: how much cheaper/expensive am I vs buy box winner
+    const priceGapVsBuyBox = (myPrice != null && buyBoxWinner?.price != null)
+      ? Math.round((myPrice - buyBoxWinner.price) * 100) / 100
+      : null; // positive = I'm more expensive, negative = I'm cheaper
+
     const docId = `${ACCOUNT_LABEL}_${asin}`;
     const old = existingByAsin[docId];
-    const changed = !old || old.lowestCompetitorPrice !== lowest || old.rawOffers !== offers.length;
+
+    // Change detection — compare all meaningful fields
+    const changed = !old
+      || old.lowestCompetitorPrice !== lowest
+      || old.rawOffers !== offers.length
+      || old.buyBoxStatus !== buyBoxStatus
+      || old.myPrice !== myPrice
+      || old.iHoldBuyBox !== iHoldBuyBox
+      || old.isDuplicate !== isDuplicate;
 
     if (changed) {
       const ref = db.collection('spapiCompetitivePricing').doc(docId);
       batch.set(ref, {
         account: ACCOUNT_LABEL,
         asin,
-        lowestCompetitorPrice: lowest,
+        mySkus: mySkusForAsin,           // my SKU(s) for this ASIN
+        isDuplicate,                      // true = same ASIN listed under 2+ SKUs (needs cleanup)
+        duplicateSkuCount: mySkusForAsin.length,
+        myPrice,                          // my selling price
+        myLandedPrice,                    // my price + shipping
+        lowestCompetitorPrice: lowest,    // cheapest offer on this ASIN
+        priceGapVsBuyBox,                 // my price minus buy box price (positive = I'm pricier)
+        buyBoxStatus,                     // 'held' | 'lost' | 'no_offer'
+        iHoldBuyBox,                      // quick boolean for admin console filters
+        buyBoxWinnerPrice: buyBoxWinner?.price ?? null,
+        buyBoxWinnerSellerId: buyBoxWinner?.sellerId ?? null,
         rawOffers: offers.length,
-        offers,
+        offers,                           // full list of all sellers
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
       changedCount++;
@@ -471,7 +536,8 @@ async function syncCompetitivePricing(asinList) {
   }
 
   if (changedCount > 0) await batch.commit();
-  console.log(`Competitive pricing synced: ${changedCount} changed, ${skippedCount} unchanged (skipped) of ${asinList.length} ASINs`);
+  console.log(`Competitive pricing synced: ${changedCount} changed, ${skippedCount} unchanged of ${asinList.length} ASINs`);
+  console.log(`Buy box summary — Held: ${buyBoxHeld} | Lost: ${buyBoxLost} | No offer: ${buyBoxNone} | Duplicates: ${duplicatesFound}`);
 }
 
 // ── Write-back functions (price, MRP, HSN, new listing, refund, deletion) ────────
@@ -777,34 +843,32 @@ async function run() {
   for (const [sku, asin] of Object.entries(skuToAsinMap)) { asinToSku[asin] = sku; }
   const catBatch = db.batch();
   let catWrites = 0;
+  let catSkipped = 0;
   for (const [asin, category] of Object.entries(categoriesByAsin)) {
     const sku = asinToSku[asin];
     if (!sku) continue;
+    // Skip write if category already matches what's cached — no Firestore write needed.
+    if (productTypeCache[sku] === category) { catSkipped++; continue; }
     const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
     catBatch.update(ref, { amazonProductType: category });
-    // Also update local cache so subsequent write-backs in this run see the new type.
-    productTypeCache[sku] = category;
+    productTypeCache[sku] = category; // keep cache fresh for write-backs this run
     catWrites++;
   }
   if (catWrites > 0) await catBatch.commit();
-  console.log(`Step 2b done: ${catWrites} category update(s) written.`);
+  console.log(`Step 2b done: ${catWrites} category update(s) written, ${catSkipped} unchanged (skipped).`);
 
-  // ─── QUOTA FIX: HSN/tax fetch runs only ONCE PER DAY ──────────────────────────
-  // Check a tiny meta doc (1 read). If it was already run today, skip the N-SKU
-  // SP-API calls entirely. This saves ~50-100+ SP-API calls on 5 out of 6 daily runs.
-  console.log('Step 2c: checking if HSN/tax fetch needed today...');
+  // ─── QUOTA FIX: HSN/tax fetch only for SKUs that actually changed ─────────────
+  // changedSkus is populated during syncInventory — contains only SKUs where price,
+  // qty, name or asin changed this run, PLUS any SKUs with no hsnCode yet (first run).
+  // On a stable day with no listing changes: 0 SP-API calls, 0 reads, 0 writes.
+  console.log('Step 2c: checking HSN/tax for changed/new SKUs...');
   if (sellerId) {
-    const metaRef = db.collection('spapiMeta').doc(`hsn_last_run_${ACCOUNT_LABEL}`);
-    const metaSnap = await metaRef.get(); // 1 read only
-    const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
-    const lastRunDate = metaSnap.exists ? metaSnap.data().date : null;
-
-    if (lastRunDate === todayStr) {
-      console.log(`Step 2c skipped: HSN/tax already fetched today (${todayStr}).`);
+    const skusNeedingHsn = [...changedSkus];
+    if (skusNeedingHsn.length === 0) {
+      console.log('Step 2c skipped: no SKU changes detected, HSN/tax data is up to date.');
     } else {
-      console.log(`Step 2c running: last HSN fetch was ${lastRunDate || 'never'}, fetching now...`);
-      const skuList = Object.keys(skuToAsinMap);
-      const hsnData = await fetchHsnTaxData(sellerId, skuList);
+      console.log(`Step 2c running: ${skusNeedingHsn.length} SKU(s) changed or missing HSN — fetching...`);
+      const hsnData = await fetchHsnTaxData(sellerId, skusNeedingHsn);
       const hsnBatch = db.batch();
       let hsnWrites = 0;
       for (const [sku, data] of Object.entries(hsnData)) {
@@ -813,9 +877,7 @@ async function run() {
         hsnWrites++;
       }
       if (hsnWrites > 0) await hsnBatch.commit();
-      // Mark today as done — 1 write.
-      await metaRef.set({ date: todayStr, account: ACCOUNT_LABEL, skuCount: skuList.length });
-      console.log(`Step 2c done: ${hsnWrites} HSN/tax update(s) written. Marked done for ${todayStr}.`);
+      console.log(`Step 2c done: ${hsnWrites} HSN/tax update(s) written for ${skusNeedingHsn.length} changed SKU(s).`);
     }
   } else {
     console.log('Step 2c skipped: SPAPI_SELLER_ID not set.');
