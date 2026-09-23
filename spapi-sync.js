@@ -864,6 +864,23 @@ async function run() {
   if (catWrites > 0) await catBatch.commit();
   console.log(`Step 2b done: ${catWrites} category update(s) written.`);
 
+   console.log('Step 2c: fetching HSN/tax data...');
+  if (sellerId) {
+    const skuList = Object.keys(skuToAsinMap);
+    const hsnData = await fetchHsnTaxData(sellerId, skuList);
+    const hsnBatch = db.batch();
+    let hsnWrites = 0;
+    for (const [sku, data] of Object.entries(hsnData)) {
+      const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
+      hsnBatch.update(ref, { hsnCode: data.hsnCode, taxCode: data.taxCode });
+      hsnWrites++;
+    }
+    if (hsnWrites > 0) await hsnBatch.commit();
+    console.log(`Step 2c done: ${hsnWrites} HSN/tax update(s) written.`);
+  } else {
+    console.log('Step 2c skipped: SPAPI_SELLER_ID not set.');
+  }
+
   console.log('Step 3: syncing competitive pricing...');
   await syncCompetitivePricing(asinsFromInventory);
 
