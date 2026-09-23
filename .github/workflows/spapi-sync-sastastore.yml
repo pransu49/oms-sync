@@ -1,8 +1,9 @@
 name: SP-API Sync (Sasta Store)
 
 on:
-  schedule:
-    - cron: '0 */4 * * *'   # every 4 hours
+  # PAUSED: Firestore read quota being exceeded — re-enable schedule once quota fix is deployed.
+  # schedule:
+  #   - cron: '0 */4 * * *'   # every 4 hours
   workflow_dispatch: {}
 
 jobs:
@@ -20,14 +21,10 @@ jobs:
 
       - name: Run SP-API sync
         env:
-          # Client ID/Secret reused from the same Amazon Developer app registration as Praso
-          # (only the refresh token and seller ID are ever unique per seller account) -
-          # if Sasta Store ends up authorized under a SEPARATE dev app instead, swap these two
-          # to their own secrets (e.g. SPAPI_CLIENT_ID_SASTASTORE) instead of reusing Praso's.
           SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
           SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
           SPAPI_REFRESH_TOKEN: ${{ secrets.SPAPI_REFRESH_TOKEN_SASTASTORE }}
           SPAPI_SELLER_ID: ${{ secrets.SPAPI_SELLER_ID_SASTASTORE }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           ACCOUNT_LABEL: sastastore
         run: node spapi-sync.js
