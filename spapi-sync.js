@@ -343,7 +343,42 @@ async function fetchProductCategories(asinList) {
   if (failCount > 0) console.log(`Category fetch failed for ${failCount}/${asinList.length} ASINs`);
   return categories;
 }
-
+// Fetches HSN code + tax classification per SKU via the Listings Items API.
+// NOTE: like fetchProductCategories above, the exact attribute name Amazon uses for
+// HSN/tax on Indian listings can vary by category. This logs the raw response for the
+// first SKU so you can verify the real field name in the GitHub Actions log before
+// trusting the parsed value - the ?? fallbacks below are my best guess, not confirmed.
+async function fetchHsnTaxData(sellerId, skuList) {
+  const results = {}; // sku -> { hsnCode, taxCode }
+  let firstLogged = false;
+  let failCount = 0;
+  for (const sku of skuList) {
+    try {
+      const res = await spClient.callAPI({
+        operation: 'getListingsItem',
+        endpoint: 'listingsItems',
+        path: { sellerId, sku },
+        query: {
+          marketplaceIds: [MARKETPLACE_ID],
+          includedData: ['attributes'],
+        },
+      });
+      if (!firstLogged) {
+        console.log('Sample getListingsItem (HSN/tax) response for', sku, ':', JSON.stringify(res).slice(0, 1200));
+        firstLogged = true;
+      }
+      const attrs = res.attributes || res.payload?.attributes || {};
+      const hsnCode = attrs.hsn_code?.[0]?.value ?? attrs.product_tax_code?.[0]?.value ?? null;
+      const taxCode = attrs.product_tax_code?.[0]?.value ?? null;
+      if (hsnCode || taxCode) results[sku] = { hsnCode, taxCode };
+    } catch (e) {
+      failCount++;
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  if (failCount > 0) console.log(`HSN/tax fetch failed for ${failCount}/${skuList.length} SKUs`);
+  return results;
+}
 async function syncCompetitivePricing(asinList) {
   if (!asinList.length) return;
 
