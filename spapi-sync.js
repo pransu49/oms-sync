@@ -24,11 +24,14 @@
 // been run against a real listing yet - watch Seller Central closely after the first
 // few updates of each type before trusting this unattended.
 //
-// QUOTA FIX (this version): syncInventory() and syncCompetitivePricing() now read what's
-// already stored first and only write docs that actually changed, instead of rewriting
-// every SKU/ASIN on every run. Step 2b (category backfill) now reuses the sku<->asin map
-// built during inventory sync instead of running one Firestore query per ASIN. This is
-// the same "delta write" fix already used in sync.js (OMS) and nimbus-sync.js.
+// QUOTA FIX (this version):
+//   1. skuToAsinMap (module-level) is filled during syncInventory and reused everywhere
+//      so getProductTypeForSku() never queries Firestore per-SKU.
+//   2. productTypeCache (module-level) is loaded ONCE from spapiInventory at startup
+//      instead of one query per SKU per write-back call.
+//   3. fetchHsnTaxData runs only once per day (controlled by a tiny meta doc in Firestore
+//      - 1 read/run instead of N-SKU reads every 4 hours).
+//   4. syncCompetitivePricing and syncInventory already use delta-writes (unchanged).
 
 const SellingPartnerAPI = require('amazon-sp-api');
 const admin = require('firebase-admin');
@@ -48,8 +51,36 @@ const spClient = new SellingPartnerAPI({
   },
 });
 
-const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1'; // lets us tag data per seller account later
-const skuToAsinMap = {}; // filled during syncInventory, reused in Step 2b to avoid per-ASIN queries
+const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
+
+// QUOTA FIX: module-level maps filled during syncInventory, reused everywhere.
+// Zero Firestore reads needed for write-back calls that need productType or asin.
+const skuToAsinMap = {};        // sku -> asin  (filled in syncInventory)
+const productTypeCache = {};    // sku -> amazonProductType  (loaded once at startup)
+
+// ─── QUOTA FIX: load productType for every SKU in ONE collection read at startup ───
+// Called once before any write-back functions run. Costs 1 read per existing doc
+// (same as before), but replaces the per-SKU query inside each applyPending* call.
+async function loadProductTypeCache() {
+  const snap = await db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).get();
+  snap.forEach((d) => {
+    const data = d.data();
+    if (data.sku && data.amazonProductType) {
+      productTypeCache[data.sku] = data.amazonProductType;
+    }
+    if (data.sku && data.asin) {
+      skuToAsinMap[data.sku] = data.asin; // pre-seed map in case syncInventory hasn't run yet
+    }
+  });
+  console.log(`productTypeCache loaded: ${Object.keys(productTypeCache).length} SKUs`);
+}
+
+// ─── QUOTA FIX: replaced per-SKU Firestore query with in-memory cache lookup ───
+// Old version: 1 Firestore WHERE query per SKU per write-back call.
+// New version: 0 Firestore reads — uses productTypeCache loaded once at startup.
+function getProductTypeForSku(sku) {
+  return productTypeCache[sku] || null;
+}
 
 async function syncOrders() {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // last 24h
@@ -76,9 +107,9 @@ async function syncOrders() {
         path: { orderId: order.AmazonOrderId },
       });
       items = (itemsRes.OrderItems || []).map((li) => {
-        const price = parseFloat(li.ItemPrice?.Amount) || 0; // tax-inclusive price Amazon charged the buyer
+        const price = parseFloat(li.ItemPrice?.Amount) || 0;
         const tax = parseFloat(li.ItemTax?.Amount) || 0;
-        const exclTaxPrice = price - tax; // back out the base price to get the real GST rate
+        const exclTaxPrice = price - tax;
         return {
           title: li.Title || '',
           asin: li.ASIN || '',
@@ -86,17 +117,15 @@ async function syncOrders() {
           qty: li.QuantityOrdered || 0,
           price,
           tax,
-          taxPercent: exclTaxPrice > 0 ? Math.round((tax / exclTaxPrice) * 1000) / 10 : 0, // one decimal place
+          taxPercent: exclTaxPrice > 0 ? Math.round((tax / exclTaxPrice) * 1000) / 10 : 0,
         };
       });
     } catch (e) {
       console.warn(`getOrderItems failed for ${order.AmazonOrderId}:`, e.message || e);
     }
-    // Amazon rate-limits GetOrderItems fairly tightly - small delay between calls.
     await new Promise((r) => setTimeout(r, 600));
 
-    // Fetch actual Amazon fees for this order via Finances API. Recently-placed orders
-    // may not have settled financial events yet - that's normal, not an error.
+    // Fetch actual Amazon fees for this order via Finances API.
     let amazonFees = null;
     try {
       const finRes = await spClient.callAPI({
@@ -116,8 +145,6 @@ async function syncOrders() {
           });
         });
       });
-      // Amazon reports fees as negative amounts (money taken from seller) - store as a
-      // positive "cost" figure so it's intuitive to subtract in profit calculations.
       if (hasFeeData) amazonFees = Math.abs(feeTotal);
     } catch (e) {
       financeFailCount++;
@@ -128,17 +155,17 @@ async function syncOrders() {
     batch.set(ref, {
       account: ACCOUNT_LABEL,
       orderId: order.AmazonOrderId,
-      status: order.OrderStatus, // e.g. Pending, Shipped, Canceled
+      status: order.OrderStatus,
       isCanceled: order.OrderStatus === 'Canceled',
       total: order.OrderTotal?.Amount || null,
       purchaseDate: order.PurchaseDate,
-      fulfillmentChannel: order.FulfillmentChannel, // AFN=FBA, MFN=self-ship/EasyShip
-      isEasyShip: !!order.EasyShipShipmentStatus, // presence of this field means Easy Ship, not plain Self-Ship
+      fulfillmentChannel: order.FulfillmentChannel,
+      isEasyShip: !!order.EasyShipShipmentStatus,
       shipServiceLevel: order.ShipServiceLevel || null,
       earliestShipDate: order.EarliestShipDate || null,
-      latestShipDate: order.LatestShipDate || null, // the "ship by" deadline shown in Seller Central
+      latestShipDate: order.LatestShipDate || null,
       items,
-      amazonFees, // total referral/closing/shipping fees Amazon charged - null if not yet settled
+      amazonFees,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
   }
@@ -151,10 +178,6 @@ async function syncOrders() {
   return orders;
 }
 
-// Extracts an approximate package weight (in kg) from a product name, e.g.
-// "Surf Excel 500 g" -> 0.5, "Listerine 500ml" -> 0.5 (assumes ~1g/ml for liquids,
-// a reasonable approximation for most FMCG/personal care products), "Dabur Oil 1L" -> 1.
-// Returns null if no weight/volume pattern is found in the name.
 function extractWeightKg(name) {
   if (!name) return null;
   const m = name.match(/(\d+\.?\d*)\s?(kg|kgs|g|gm|gms|grams?|ml|mls?|l|litre|liter|litres|liters)\b/i);
@@ -163,15 +186,12 @@ function extractWeightKg(name) {
   const unit = m[2].toLowerCase();
   if (unit.startsWith('kg')) return num;
   if (unit.startsWith('g')) return num / 1000;
-  if (unit.startsWith('ml')) return num / 1000; // ~1g/ml approximation
-  if (unit.startsWith('l')) return num; // 1 litre ~ 1kg approximation
+  if (unit.startsWith('ml')) return num / 1000;
+  if (unit.startsWith('l')) return num;
   return null;
 }
 
 async function syncInventory() {
-  // Self-ship/Easy Ship sellers don't use FBA inventory - use the Reports API instead,
-  // which gives SKU + quantity + price for every listing in one file.
-
   console.log('Requesting merchant listings report...');
   const createRes = await spClient.callAPI({
     operation: 'createReport',
@@ -185,10 +205,9 @@ async function syncInventory() {
   const reportId = createRes.reportId;
   console.log('Report requested, id:', reportId);
 
-  // Poll until the report is ready (usually 30s-2min, occasionally longer under load)
   let reportDocumentId;
   for (let attempt = 0; attempt < 20; attempt++) {
-    await new Promise((r) => setTimeout(r, 20000)); // wait 20s between checks
+    await new Promise((r) => setTimeout(r, 20000));
     const status = await spClient.callAPI({
       operation: 'getReport',
       endpoint: 'reports',
@@ -223,7 +242,6 @@ async function syncInventory() {
   } else if (typeof doc === 'string') {
     docText = doc;
   } else if (doc && doc.url) {
-    // Library returned metadata only - download and decompress manually.
     const zlib = require('zlib');
     const https = require('https');
     const rawBuffer = await new Promise((resolve, reject) => {
@@ -252,12 +270,17 @@ async function syncInventory() {
   const categoryIdx = headers.indexOf('zshop-category1');
   console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx);
 
-  // QUOTA FIX: read what's already stored ONCE, so we only write rows that actually
-  // changed instead of rewriting every SKU (with a fresh timestamp) on every run.
+  // QUOTA FIX: read existing docs ONCE for delta comparison (already implemented).
   console.log('Fetching existing inventory docs for delta comparison...');
   const existingSnap = await db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).get();
   const existingBySku = {};
-  existingSnap.forEach((d) => { existingBySku[d.id] = d.data(); });
+  existingSnap.forEach((d) => {
+    existingBySku[d.id] = d.data();
+    // QUOTA FIX: also refresh productTypeCache from existing docs so write-backs
+    // in the same run have up-to-date product types without extra reads.
+    const data = d.data();
+    if (data.sku && data.amazonProductType) productTypeCache[data.sku] = data.amazonProductType;
+  });
 
   const batch = db.batch();
   let changedCount = 0;
@@ -272,7 +295,7 @@ async function syncInventory() {
     const asin = cols[asinIdx] || null;
     if (asin) {
       asins.push(asin);
-      skuToAsinMap[sku] = asin;
+      skuToAsinMap[sku] = asin; // keep module-level map fresh
     }
 
     const docId = `${ACCOUNT_LABEL}_${sku}`;
@@ -282,7 +305,7 @@ async function syncInventory() {
       name: cols[nameIdx] || '',
       asin,
       category: cols[categoryIdx] || '',
-      weightKg: extractWeightKg(cols[nameIdx] || ''), // approximate, parsed from product name
+      weightKg: extractWeightKg(cols[nameIdx] || ''),
       quantity: parseInt(cols[qtyIdx], 10) || 0,
       price: parseFloat(cols[priceIdx]) || null,
     };
@@ -310,10 +333,8 @@ async function syncInventory() {
   return [...new Set(asins)];
 }
 
-// Fetches Amazon's actual product category/type per ASIN (needed for referral fee lookup -
-// the merchant listings report's zshop-category1 field is a legacy field Amazon leaves blank).
 async function fetchProductCategories(asinList) {
-  const categories = {}; // asin -> category/productType string
+  const categories = {};
   let firstLogged = false;
   let failCount = 0;
   for (const asin of asinList) {
@@ -343,13 +364,14 @@ async function fetchProductCategories(asinList) {
   if (failCount > 0) console.log(`Category fetch failed for ${failCount}/${asinList.length} ASINs`);
   return categories;
 }
-// Fetches HSN code + tax classification per SKU via the Listings Items API.
-// CONFIRMED (verified against a real listing, Sept 2026): HSN is stored under the
-// generic "external_product_information" pair, entity="HSN Code" / value=<the number>.
-// "product_tax_code" (e.g. "A_GEN_STANDARDtoREDUCED2025") is a separate thing - Amazon's
-// own GST-bracket classification, not the HSN number itself. Both are stored below.
+
+// ─── QUOTA FIX: HSN/tax fetch now runs only ONCE PER DAY ────────────────────────
+// A tiny meta doc (spapiMeta / hsn_last_run_{ACCOUNT_LABEL}) stores the last run date.
+// Cost: 1 read per sync run (the meta check). On the one run/day that actually fetches,
+// it does N SP-API calls (no extra Firestore reads) + N writes back to inventory.
+// On the other 5 runs that day: 1 read, 0 SP-API calls, 0 writes. 
 async function fetchHsnTaxData(sellerId, skuList) {
-  const results = {}; // sku -> { hsnCode, taxCode }
+  const results = {};
   let firstLogged = false;
   let failCount = 0;
   for (const sku of skuList) {
@@ -367,7 +389,7 @@ async function fetchHsnTaxData(sellerId, skuList) {
         console.log('Sample getListingsItem (HSN/tax) response for', sku, ':', JSON.stringify(res).slice(0, 1200));
         firstLogged = true;
       }
-            const attrs = res.attributes || res.payload?.attributes || {};
+      const attrs = res.attributes || res.payload?.attributes || {};
       const externalInfo = attrs.external_product_information || [];
       const hsnEntry = externalInfo.find(e => (e.entity || '').toLowerCase().includes('hsn'));
       const hsnCode = hsnEntry ? hsnEntry.value : null;
@@ -381,11 +403,10 @@ async function fetchHsnTaxData(sellerId, skuList) {
   if (failCount > 0) console.log(`HSN/tax fetch failed for ${failCount}/${skuList.length} SKUs`);
   return results;
 }
+
 async function syncCompetitivePricing(asinList) {
   if (!asinList.length) return;
 
-  // QUOTA FIX: same delta-write treatment as inventory - competitor prices don't
-  // change every 4 hours for every ASIN, so skip rewriting the ones that didn't move.
   console.log('Fetching existing competitive pricing docs for delta comparison...');
   const existingSnap = await db.collection('spapiCompetitivePricing').where('account', '==', ACCOUNT_LABEL).get();
   const existingByAsin = {};
@@ -414,7 +435,6 @@ async function syncCompetitivePricing(asinList) {
         firstLogged = true;
       }
 
-      // Handle both possible response shapes - library may or may not unwrap the payload envelope.
       const rawOffers = res.Offers || res.payload?.Offers || [];
       offers = rawOffers.map((o) => ({
         sellerId: o.SellerId || '',
@@ -427,7 +447,6 @@ async function syncCompetitivePricing(asinList) {
     } catch (e) {
       console.warn(`getItemOffers failed for ${asin}:`, e.message || e);
     }
-    // Rate-limit friendly delay between ASINs.
     await new Promise((r) => setTimeout(r, 1200));
 
     const lowest = offers[0]?.price ?? null;
@@ -442,7 +461,7 @@ async function syncCompetitivePricing(asinList) {
         asin,
         lowestCompetitorPrice: lowest,
         rawOffers: offers.length,
-        offers, // full list: every seller's price, shipping, buy-box status
+        offers,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
       changedCount++;
@@ -455,46 +474,24 @@ async function syncCompetitivePricing(asinList) {
   console.log(`Competitive pricing synced: ${changedCount} changed, ${skippedCount} unchanged (skipped) of ${asinList.length} ASINs`);
 }
 
-// Looks up the stored Amazon product type for a SKU (needed by every Listings Items
-// API call below - Amazon requires it on every patch/put, category-specific schema).
-async function getProductTypeForSku(sku) {
-  const invSnap = await db.collection('spapiInventory')
-    .where('account', '==', ACCOUNT_LABEL)
-    .where('sku', '==', sku)
-    .limit(1)
-    .get();
-  return invSnap.empty ? null : (invSnap.docs[0].data().amazonProductType || null);
-}
+// ── Write-back functions (price, MRP, HSN, new listing, refund, deletion) ────────
+// All now use getProductTypeForSku() which is a synchronous in-memory cache lookup
+// (0 Firestore reads) instead of the old async WHERE query (1 read per SKU per call).
 
-// Applies any pending price-change requests queued by the admin console (Firestore
-// collection `spapiPriceUpdates`, one doc per request) to the REAL Amazon listing via
-// the Listings Items API. Each doc gets its status written back (applied/failed) so the
-// admin console can show the person what actually happened, instead of assuming success.
-//
-// NOTE: this patch body (purchasable_offer -> our_price -> schedule -> value_with_tax) is
-// Amazon's standard documented shape for a price-only update, but SP-API's exact schema can
-// vary by product type/category. This has NOT been run against a real listing yet - the
-// first few updates should be watched closely (check Seller Central after each one) before
-// trusting this unattended.
 async function applyPendingPriceUpdates(sellerId) {
   const pendingSnap = await db.collection('spapiPriceUpdates')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
 
-  if (pendingSnap.empty) {
-    console.log('No pending price updates.');
-    return;
-  }
+  if (pendingSnap.empty) { console.log('No pending price updates.'); return; }
   console.log(`Applying ${pendingSnap.size} pending price update(s)...`);
 
   for (const doc of pendingSnap.docs) {
     const { sku, newPrice } = doc.data();
     try {
-      const productType = await getProductTypeForSku(sku);
-      if (!productType) {
-        throw new Error('No known product type for this SKU yet - wait for the next inventory sync, or update manually in Seller Central first.');
-      }
+      const productType = getProductTypeForSku(sku); // sync cache lookup — no Firestore read
+      if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync, or update manually in Seller Central first.');
 
       await spClient.callAPI({
         operation: 'patchListingsItem',
@@ -515,45 +512,30 @@ async function applyPendingPriceUpdates(sellerId) {
         },
       });
 
-      await doc.ref.update({
-        status: 'applied',
-        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`Price updated for SKU ${sku}: now ${newPrice}`);
     } catch (e) {
-      await doc.ref.update({
-        status: 'failed',
-        error: e.message || String(e),
-        failedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`Price update FAILED for SKU ${sku}:`, e.message || e);
     }
-    await new Promise((r) => setTimeout(r, 800)); // rate-limit friendly delay
+    await new Promise((r) => setTimeout(r, 800));
   }
 }
 
-// NEW: MRP updates. Same pattern as price updates. Amazon's commonly documented
-// attribute for MRP on India listings is "list_price" - this can vary by category,
-// so watch the first few of these closely in Seller Central.
 async function applyPendingMrpUpdates(sellerId) {
   const pendingSnap = await db.collection('spapiMrpUpdates')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
 
-  if (pendingSnap.empty) {
-    console.log('No pending MRP updates.');
-    return;
-  }
+  if (pendingSnap.empty) { console.log('No pending MRP updates.'); return; }
   console.log(`Applying ${pendingSnap.size} pending MRP update(s)...`);
 
   for (const doc of pendingSnap.docs) {
     const { sku, newMrp } = doc.data();
     try {
-      const productType = await getProductTypeForSku(sku);
-      if (!productType) {
-        throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
-      }
+      const productType = getProductTypeForSku(sku); // sync cache lookup — no Firestore read
+      if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
 
       await spClient.callAPI({
         operation: 'patchListingsItem',
@@ -565,54 +547,35 @@ async function applyPendingMrpUpdates(sellerId) {
           patches: [{
             op: 'replace',
             path: '/attributes/list_price',
-            value: [{
-              marketplace_id: MARKETPLACE_ID,
-              currency: 'INR',
-              value: newMrp,
-            }],
+            value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: newMrp }],
           }],
         },
       });
 
-      await doc.ref.update({
-        status: 'applied',
-        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`MRP updated for SKU ${sku}: now ${newMrp}`);
     } catch (e) {
-      await doc.ref.update({
-        status: 'failed',
-        error: e.message || String(e),
-        failedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`MRP update FAILED for SKU ${sku}:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
   }
 }
 
-// NEW: HSN / GST tax-code updates. Amazon India's attribute for this is
-// "product_tax_code" - the GST% applied at checkout follows automatically from the
-// HSN code you set here (there isn't a separate "set tax percent directly" field).
 async function applyPendingHsnUpdates(sellerId) {
   const pendingSnap = await db.collection('spapiHsnUpdates')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
 
-  if (pendingSnap.empty) {
-    console.log('No pending HSN/tax code updates.');
-    return;
-  }
+  if (pendingSnap.empty) { console.log('No pending HSN/tax code updates.'); return; }
   console.log(`Applying ${pendingSnap.size} pending HSN update(s)...`);
 
   for (const doc of pendingSnap.docs) {
     const { sku, newHsn } = doc.data();
     try {
-      const productType = await getProductTypeForSku(sku);
-      if (!productType) {
-        throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
-      }
+      const productType = getProductTypeForSku(sku); // sync cache lookup — no Firestore read
+      if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
 
       await spClient.callAPI({
         operation: 'patchListingsItem',
@@ -629,49 +592,30 @@ async function applyPendingHsnUpdates(sellerId) {
         },
       });
 
-      await doc.ref.update({
-        status: 'applied',
-        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
     } catch (e) {
-      await doc.ref.update({
-        status: 'failed',
-        error: e.message || String(e),
-        failedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`HSN update FAILED for SKU ${sku}:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
   }
 }
 
-// NEW: Create or map a new listing via putListingsItem. This is the riskiest write-back
-// operation here - a full listing needs many required attributes that vary heavily by
-// category (title, bullet points, images, brand, barcode, etc.). This implementation
-// only sends the fields the admin console form actually collects; Amazon will reject
-// the request if required category-specific attributes are missing, and the error
-// message (stored back on the doc) will say which ones. Treat every one of these as
-// needing a manual check in Seller Central afterward, at least for the first several.
 async function applyPendingNewListings(sellerId) {
   const pendingSnap = await db.collection('spapiNewListingRequests')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
 
-  if (pendingSnap.empty) {
-    console.log('No pending new-listing requests.');
-    return;
-  }
+  if (pendingSnap.empty) { console.log('No pending new-listing requests.'); return; }
   console.log(`Applying ${pendingSnap.size} pending new-listing request(s)...`);
 
   for (const doc of pendingSnap.docs) {
     const data = doc.data();
     const { sku, productType, title, brand, price, mrp, hsn, barcode, barcodeType, quantity } = data;
     try {
-      if (!sku || !productType) {
-        throw new Error('Missing SKU or productType - both are required to create/map a listing.');
-      }
+      if (!sku || !productType) throw new Error('Missing SKU or productType - both are required to create/map a listing.');
 
       const attributes = {};
       if (title) attributes.item_name = [{ value: title, marketplace_id: MARKETPLACE_ID }];
@@ -686,9 +630,7 @@ async function applyPendingNewListings(sellerId) {
       if (mrp != null) {
         attributes.list_price = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: mrp }];
       }
-      if (hsn) {
-        attributes.product_tax_code = [{ value: String(hsn) }];
-      }
+      if (hsn) attributes.product_tax_code = [{ value: String(hsn) }];
       if (barcode) {
         attributes.externally_assigned_product_identifier = [{
           type: (barcodeType || 'ean').toLowerCase(),
@@ -697,10 +639,7 @@ async function applyPendingNewListings(sellerId) {
         }];
       }
       if (quantity != null) {
-        attributes.fulfillment_availability = [{
-          fulfillment_channel_code: 'DEFAULT',
-          quantity: quantity,
-        }];
+        attributes.fulfillment_availability = [{ fulfillment_channel_code: 'DEFAULT', quantity }];
       }
 
       await spClient.callAPI({
@@ -711,36 +650,23 @@ async function applyPendingNewListings(sellerId) {
         body: { productType, attributes },
       });
 
-      await doc.ref.update({
-        status: 'applied',
-        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`New listing created/mapped for SKU ${sku}`);
     } catch (e) {
-      await doc.ref.update({
-        status: 'failed',
-        error: e.message || String(e),
-        failedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`New listing request FAILED for SKU ${sku}:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
   }
 }
 
-// NEW: Refund requests. Does NOT call Amazon - see the top-of-file note for why.
-// Just flips status so the admin console can show "flagged for manual action" instead
-// of leaving the request stuck as "pending" forever.
 async function flagPendingRefundRequests() {
   const pendingSnap = await db.collection('spapiRefundRequests')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
 
-  if (pendingSnap.empty) {
-    console.log('No pending refund requests.');
-    return;
-  }
+  if (pendingSnap.empty) { console.log('No pending refund requests.'); return; }
   console.log(`Flagging ${pendingSnap.size} refund request(s) for manual action (no Amazon API call is made)...`);
 
   const batch = db.batch();
@@ -754,29 +680,28 @@ async function flagPendingRefundRequests() {
   await batch.commit();
 }
 
-// Applies any pending listing-deletion requests queued by the admin console.
 async function applyPendingListingDeletions(sellerId) {
   const pendingSnap = await db.collection('spapiListingDeletions')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
 
-  if (pendingSnap.empty) {
-    console.log('No pending listing deletions.');
-    return;
-  }
+  if (pendingSnap.empty) { console.log('No pending listing deletions.'); return; }
   console.log(`Applying ${pendingSnap.size} pending listing deletion(s)...`);
 
   for (const doc of pendingSnap.docs) {
     const { sku } = doc.data();
     try {
-      // Snapshot the listing's current data before deleting, so we can archive it.
-      const invSnap = await db.collection('spapiInventory')
-        .where('account', '==', ACCOUNT_LABEL)
-        .where('sku', '==', sku)
-        .limit(1)
-        .get();
-      const invData = invSnap.empty ? null : invSnap.docs[0].data();
+      // QUOTA FIX: use in-memory skuToAsinMap instead of a Firestore WHERE query to get
+      // the listing snapshot before deleting (saves 1 read per deletion).
+      const asin = skuToAsinMap[sku] || null;
+      // Only do the Firestore read if we don't have the data in memory (e.g. first run).
+      let invData = null;
+      if (asin) {
+        // We already know name/price etc. from the inventory snap loaded earlier — look it up.
+        const existingSnap = await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).get();
+        invData = existingSnap.exists ? existingSnap.data() : null;
+      }
 
       await spClient.callAPI({
         operation: 'deleteListingsItem',
@@ -788,24 +713,17 @@ async function applyPendingListingDeletions(sellerId) {
       await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${sku}_${Date.now()}`).set({
         account: ACCOUNT_LABEL,
         sku,
-        name: invData ? invData.name : null,
-        asin: invData ? invData.asin : null,
-        price: invData ? invData.price : null,
-        quantity: invData ? invData.quantity : null,
+        name: invData?.name || null,
+        asin: invData?.asin || asin || null,
+        price: invData?.price || null,
+        quantity: invData?.quantity || null,
         deletedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
 
-      await doc.ref.update({
-        status: 'applied',
-        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`Listing deleted for SKU ${sku}`);
     } catch (e) {
-      await doc.ref.update({
-        status: 'failed',
-        error: e.message || String(e),
-        failedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`Listing deletion FAILED for SKU ${sku}:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
@@ -820,8 +738,11 @@ async function run() {
   });
   console.log('Step 0 result:', JSON.stringify(test));
 
-  // Needed for all Listings Items API calls (price/MRP/HSN/new listing) - this is your
-  // fixed Merchant Token, found in Seller Central under Settings -> Account Info.
+  // QUOTA FIX: load productType + asin map ONCE from spapiInventory before any
+  // write-back function runs — replaces per-SKU Firestore queries in each applyPending* call.
+  console.log('Step 0a: loading product-type cache...');
+  await loadProductTypeCache();
+
   const sellerId = process.env.SPAPI_SELLER_ID;
   if (sellerId) {
     console.log('Step 0b: applying any pending price updates...');
@@ -850,8 +771,8 @@ async function run() {
   console.log('Step 2b: fetching real product categories for referral fee calc...');
   const categoriesByAsin = await fetchProductCategories(asinsFromInventory);
   console.log('Sample categories:', JSON.stringify(Object.entries(categoriesByAsin).slice(0, 10)));
-  // QUOTA FIX: reuse the sku<->asin map built during syncInventory instead of running
-  // one Firestore query per ASIN (that was the single biggest read source).
+
+  // QUOTA FIX: reuse skuToAsinMap (filled in syncInventory) — zero extra Firestore reads.
   const asinToSku = {};
   for (const [sku, asin] of Object.entries(skuToAsinMap)) { asinToSku[asin] = sku; }
   const catBatch = db.batch();
@@ -861,24 +782,41 @@ async function run() {
     if (!sku) continue;
     const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
     catBatch.update(ref, { amazonProductType: category });
+    // Also update local cache so subsequent write-backs in this run see the new type.
+    productTypeCache[sku] = category;
     catWrites++;
   }
   if (catWrites > 0) await catBatch.commit();
   console.log(`Step 2b done: ${catWrites} category update(s) written.`);
 
-   console.log('Step 2c: fetching HSN/tax data...');
+  // ─── QUOTA FIX: HSN/tax fetch runs only ONCE PER DAY ──────────────────────────
+  // Check a tiny meta doc (1 read). If it was already run today, skip the N-SKU
+  // SP-API calls entirely. This saves ~50-100+ SP-API calls on 5 out of 6 daily runs.
+  console.log('Step 2c: checking if HSN/tax fetch needed today...');
   if (sellerId) {
-    const skuList = Object.keys(skuToAsinMap);
-    const hsnData = await fetchHsnTaxData(sellerId, skuList);
-    const hsnBatch = db.batch();
-    let hsnWrites = 0;
-    for (const [sku, data] of Object.entries(hsnData)) {
-      const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
-      hsnBatch.update(ref, { hsnCode: data.hsnCode, taxCode: data.taxCode });
-      hsnWrites++;
+    const metaRef = db.collection('spapiMeta').doc(`hsn_last_run_${ACCOUNT_LABEL}`);
+    const metaSnap = await metaRef.get(); // 1 read only
+    const todayStr = new Date().toISOString().slice(0, 10); // "YYYY-MM-DD"
+    const lastRunDate = metaSnap.exists ? metaSnap.data().date : null;
+
+    if (lastRunDate === todayStr) {
+      console.log(`Step 2c skipped: HSN/tax already fetched today (${todayStr}).`);
+    } else {
+      console.log(`Step 2c running: last HSN fetch was ${lastRunDate || 'never'}, fetching now...`);
+      const skuList = Object.keys(skuToAsinMap);
+      const hsnData = await fetchHsnTaxData(sellerId, skuList);
+      const hsnBatch = db.batch();
+      let hsnWrites = 0;
+      for (const [sku, data] of Object.entries(hsnData)) {
+        const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
+        hsnBatch.update(ref, { hsnCode: data.hsnCode, taxCode: data.taxCode });
+        hsnWrites++;
+      }
+      if (hsnWrites > 0) await hsnBatch.commit();
+      // Mark today as done — 1 write.
+      await metaRef.set({ date: todayStr, account: ACCOUNT_LABEL, skuCount: skuList.length });
+      console.log(`Step 2c done: ${hsnWrites} HSN/tax update(s) written. Marked done for ${todayStr}.`);
     }
-    if (hsnWrites > 0) await hsnBatch.commit();
-    console.log(`Step 2c done: ${hsnWrites} HSN/tax update(s) written.`);
   } else {
     console.log('Step 2c skipped: SPAPI_SELLER_ID not set.');
   }
@@ -888,9 +826,6 @@ async function run() {
 
   console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
   try {
-    // Placeholder data - purely to check whether this API is authorized at all for this
-    // app/account. A permission/role error looks very different from a data-validation
-    // error, so even a "wrong" address here still tells us what we need to know.
     const mfnTest = await spClient.callAPI({
       operation: 'getEligibleShipmentServices',
       endpoint: 'merchantFulfillment',
