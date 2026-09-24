@@ -585,9 +585,11 @@ async function applyPendingHsnUpdates(sellerId) {
           }],
         },
       });
-            await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
-      changedSkus.add(sku); // force Step 2c to re-fetch tax from Amazon for this SKU
-      console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
+            aawait doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
+changedSkus.add(sku);
+// Also write the new taxCode directly to inventory so UI updates immediately
+await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ taxCode: newHsn });
+console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
     } catch (e) {
       await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`HSN update FAILED for SKU ${sku}:`, e.message || e);
