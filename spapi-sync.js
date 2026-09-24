@@ -4,52 +4,34 @@
 //   - Inventory levels
 //   - Competitive pricing (other sellers on your ASINs)
 // Also applies pending write-back requests queued by the admin console:
-//   - Price updates      (spapiPriceUpdates)      - existing
-//   - MRP updates        (spapiMrpUpdates)         - new
-//   - HSN/tax code       (spapiHsnUpdates)         - new
-//   - New listing create/map (spapiNewListingRequests) - new
-//   - Refund requests    (spapiRefundRequests)     - new, MANUAL ONLY (see note below)
-//
-// IMPORTANT — REFUNDS: Amazon's SP-API does not offer a reliable, generally-available
-// operation for a third-party (MFN) seller to programmatically issue a buyer refund.
-// Refunds are normally done through Seller Central's Manage Returns/Refunds flow, or
-// through Amazon's return workflow. Rather than guess at an API call that moves real
-// money, applyPendingRefundRequests() below only FLAGS the request for you to action
-// manually in Seller Central - it never calls Amazon. If Amazon later documents a
-// proper refund endpoint for your account type, this can be upgraded.
-//
-// CAUTION ON THE OTHER NEW WRITE-BACK OPERATIONS: like the existing price-update code,
-// the exact attribute names/shapes for MRP and HSN below follow Amazon's commonly
-// documented pattern, but SP-API schemas can vary by product category. These have NOT
-// been run against a real listing yet - watch Seller Central closely after the first
-// few updates of each type before trusting this unattended.
-//
-// QUOTA FIX (this version):
-//   1. skuToAsinMap (module-level) is filled during syncInventory and reused everywhere
-//      so getProductTypeForSku() never queries Firestore per-SKU.
-//   2. productTypeCache (module-level) is loaded ONCE from spapiInventory at startup
-//      instead of one query per SKU per write-back call.
-//   3. fetchHsnTaxData runs only once per day (controlled by a tiny meta doc in Firestore
-//      - 1 read/run instead of N-SKU reads every 4 hours).
-//   4. syncCompetitivePricing and syncInventory already use delta-writes (unchanged).
+//   - Price updates      (spapiPriceUpdates)      - SP-API project
+//   - MRP updates        (spapiMrpUpdates)         - MAIN project
+//   - HSN/tax code       (spapiHsnUpdates)         - MAIN project
+//   - New listing create/map (spapiNewListingRequests) - SP-API project
+//   - Refund requests    (spapiRefundRequests)     - SP-API project, MANUAL ONLY
+//   - Listing deletions  (spapiListingDeletions)   - MAIN project
 
 const SellingPartnerAPI = require('amazon-sp-api');
 const admin = require('firebase-admin');
 
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-const db = admin.firestore(); // SP-API project (noworry-b7d56)
+// SP-API project (noworry-b7d56) — orders, inventory, pricing, price updates
+const spaApp = admin.initializeApp(
+  { credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_SPAPI)) },
+  'spaApp'
+);
+const db = spaApp.firestore();
 
-// Main project for write-back queues (spapiHsnUpdates, spapiMrpUpdates, spapiListingDeletions)
+// Main project (aikm--order-file) — write-back queues: HSN, MRP, listing deletions
 const mainApp = admin.initializeApp(
-  { credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_MAIN_SERVICE_ACCOUNT)) },
+  { credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) },
   'mainApp'
 );
 const dbMain = mainApp.firestore();
+
 const MARKETPLACE_ID = 'A21TJRUUN4KGV'; // Amazon.in
 
 const spClient = new SellingPartnerAPI({
-  region: 'eu', // India falls under SP-API's EU region
+  region: 'eu',
   refresh_token: process.env.SPAPI_REFRESH_TOKEN,
   credentials: {
     SELLING_PARTNER_APP_CLIENT_ID: process.env.SPAPI_CLIENT_ID,
@@ -59,45 +41,30 @@ const spClient = new SellingPartnerAPI({
 
 const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
 
-// QUOTA FIX: module-level maps filled during syncInventory, reused everywhere.
-// Zero Firestore reads needed for write-back calls that need productType or asin.
-const skuToAsinMap = {};        // sku -> asin  (filled in syncInventory)
-const productTypeCache = {};    // sku -> amazonProductType  (loaded once at startup)
-const changedSkus = new Set();  // SKUs whose data changed this run — HSN/tax fetched only for these
+const skuToAsinMap = {};
+const productTypeCache = {};
+const changedSkus = new Set();
 
-// ─── QUOTA FIX: load productType for every SKU in ONE collection read at startup ───
-// Called once before any write-back functions run. Costs 1 read per existing doc
-// (same as before), but replaces the per-SKU query inside each applyPending* call.
 async function loadProductTypeCache() {
   const snap = await db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).get();
   snap.forEach((d) => {
     const data = d.data();
-    if (data.sku && data.amazonProductType) {
-      productTypeCache[data.sku] = data.amazonProductType;
-    }
-    if (data.sku && data.asin) {
-      skuToAsinMap[data.sku] = data.asin; // pre-seed map in case syncInventory hasn't run yet
-    }
+    if (data.sku && data.amazonProductType) productTypeCache[data.sku] = data.amazonProductType;
+    if (data.sku && data.asin) skuToAsinMap[data.sku] = data.asin;
   });
   console.log(`productTypeCache loaded: ${Object.keys(productTypeCache).length} SKUs`);
 }
 
-// ─── QUOTA FIX: replaced per-SKU Firestore query with in-memory cache lookup ───
-// Old version: 1 Firestore WHERE query per SKU per write-back call.
-// New version: 0 Firestore reads — uses productTypeCache loaded once at startup.
 function getProductTypeForSku(sku) {
   return productTypeCache[sku] || null;
 }
 
 async function syncOrders() {
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(); // last 24h
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const res = await spClient.callAPI({
     operation: 'getOrders',
     endpoint: 'orders',
-    query: {
-      MarketplaceIds: [MARKETPLACE_ID],
-      CreatedAfter: since,
-    },
+    query: { MarketplaceIds: [MARKETPLACE_ID], CreatedAfter: since },
   });
 
   const orders = res.Orders || [];
@@ -105,7 +72,6 @@ async function syncOrders() {
   let financeFailCount = 0;
 
   for (const order of orders) {
-    // Fetch line-item detail (name, price, tax) - not included in the base Orders call.
     let items = [];
     try {
       const itemsRes = await spClient.callAPI({
@@ -132,7 +98,6 @@ async function syncOrders() {
     }
     await new Promise((r) => setTimeout(r, 600));
 
-    // Fetch actual Amazon fees for this order via Finances API.
     let amazonFees = null;
     try {
       const finRes = await spClient.callAPI({
@@ -203,10 +168,7 @@ async function syncInventory() {
   const createRes = await spClient.callAPI({
     operation: 'createReport',
     endpoint: 'reports',
-    body: {
-      reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA',
-      marketplaceIds: [MARKETPLACE_ID],
-    },
+    body: { reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA', marketplaceIds: [MARKETPLACE_ID] },
   });
 
   const reportId = createRes.reportId;
@@ -221,10 +183,7 @@ async function syncInventory() {
       path: { reportId },
     });
     console.log(`Poll ${attempt + 1}: status = ${status.processingStatus}`);
-    if (status.processingStatus === 'DONE') {
-      reportDocumentId = status.reportDocumentId;
-      break;
-    }
+    if (status.processingStatus === 'DONE') { reportDocumentId = status.reportDocumentId; break; }
     if (status.processingStatus === 'FATAL' || status.processingStatus === 'CANCELLED') {
       throw new Error(`Report generation failed: ${status.processingStatus}`);
     }
@@ -275,17 +234,14 @@ async function syncInventory() {
   const asinIdx = headers.indexOf('asin1');
   const nameIdx = headers.indexOf('item-name');
   const categoryIdx = headers.indexOf('zshop-category1');
-  const mrpIdx = headers.indexOf('maximum-retail-price'); // MRP column confirmed in report
+  const mrpIdx = headers.indexOf('maximum-retail-price');
   console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx, 'mrp:', mrpIdx);
 
-  // QUOTA FIX: read existing docs ONCE for delta comparison (already implemented).
   console.log('Fetching existing inventory docs for delta comparison...');
   const existingSnap = await db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).get();
   const existingBySku = {};
   existingSnap.forEach((d) => {
     existingBySku[d.id] = d.data();
-    // QUOTA FIX: also refresh productTypeCache from existing docs so write-backs
-    // in the same run have up-to-date product types without extra reads.
     const data = d.data();
     if (data.sku && data.amazonProductType) productTypeCache[data.sku] = data.amazonProductType;
   });
@@ -301,10 +257,7 @@ async function syncInventory() {
     if (!sku) continue;
 
     const asin = cols[asinIdx] || null;
-    if (asin) {
-      asins.push(asin);
-      skuToAsinMap[sku] = asin; // keep module-level map fresh
-    }
+    if (asin) { asins.push(asin); skuToAsinMap[sku] = asin; }
 
     const docId = `${ACCOUNT_LABEL}_${sku}`;
     const newData = {
@@ -327,7 +280,6 @@ async function syncInventory() {
       || old.asin !== newData.asin
       || old.category !== newData.category;
 
-    // Also flag SKUs with no hsnCode yet — fetch on first run even if nothing changed.
     const hsnMissing = !old || (old.hsnCode == null && old.taxCode == null);
     if (changed || hsnMissing) changedSkus.add(sku);
 
@@ -357,10 +309,7 @@ async function fetchProductCategories(asinList) {
         operation: 'getCatalogItem',
         endpoint: 'catalogItems',
         path: { asin },
-        query: {
-          marketplaceIds: [MARKETPLACE_ID],
-          includedData: ['productTypes', 'summaries'],
-        },
+        query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['productTypes', 'summaries'] },
       });
       if (!firstLogged) {
         console.log('Sample getCatalogItem (category) response for', asin, ':', JSON.stringify(res).slice(0, 800));
@@ -379,11 +328,6 @@ async function fetchProductCategories(asinList) {
   return categories;
 }
 
-// ─── QUOTA FIX: HSN/tax fetch now runs only ONCE PER DAY ────────────────────────
-// A tiny meta doc (spapiMeta / hsn_last_run_{ACCOUNT_LABEL}) stores the last run date.
-// Cost: 1 read per sync run (the meta check). On the one run/day that actually fetches,
-// it does N SP-API calls (no extra Firestore reads) + N writes back to inventory.
-// On the other 5 runs that day: 1 read, 0 SP-API calls, 0 writes. 
 async function fetchHsnTaxData(sellerId, skuList) {
   const results = {};
   let firstLogged = false;
@@ -394,10 +338,7 @@ async function fetchHsnTaxData(sellerId, skuList) {
         operation: 'getListingsItem',
         endpoint: 'listingsItems',
         path: { sellerId, sku },
-        query: {
-          marketplaceIds: [MARKETPLACE_ID],
-          includedData: ['attributes'],
-        },
+        query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes'] },
       });
       if (!firstLogged) {
         console.log('Sample getListingsItem (HSN/tax) response for', sku, ':', JSON.stringify(res).slice(0, 1200));
@@ -421,8 +362,6 @@ async function fetchHsnTaxData(sellerId, skuList) {
 async function syncCompetitivePricing(asinList) {
   if (!asinList.length) return;
 
-  // Build asin -> [skus] map from skuToAsinMap to detect duplicate listings
-  // (same ASIN sold under multiple SKUs by you — common after re-listing or catalog merges).
   const asinToSkus = {};
   for (const [sku, asin] of Object.entries(skuToAsinMap)) {
     if (!asinToSkus[asin]) asinToSkus[asin] = [];
@@ -440,7 +379,6 @@ async function syncCompetitivePricing(asinList) {
   let firstLogged = false;
   let changedCount = 0;
   let skippedCount = 0;
-  // Summary counters for log
   let buyBoxHeld = 0, buyBoxLost = 0, buyBoxNone = 0, duplicatesFound = 0;
 
   for (const asin of asinList) {
@@ -450,17 +388,12 @@ async function syncCompetitivePricing(asinList) {
         operation: 'getItemOffers',
         endpoint: 'productPricing',
         path: { Asin: asin },
-        query: {
-          MarketplaceId: MARKETPLACE_ID,
-          ItemCondition: 'New',
-        },
+        query: { MarketplaceId: MARKETPLACE_ID, ItemCondition: 'New' },
       });
-
       if (!firstLogged) {
         console.log('Sample getItemOffers response shape for', asin, ':', JSON.stringify(res).slice(0, 500));
         firstLogged = true;
       }
-
       const rawOffers = res.Offers || res.payload?.Offers || [];
       offers = rawOffers.map((o) => ({
         sellerId: o.SellerId || '',
@@ -484,29 +417,21 @@ async function syncCompetitivePricing(asinList) {
     const myPrice = myOffer?.price ?? null;
     const myLandedPrice = myOffer?.landedPrice ?? null;
 
-    // Buy box status
-    let buyBoxStatus = 'no_offer'; // I have no listing for this ASIN
-    if (myOffer) {
-      buyBoxStatus = iHoldBuyBox ? 'held' : 'lost';
-    }
+    let buyBoxStatus = 'no_offer';
+    if (myOffer) buyBoxStatus = iHoldBuyBox ? 'held' : 'lost';
     if (buyBoxStatus === 'held') buyBoxHeld++;
     else if (buyBoxStatus === 'lost') buyBoxLost++;
     else buyBoxNone++;
 
-    // Duplicate listing detection — same ASIN, multiple SKUs from me
     const mySkusForAsin = asinToSkus[asin] || [];
     const isDuplicate = mySkusForAsin.length > 1;
     if (isDuplicate) duplicatesFound++;
 
-    // Price gap: how much cheaper/expensive am I vs buy box winner
     const priceGapVsBuyBox = (myPrice != null && buyBoxWinner?.price != null)
-      ? Math.round((myPrice - buyBoxWinner.price) * 100) / 100
-      : null; // positive = I'm more expensive, negative = I'm cheaper
+      ? Math.round((myPrice - buyBoxWinner.price) * 100) / 100 : null;
 
     const docId = `${ACCOUNT_LABEL}_${asin}`;
     const old = existingByAsin[docId];
-
-    // Change detection — compare all meaningful fields
     const changed = !old
       || old.lowestCompetitorPrice !== lowest
       || old.rawOffers !== offers.length
@@ -520,19 +445,19 @@ async function syncCompetitivePricing(asinList) {
       batch.set(ref, {
         account: ACCOUNT_LABEL,
         asin,
-        mySkus: mySkusForAsin,           // my SKU(s) for this ASIN
-        isDuplicate,                      // true = same ASIN listed under 2+ SKUs (needs cleanup)
+        mySkus: mySkusForAsin,
+        isDuplicate,
         duplicateSkuCount: mySkusForAsin.length,
-        myPrice,                          // my selling price
-        myLandedPrice,                    // my price + shipping
-        lowestCompetitorPrice: lowest,    // cheapest offer on this ASIN
-        priceGapVsBuyBox,                 // my price minus buy box price (positive = I'm pricier)
-        buyBoxStatus,                     // 'held' | 'lost' | 'no_offer'
-        iHoldBuyBox,                      // quick boolean for admin console filters
+        myPrice,
+        myLandedPrice,
+        lowestCompetitorPrice: lowest,
+        priceGapVsBuyBox,
+        buyBoxStatus,
+        iHoldBuyBox,
         buyBoxWinnerPrice: buyBoxWinner?.price ?? null,
         buyBoxWinnerSellerId: buyBoxWinner?.sellerId ?? null,
         rawOffers: offers.length,
-        offers,                           // full list of all sellers
+        offers,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
       changedCount++;
@@ -546,9 +471,13 @@ async function syncCompetitivePricing(asinList) {
   console.log(`Buy box summary — Held: ${buyBoxHeld} | Lost: ${buyBoxLost} | No offer: ${buyBoxNone} | Duplicates: ${duplicatesFound}`);
 }
 
-// ── Write-back functions (price, MRP, HSN, new listing, refund, deletion) ────────
-// All now use getProductTypeForSku() which is a synchronous in-memory cache lookup
-// (0 Firestore reads) instead of the old async WHERE query (1 read per SKU per call).
+// ── Write-back functions ──────────────────────────────────────────────────────────
+// spapiPriceUpdates      → db      (SP-API project)
+// spapiMrpUpdates        → dbMain  (main project)
+// spapiHsnUpdates        → dbMain  (main project)
+// spapiNewListingRequests→ db      (SP-API project)
+// spapiRefundRequests    → db      (SP-API project)
+// spapiListingDeletions  → dbMain  (main project)
 
 async function applyPendingPriceUpdates(sellerId) {
   const pendingSnap = await db.collection('spapiPriceUpdates')
@@ -562,9 +491,8 @@ async function applyPendingPriceUpdates(sellerId) {
   for (const doc of pendingSnap.docs) {
     const { sku, newPrice } = doc.data();
     try {
-      const productType = getProductTypeForSku(sku); // sync cache lookup — no Firestore read
-      if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync, or update manually in Seller Central first.');
-
+      const productType = getProductTypeForSku(sku);
+      if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
       await spClient.callAPI({
         operation: 'patchListingsItem',
         endpoint: 'listingsItems',
@@ -575,15 +503,10 @@ async function applyPendingPriceUpdates(sellerId) {
           patches: [{
             op: 'replace',
             path: '/attributes/purchasable_offer',
-            value: [{
-              marketplace_id: MARKETPLACE_ID,
-              currency: 'INR',
-              our_price: [{ schedule: [{ value_with_tax: newPrice }] }],
-            }],
+            value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', our_price: [{ schedule: [{ value_with_tax: newPrice }] }] }],
           }],
         },
       });
-
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`Price updated for SKU ${sku}: now ${newPrice}`);
     } catch (e) {
@@ -595,7 +518,8 @@ async function applyPendingPriceUpdates(sellerId) {
 }
 
 async function applyPendingMrpUpdates(sellerId) {
-  const pendingSnap = await db.collection('spapiListingDeletions')
+  // ← dbMain: MRP updates queued from admin console (aikm--order-file)
+  const pendingSnap = await dbMain.collection('spapiMrpUpdates')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
@@ -606,9 +530,8 @@ async function applyPendingMrpUpdates(sellerId) {
   for (const doc of pendingSnap.docs) {
     const { sku, newMrp } = doc.data();
     try {
-      const productType = getProductTypeForSku(sku); // sync cache lookup — no Firestore read
+      const productType = getProductTypeForSku(sku);
       if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
-
       await spClient.callAPI({
         operation: 'patchListingsItem',
         endpoint: 'listingsItems',
@@ -623,7 +546,6 @@ async function applyPendingMrpUpdates(sellerId) {
           }],
         },
       });
-
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`MRP updated for SKU ${sku}: now ${newMrp}`);
     } catch (e) {
@@ -635,7 +557,8 @@ async function applyPendingMrpUpdates(sellerId) {
 }
 
 async function applyPendingHsnUpdates(sellerId) {
-  const pendingSnap = await db.collection('spapiHsnUpdates')
+  // ← dbMain: HSN/tax updates queued from admin console (aikm--order-file)
+  const pendingSnap = await dbMain.collection('spapiHsnUpdates')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
@@ -646,9 +569,8 @@ async function applyPendingHsnUpdates(sellerId) {
   for (const doc of pendingSnap.docs) {
     const { sku, newHsn } = doc.data();
     try {
-      const productType = getProductTypeForSku(sku); // sync cache lookup — no Firestore read
+      const productType = getProductTypeForSku(sku);
       if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
-
       await spClient.callAPI({
         operation: 'patchListingsItem',
         endpoint: 'listingsItems',
@@ -663,7 +585,6 @@ async function applyPendingHsnUpdates(sellerId) {
           }],
         },
       });
-
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
     } catch (e) {
@@ -687,33 +608,15 @@ async function applyPendingNewListings(sellerId) {
     const data = doc.data();
     const { sku, productType, title, brand, price, mrp, hsn, barcode, barcodeType, quantity } = data;
     try {
-      if (!sku || !productType) throw new Error('Missing SKU or productType - both are required to create/map a listing.');
-
+      if (!sku || !productType) throw new Error('Missing SKU or productType.');
       const attributes = {};
       if (title) attributes.item_name = [{ value: title, marketplace_id: MARKETPLACE_ID }];
       if (brand) attributes.brand = [{ value: brand, marketplace_id: MARKETPLACE_ID }];
-      if (price != null) {
-        attributes.purchasable_offer = [{
-          marketplace_id: MARKETPLACE_ID,
-          currency: 'INR',
-          our_price: [{ schedule: [{ value_with_tax: price }] }],
-        }];
-      }
-      if (mrp != null) {
-        attributes.list_price = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: mrp }];
-      }
+      if (price != null) attributes.purchasable_offer = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', our_price: [{ schedule: [{ value_with_tax: price }] }] }];
+      if (mrp != null) attributes.list_price = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: mrp }];
       if (hsn) attributes.product_tax_code = [{ value: String(hsn) }];
-      if (barcode) {
-        attributes.externally_assigned_product_identifier = [{
-          type: (barcodeType || 'ean').toLowerCase(),
-          value: String(barcode),
-          marketplace_id: MARKETPLACE_ID,
-        }];
-      }
-      if (quantity != null) {
-        attributes.fulfillment_availability = [{ fulfillment_channel_code: 'DEFAULT', quantity }];
-      }
-
+      if (barcode) attributes.externally_assigned_product_identifier = [{ type: (barcodeType || 'ean').toLowerCase(), value: String(barcode), marketplace_id: MARKETPLACE_ID }];
+      if (quantity != null) attributes.fulfillment_availability = [{ fulfillment_channel_code: 'DEFAULT', quantity }];
       await spClient.callAPI({
         operation: 'putListingsItem',
         endpoint: 'listingsItems',
@@ -721,7 +624,6 @@ async function applyPendingNewListings(sellerId) {
         query: { marketplaceIds: [MARKETPLACE_ID] },
         body: { productType, attributes },
       });
-
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`New listing created/mapped for SKU ${sku}`);
     } catch (e) {
@@ -739,21 +641,22 @@ async function flagPendingRefundRequests() {
     .get();
 
   if (pendingSnap.empty) { console.log('No pending refund requests.'); return; }
-  console.log(`Flagging ${pendingSnap.size} refund request(s) for manual action (no Amazon API call is made)...`);
+  console.log(`Flagging ${pendingSnap.size} refund request(s) for manual action...`);
 
   const batch = db.batch();
   pendingSnap.docs.forEach((doc) => {
     batch.update(doc.ref, {
       status: 'flagged_for_manual_action',
       flaggedAt: admin.firestore.FieldValue.serverTimestamp(),
-      note: 'SP-API has no reliable programmatic refund for MFN orders - process this manually in Seller Central > Manage Returns/Refunds.',
+      note: 'SP-API has no reliable programmatic refund for MFN orders - process manually in Seller Central > Manage Returns/Refunds.',
     });
   });
   await batch.commit();
 }
 
 async function applyPendingListingDeletions(sellerId) {
-  const pendingSnap = await db.collection('spapiListingDeletions')
+  // ← dbMain: listing deletions queued from admin console (aikm--order-file)
+  const pendingSnap = await dbMain.collection('spapiListingDeletions')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
@@ -764,24 +667,18 @@ async function applyPendingListingDeletions(sellerId) {
   for (const doc of pendingSnap.docs) {
     const { sku } = doc.data();
     try {
-      // QUOTA FIX: use in-memory skuToAsinMap instead of a Firestore WHERE query to get
-      // the listing snapshot before deleting (saves 1 read per deletion).
       const asin = skuToAsinMap[sku] || null;
-      // Only do the Firestore read if we don't have the data in memory (e.g. first run).
       let invData = null;
       if (asin) {
-        // We already know name/price etc. from the inventory snap loaded earlier — look it up.
         const existingSnap = await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).get();
         invData = existingSnap.exists ? existingSnap.data() : null;
       }
-
       await spClient.callAPI({
         operation: 'deleteListingsItem',
         endpoint: 'listingsItems',
         path: { sellerId, sku },
         query: { marketplaceIds: [MARKETPLACE_ID] },
       });
-
       await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${sku}_${Date.now()}`).set({
         account: ACCOUNT_LABEL,
         sku,
@@ -791,7 +688,6 @@ async function applyPendingListingDeletions(sellerId) {
         quantity: invData?.quantity || null,
         deletedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
-
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.log(`Listing deleted for SKU ${sku}`);
     } catch (e) {
@@ -804,14 +700,9 @@ async function applyPendingListingDeletions(sellerId) {
 
 async function run() {
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
-  const test = await spClient.callAPI({
-    operation: 'getMarketplaceParticipations',
-    endpoint: 'sellers',
-  });
+  const test = await spClient.callAPI({ operation: 'getMarketplaceParticipations', endpoint: 'sellers' });
   console.log('Step 0 result:', JSON.stringify(test));
 
-  // QUOTA FIX: load productType + asin map ONCE from spapiInventory before any
-  // write-back function runs — replaces per-SKU Firestore queries in each applyPending* call.
   console.log('Step 0a: loading product-type cache...');
   await loadProductTypeCache();
 
@@ -844,7 +735,6 @@ async function run() {
   const categoriesByAsin = await fetchProductCategories(asinsFromInventory);
   console.log('Sample categories:', JSON.stringify(Object.entries(categoriesByAsin).slice(0, 10)));
 
-  // QUOTA FIX: reuse skuToAsinMap (filled in syncInventory) — zero extra Firestore reads.
   const asinToSku = {};
   for (const [sku, asin] of Object.entries(skuToAsinMap)) { asinToSku[asin] = sku; }
   const catBatch = db.batch();
@@ -853,20 +743,15 @@ async function run() {
   for (const [asin, category] of Object.entries(categoriesByAsin)) {
     const sku = asinToSku[asin];
     if (!sku) continue;
-    // Skip write if category already matches what's cached — no Firestore write needed.
     if (productTypeCache[sku] === category) { catSkipped++; continue; }
     const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
     catBatch.update(ref, { amazonProductType: category });
-    productTypeCache[sku] = category; // keep cache fresh for write-backs this run
+    productTypeCache[sku] = category;
     catWrites++;
   }
   if (catWrites > 0) await catBatch.commit();
   console.log(`Step 2b done: ${catWrites} category update(s) written, ${catSkipped} unchanged (skipped).`);
 
-  // ─── QUOTA FIX: HSN/tax fetch only for SKUs that actually changed ─────────────
-  // changedSkus is populated during syncInventory — contains only SKUs where price,
-  // qty, name or asin changed this run, PLUS any SKUs with no hsnCode yet (first run).
-  // On a stable day with no listing changes: 0 SP-API calls, 0 reads, 0 writes.
   console.log('Step 2c: checking HSN/tax for changed/new SKUs...');
   if (sellerId) {
     const skusNeedingHsn = [...changedSkus];
@@ -901,15 +786,7 @@ async function run() {
         ShipmentRequestDetails: {
           AmazonOrderId: orders[0] ? orders[0].AmazonOrderId : '000-0000000-0000000',
           ItemList: [{ OrderItemId: 'TEST', Quantity: 1 }],
-          ShipFromAddress: {
-            Name: 'Praso Enterprises',
-            AddressLine1: 'Test Address Line 1',
-            City: 'Delhi',
-            StateOrRegion: 'Delhi',
-            PostalCode: '110001',
-            CountryCode: 'IN',
-            Phone: '9999999999',
-          },
+          ShipFromAddress: { Name: 'Praso Enterprises', AddressLine1: 'Test Address Line 1', City: 'Delhi', StateOrRegion: 'Delhi', PostalCode: '110001', CountryCode: 'IN', Phone: '9999999999' },
           PackageDimensions: { Length: 10, Width: 10, Height: 10, Unit: 'centimeters' },
           Weight: { Value: 200, Unit: 'grams' },
           ShippingServiceOptions: { DeliveryExperience: 'NoTracking', CarrierWillPickUp: false },
