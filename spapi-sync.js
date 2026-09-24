@@ -1,34 +1,19 @@
-// spapi-sync.js
-// Syncs one Amazon seller account via SP-API into Firestore:
-//   - Orders (incl. status/cancellations)
-//   - Inventory levels
-//   - Competitive pricing (other sellers on your ASINs)
-// Also applies pending write-back requests queued by the admin console:
-//   - Price updates      (spapiPriceUpdates)      - SP-API project
-//   - MRP updates        (spapiMrpUpdates)         - MAIN project
-//   - HSN/tax code       (spapiHsnUpdates)         - MAIN project
-//   - New listing create/map (spapiNewListingRequests) - SP-API project
-//   - Refund requests    (spapiRefundRequests)     - SP-API project, MANUAL ONLY
-//   - Listing deletions  (spapiListingDeletions)   - MAIN project
-
 const SellingPartnerAPI = require('amazon-sp-api');
 const admin = require('firebase-admin');
 
-// SP-API project (noworry-b7d56) — orders, inventory, pricing, price updates
 const spaApp = admin.initializeApp(
   { credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_SPAPI)) },
   'spaApp'
 );
 const db = spaApp.firestore();
 
-// Main project (aikm--order-file) — write-back queues: HSN, MRP, listing deletions
 const mainApp = admin.initializeApp(
   { credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) },
   'mainApp'
 );
 const dbMain = mainApp.firestore();
 
-const MARKETPLACE_ID = 'A21TJRUUN4KGV'; // Amazon.in
+const MARKETPLACE_ID = 'A21TJRUUN4KGV';
 
 const spClient = new SellingPartnerAPI({
   region: 'eu',
@@ -40,7 +25,6 @@ const spClient = new SellingPartnerAPI({
 });
 
 const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
-
 const skuToAsinMap = {};
 const productTypeCache = {};
 const changedSkus = new Set();
@@ -88,8 +72,7 @@ async function syncOrders() {
           asin: li.ASIN || '',
           sku: li.SellerSKU || '',
           qty: li.QuantityOrdered || 0,
-          price,
-          tax,
+          price, tax,
           taxPercent: exclTaxPrice > 0 ? Math.round((tax / exclTaxPrice) * 1000) / 10 : 0,
         };
       });
@@ -107,8 +90,7 @@ async function syncOrders() {
       });
       const shipmentEvents = finRes.payload?.FinancialEvents?.ShipmentEventList
         || finRes.FinancialEvents?.ShipmentEventList || [];
-      let feeTotal = 0;
-      let hasFeeData = false;
+      let feeTotal = 0, hasFeeData = false;
       shipmentEvents.forEach((se) => {
         (se.ShipmentItemList || []).forEach((item) => {
           (item.ItemFeeList || []).forEach((fee) => {
@@ -118,9 +100,7 @@ async function syncOrders() {
         });
       });
       if (hasFeeData) amazonFees = Math.abs(feeTotal);
-    } catch (e) {
-      financeFailCount++;
-    }
+    } catch (e) { financeFailCount++; }
     await new Promise((r) => setTimeout(r, 600));
 
     const ref = db.collection('spapiOrders').doc(`${ACCOUNT_LABEL}_${order.AmazonOrderId}`);
@@ -136,17 +116,14 @@ async function syncOrders() {
       shipServiceLevel: order.ShipServiceLevel || null,
       earliestShipDate: order.EarliestShipDate || null,
       latestShipDate: order.LatestShipDate || null,
-      items,
-      amazonFees,
+      items, amazonFees,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
   }
 
   await batch.commit();
   console.log(`Orders synced: ${orders.length}`);
-  if (financeFailCount > 0) {
-    console.log(`Finances API still blocked (${financeFailCount}/${orders.length} orders) - fees will be null until Amazon Support enables access.`);
-  }
+  if (financeFailCount > 0) console.log(`Finances API still blocked (${financeFailCount}/${orders.length} orders)`);
   return orders;
 }
 
@@ -154,8 +131,7 @@ function extractWeightKg(name) {
   if (!name) return null;
   const m = name.match(/(\d+\.?\d*)\s?(kg|kgs|g|gm|gms|grams?|ml|mls?|l|litre|liter|litres|liters)\b/i);
   if (!m) return null;
-  const num = parseFloat(m[1]);
-  const unit = m[2].toLowerCase();
+  const num = parseFloat(m[1]), unit = m[2].toLowerCase();
   if (unit.startsWith('kg')) return num;
   if (unit.startsWith('g')) return num / 1000;
   if (unit.startsWith('ml')) return num / 1000;
@@ -177,39 +153,23 @@ async function syncInventory() {
   let reportDocumentId;
   for (let attempt = 0; attempt < 20; attempt++) {
     await new Promise((r) => setTimeout(r, 20000));
-    const status = await spClient.callAPI({
-      operation: 'getReport',
-      endpoint: 'reports',
-      path: { reportId },
-    });
+    const status = await spClient.callAPI({ operation: 'getReport', endpoint: 'reports', path: { reportId } });
     console.log(`Poll ${attempt + 1}: status = ${status.processingStatus}`);
     if (status.processingStatus === 'DONE') { reportDocumentId = status.reportDocumentId; break; }
-    if (status.processingStatus === 'FATAL' || status.processingStatus === 'CANCELLED') {
+    if (status.processingStatus === 'FATAL' || status.processingStatus === 'CANCELLED')
       throw new Error(`Report generation failed: ${status.processingStatus}`);
-    }
   }
 
-  if (!reportDocumentId) {
-    console.log('Report not ready within polling window - will retry on next scheduled run.');
-    return [];
-  }
+  if (!reportDocumentId) { console.log('Report not ready - will retry next run.'); return []; }
 
-  const doc = await spClient.callAPI({
-    operation: 'getReportDocument',
-    endpoint: 'reports',
-    path: { reportDocumentId },
-  });
-
+  const doc = await spClient.callAPI({ operation: 'getReportDocument', endpoint: 'reports', path: { reportDocumentId } });
   console.log('Report doc type:', typeof doc, Buffer.isBuffer(doc) ? '(Buffer)' : JSON.stringify(Object.keys(doc || {})));
 
   let docText;
-  if (Buffer.isBuffer(doc)) {
-    docText = doc.toString('utf-8');
-  } else if (typeof doc === 'string') {
-    docText = doc;
-  } else if (doc && doc.url) {
-    const zlib = require('zlib');
-    const https = require('https');
+  if (Buffer.isBuffer(doc)) { docText = doc.toString('utf-8'); }
+  else if (typeof doc === 'string') { docText = doc; }
+  else if (doc && doc.url) {
+    const zlib = require('zlib'), https = require('https');
     const rawBuffer = await new Promise((resolve, reject) => {
       https.get(doc.url, (res) => {
         const chunks = [];
@@ -220,21 +180,15 @@ async function syncInventory() {
     });
     const isGzip = (doc.compressionAlgorithm || '').toUpperCase() === 'GZIP';
     docText = isGzip ? zlib.gunzipSync(rawBuffer).toString('utf-8') : rawBuffer.toString('utf-8');
-  } else {
-    console.log('Unrecognized report document shape:', JSON.stringify(doc).slice(0, 300));
-    return [];
-  }
+  } else { console.log('Unrecognized report shape:', JSON.stringify(doc).slice(0, 300)); return []; }
 
   const lines = docText.split('\n').filter(Boolean);
   const headers = lines[0].split('\t').map(h => h.replace(/^\uFEFF/, '').trim());
   console.log('Report headers:', JSON.stringify(headers));
-  const skuIdx = headers.indexOf('seller-sku');
-  const qtyIdx = headers.indexOf('quantity');
-  const priceIdx = headers.indexOf('price');
-  const asinIdx = headers.indexOf('asin1');
-  const nameIdx = headers.indexOf('item-name');
-  const categoryIdx = headers.indexOf('zshop-category1');
-  const mrpIdx = headers.indexOf('maximum-retail-price');
+  const skuIdx = headers.indexOf('seller-sku'), qtyIdx = headers.indexOf('quantity'),
+    priceIdx = headers.indexOf('price'), asinIdx = headers.indexOf('asin1'),
+    nameIdx = headers.indexOf('item-name'), categoryIdx = headers.indexOf('zshop-category1'),
+    mrpIdx = headers.indexOf('maximum-retail-price');
   console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx, 'mrp:', mrpIdx);
 
   console.log('Fetching existing inventory docs for delta comparison...');
@@ -247,8 +201,7 @@ async function syncInventory() {
   });
 
   const batch = db.batch();
-  let changedCount = 0;
-  let skippedCount = 0;
+  let changedCount = 0, skippedCount = 0;
   const asins = [];
 
   for (let i = 1; i < lines.length; i++) {
@@ -261,67 +214,49 @@ async function syncInventory() {
 
     const docId = `${ACCOUNT_LABEL}_${sku}`;
     const newData = {
-      account: ACCOUNT_LABEL,
-      sku,
+      account: ACCOUNT_LABEL, sku,
       name: cols[nameIdx] || '',
-      asin,
-      category: cols[categoryIdx] || '',
+      asin, category: cols[categoryIdx] || '',
       weightKg: extractWeightKg(cols[nameIdx] || ''),
       quantity: parseInt(cols[qtyIdx], 10) || 0,
       price: parseFloat(cols[priceIdx]) || null,
       mrp: mrpIdx >= 0 ? (parseFloat(cols[mrpIdx]) || null) : null,
     };
     const old = existingBySku[docId];
-    const changed = !old
-      || old.quantity !== newData.quantity
-      || old.price !== newData.price
-      || old.mrp !== newData.mrp
-      || old.name !== newData.name
-      || old.asin !== newData.asin
-      || old.category !== newData.category;
-
+    const changed = !old || old.quantity !== newData.quantity || old.price !== newData.price
+      || old.mrp !== newData.mrp || old.name !== newData.name
+      || old.asin !== newData.asin || old.category !== newData.category;
     const hsnMissing = !old || (old.hsnCode == null && old.taxCode == null);
     if (changed || hsnMissing) changedSkus.add(sku);
 
     if (changed) {
-      const ref = db.collection('spapiInventory').doc(docId);
-      batch.set(ref, { ...newData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      batch.set(db.collection('spapiInventory').doc(docId),
+        { ...newData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
       changedCount++;
-    } else {
-      skippedCount++;
-    }
+    } else { skippedCount++; }
   }
 
   if (changedCount > 0) await batch.commit();
   console.log(`Inventory synced: ${changedCount} changed, ${skippedCount} unchanged (skipped write)`);
-  const uniqueCategories = [...new Set(lines.slice(1).map(l => l.split('\t')[categoryIdx]).filter(Boolean))];
-  console.log('Unique categories found:', JSON.stringify(uniqueCategories));
+  console.log('Unique categories found:', JSON.stringify([...new Set(lines.slice(1).map(l => l.split('\t')[categoryIdx]).filter(Boolean))]));
   return [...new Set(asins)];
 }
 
 async function fetchProductCategories(asinList) {
   const categories = {};
-  let firstLogged = false;
-  let failCount = 0;
+  let firstLogged = false, failCount = 0;
   for (const asin of asinList) {
     try {
       const res = await spClient.callAPI({
-        operation: 'getCatalogItem',
-        endpoint: 'catalogItems',
-        path: { asin },
+        operation: 'getCatalogItem', endpoint: 'catalogItems', path: { asin },
         query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['productTypes', 'summaries'] },
       });
-      if (!firstLogged) {
-        console.log('Sample getCatalogItem (category) response for', asin, ':', JSON.stringify(res).slice(0, 800));
-        firstLogged = true;
-      }
+      if (!firstLogged) { console.log('Sample getCatalogItem for', asin, ':', JSON.stringify(res).slice(0, 800)); firstLogged = true; }
       const productTypes = res.productTypes || res.payload?.productTypes;
       const summaries = res.summaries || res.payload?.summaries;
       const cat = productTypes?.[0]?.productType || summaries?.[0]?.websiteDisplayGroup || null;
       if (cat) categories[asin] = cat;
-    } catch (e) {
-      failCount++;
-    }
+    } catch (e) { failCount++; }
     await new Promise((r) => setTimeout(r, 800));
   }
   if (failCount > 0) console.log(`Category fetch failed for ${failCount}/${asinList.length} ASINs`);
@@ -330,29 +265,21 @@ async function fetchProductCategories(asinList) {
 
 async function fetchHsnTaxData(sellerId, skuList) {
   const results = {};
-  let firstLogged = false;
-  let failCount = 0;
+  let firstLogged = false, failCount = 0;
   for (const sku of skuList) {
     try {
       const res = await spClient.callAPI({
-        operation: 'getListingsItem',
-        endpoint: 'listingsItems',
-        path: { sellerId, sku },
+        operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku },
         query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes'] },
       });
-      if (!firstLogged) {
-        console.log('Sample getListingsItem (HSN/tax) response for', sku, ':', JSON.stringify(res).slice(0, 1200));
-        firstLogged = true;
-      }
+      if (!firstLogged) { console.log('Sample getListingsItem (HSN/tax) for', sku, ':', JSON.stringify(res).slice(0, 1200)); firstLogged = true; }
       const attrs = res.attributes || res.payload?.attributes || {};
       const externalInfo = attrs.external_product_information || [];
       const hsnEntry = externalInfo.find(e => (e.entity || '').toLowerCase().includes('hsn'));
       const hsnCode = hsnEntry ? hsnEntry.value : null;
       const taxCode = attrs.product_tax_code?.[0]?.value ?? null;
       if (hsnCode || taxCode) results[sku] = { hsnCode, taxCode };
-    } catch (e) {
-      failCount++;
-    }
+    } catch (e) { failCount++; }
     await new Promise((r) => setTimeout(r, 800));
   }
   if (failCount > 0) console.log(`HSN/tax fetch failed for ${failCount}/${skuList.length} SKUs`);
@@ -369,31 +296,23 @@ async function syncCompetitivePricing(asinList) {
   }
 
   const mySellerId = process.env.SPAPI_SELLER_ID || null;
-
   console.log('Fetching existing competitive pricing docs for delta comparison...');
   const existingSnap = await db.collection('spapiCompetitivePricing').where('account', '==', ACCOUNT_LABEL).get();
   const existingByAsin = {};
   existingSnap.forEach((d) => { existingByAsin[d.id] = d.data(); });
 
   const batch = db.batch();
-  let firstLogged = false;
-  let changedCount = 0;
-  let skippedCount = 0;
+  let firstLogged = false, changedCount = 0, skippedCount = 0;
   let buyBoxHeld = 0, buyBoxLost = 0, buyBoxNone = 0, duplicatesFound = 0;
 
   for (const asin of asinList) {
     let offers = [];
     try {
       const res = await spClient.callAPI({
-        operation: 'getItemOffers',
-        endpoint: 'productPricing',
-        path: { Asin: asin },
+        operation: 'getItemOffers', endpoint: 'productPricing', path: { Asin: asin },
         query: { MarketplaceId: MARKETPLACE_ID, ItemCondition: 'New' },
       });
-      if (!firstLogged) {
-        console.log('Sample getItemOffers response shape for', asin, ':', JSON.stringify(res).slice(0, 500));
-        firstLogged = true;
-      }
+      if (!firstLogged) { console.log('Sample getItemOffers for', asin, ':', JSON.stringify(res).slice(0, 500)); firstLogged = true; }
       const rawOffers = res.Offers || res.payload?.Offers || [];
       offers = rawOffers.map((o) => ({
         sellerId: o.SellerId || '',
@@ -405,9 +324,7 @@ async function syncCompetitivePricing(asinList) {
         isMine: mySellerId ? (o.SellerId === mySellerId) : false,
         condition: o.SubCondition || 'New',
       })).sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-    } catch (e) {
-      console.warn(`getItemOffers failed for ${asin}:`, e.message || e);
-    }
+    } catch (e) { console.warn(`getItemOffers failed for ${asin}:`, e.message || e); }
     await new Promise((r) => setTimeout(r, 1200));
 
     const lowest = offers[0]?.price ?? null;
@@ -432,38 +349,23 @@ async function syncCompetitivePricing(asinList) {
 
     const docId = `${ACCOUNT_LABEL}_${asin}`;
     const old = existingByAsin[docId];
-    const changed = !old
-      || old.lowestCompetitorPrice !== lowest
-      || old.rawOffers !== offers.length
-      || old.buyBoxStatus !== buyBoxStatus
-      || old.myPrice !== myPrice
-      || old.iHoldBuyBox !== iHoldBuyBox
-      || old.isDuplicate !== isDuplicate;
+    const changed = !old || old.lowestCompetitorPrice !== lowest || old.rawOffers !== offers.length
+      || old.buyBoxStatus !== buyBoxStatus || old.myPrice !== myPrice
+      || old.iHoldBuyBox !== iHoldBuyBox || old.isDuplicate !== isDuplicate;
 
     if (changed) {
-      const ref = db.collection('spapiCompetitivePricing').doc(docId);
-      batch.set(ref, {
-        account: ACCOUNT_LABEL,
-        asin,
-        mySkus: mySkusForAsin,
-        isDuplicate,
-        duplicateSkuCount: mySkusForAsin.length,
-        myPrice,
-        myLandedPrice,
-        lowestCompetitorPrice: lowest,
-        priceGapVsBuyBox,
-        buyBoxStatus,
-        iHoldBuyBox,
+      batch.set(db.collection('spapiCompetitivePricing').doc(docId), {
+        account: ACCOUNT_LABEL, asin,
+        mySkus: mySkusForAsin, isDuplicate, duplicateSkuCount: mySkusForAsin.length,
+        myPrice, myLandedPrice, lowestCompetitorPrice: lowest,
+        priceGapVsBuyBox, buyBoxStatus, iHoldBuyBox,
         buyBoxWinnerPrice: buyBoxWinner?.price ?? null,
         buyBoxWinnerSellerId: buyBoxWinner?.sellerId ?? null,
-        rawOffers: offers.length,
-        offers,
+        rawOffers: offers.length, offers,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
       changedCount++;
-    } else {
-      skippedCount++;
-    }
+    } else { skippedCount++; }
   }
 
   if (changedCount > 0) await batch.commit();
@@ -472,19 +374,10 @@ async function syncCompetitivePricing(asinList) {
 }
 
 // ── Write-back functions ──────────────────────────────────────────────────────────
-// spapiPriceUpdates      → db      (SP-API project)
-// spapiMrpUpdates        → dbMain  (main project)
-// spapiHsnUpdates        → dbMain  (main project)
-// spapiNewListingRequests→ db      (SP-API project)
-// spapiRefundRequests    → db      (SP-API project)
-// spapiListingDeletions  → dbMain  (main project)
 
 async function applyPendingPriceUpdates(sellerId) {
   const pendingSnap = await db.collection('spapiPriceUpdates')
-    .where('account', '==', ACCOUNT_LABEL)
-    .where('status', '==', 'pending')
-    .get();
-
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
   if (pendingSnap.empty) { console.log('No pending price updates.'); return; }
   console.log(`Applying ${pendingSnap.size} pending price update(s)...`);
 
@@ -492,22 +385,16 @@ async function applyPendingPriceUpdates(sellerId) {
     const { sku, newPrice } = doc.data();
     try {
       const productType = getProductTypeForSku(sku);
-      if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
+      if (!productType) throw new Error('No known product type for this SKU yet.');
       await spClient.callAPI({
-        operation: 'patchListingsItem',
-        endpoint: 'listingsItems',
-        path: { sellerId, sku },
-        query: { marketplaceIds: [MARKETPLACE_ID] },
-        body: {
-          productType,
-          patches: [{
-            op: 'replace',
-            path: '/attributes/purchasable_offer',
-            value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', our_price: [{ schedule: [{ value_with_tax: newPrice }] }] }],
-          }],
-        },
+        operation: 'patchListingsItem', endpoint: 'listingsItems',
+        path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
+        body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer',
+          value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', our_price: [{ schedule: [{ value_with_tax: newPrice }] }] }] }] },
       });
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
+      // Write new price directly to inventory so UI stays in sync
+      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ price: newPrice });
       console.log(`Price updated for SKU ${sku}: now ${newPrice}`);
     } catch (e) {
       await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -518,12 +405,8 @@ async function applyPendingPriceUpdates(sellerId) {
 }
 
 async function applyPendingMrpUpdates(sellerId) {
-  // ← dbMain: MRP updates queued from admin console (aikm--order-file)
   const pendingSnap = await dbMain.collection('spapiMrpUpdates')
-    .where('account', '==', ACCOUNT_LABEL)
-    .where('status', '==', 'pending')
-    .get();
-
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
   if (pendingSnap.empty) { console.log('No pending MRP updates.'); return; }
   console.log(`Applying ${pendingSnap.size} pending MRP update(s)...`);
 
@@ -531,22 +414,16 @@ async function applyPendingMrpUpdates(sellerId) {
     const { sku, newMrp } = doc.data();
     try {
       const productType = getProductTypeForSku(sku);
-      if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
+      if (!productType) throw new Error('No known product type for this SKU yet.');
       await spClient.callAPI({
-        operation: 'patchListingsItem',
-        endpoint: 'listingsItems',
-        path: { sellerId, sku },
-        query: { marketplaceIds: [MARKETPLACE_ID] },
-        body: {
-          productType,
-          patches: [{
-            op: 'replace',
-            path: '/attributes/list_price',
-            value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: newMrp }],
-          }],
-        },
+        operation: 'patchListingsItem', endpoint: 'listingsItems',
+        path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
+        body: { productType, patches: [{ op: 'replace', path: '/attributes/list_price',
+          value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: newMrp }] }] },
       });
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
+      // Write new MRP directly to inventory so UI stays in sync
+      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ mrp: newMrp });
       console.log(`MRP updated for SKU ${sku}: now ${newMrp}`);
     } catch (e) {
       await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -557,12 +434,8 @@ async function applyPendingMrpUpdates(sellerId) {
 }
 
 async function applyPendingHsnUpdates(sellerId) {
-  // ← dbMain: HSN/tax updates queued from admin console (aikm--order-file)
   const pendingSnap = await dbMain.collection('spapiHsnUpdates')
-    .where('account', '==', ACCOUNT_LABEL)
-    .where('status', '==', 'pending')
-    .get();
-
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
   if (pendingSnap.empty) { console.log('No pending HSN/tax code updates.'); return; }
   console.log(`Applying ${pendingSnap.size} pending HSN update(s)...`);
 
@@ -570,26 +443,18 @@ async function applyPendingHsnUpdates(sellerId) {
     const { sku, newHsn } = doc.data();
     try {
       const productType = getProductTypeForSku(sku);
-      if (!productType) throw new Error('No known product type for this SKU yet - wait for the next inventory sync.');
+      if (!productType) throw new Error('No known product type for this SKU yet.');
       await spClient.callAPI({
-        operation: 'patchListingsItem',
-        endpoint: 'listingsItems',
-        path: { sellerId, sku },
-        query: { marketplaceIds: [MARKETPLACE_ID] },
-        body: {
-          productType,
-          patches: [{
-            op: 'replace',
-            path: '/attributes/product_tax_code',
-            value: [{ value: String(newHsn) }],
-          }],
-        },
+        operation: 'patchListingsItem', endpoint: 'listingsItems',
+        path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
+        body: { productType, patches: [{ op: 'replace', path: '/attributes/product_tax_code',
+          value: [{ value: String(newHsn) }] }] },
       });
-            aawait doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
-changedSkus.add(sku);
-// Also write the new taxCode directly to inventory so UI updates immediately
-await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ taxCode: newHsn });
-console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
+      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
+      // Write new taxCode directly to inventory so UI shows immediately after Refresh
+      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ taxCode: newHsn });
+      changedSkus.add(sku); // also re-fetch from Amazon in Step 2c to confirm
+      console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
     } catch (e) {
       await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`HSN update FAILED for SKU ${sku}:`, e.message || e);
@@ -600,16 +465,12 @@ console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
 
 async function applyPendingNewListings(sellerId) {
   const pendingSnap = await db.collection('spapiNewListingRequests')
-    .where('account', '==', ACCOUNT_LABEL)
-    .where('status', '==', 'pending')
-    .get();
-
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
   if (pendingSnap.empty) { console.log('No pending new-listing requests.'); return; }
   console.log(`Applying ${pendingSnap.size} pending new-listing request(s)...`);
 
   for (const doc of pendingSnap.docs) {
-    const data = doc.data();
-    const { sku, productType, title, brand, price, mrp, hsn, barcode, barcodeType, quantity } = data;
+    const { sku, productType, title, brand, price, mrp, hsn, barcode, barcodeType, quantity } = doc.data();
     try {
       if (!sku || !productType) throw new Error('Missing SKU or productType.');
       const attributes = {};
@@ -621,10 +482,8 @@ async function applyPendingNewListings(sellerId) {
       if (barcode) attributes.externally_assigned_product_identifier = [{ type: (barcodeType || 'ean').toLowerCase(), value: String(barcode), marketplace_id: MARKETPLACE_ID }];
       if (quantity != null) attributes.fulfillment_availability = [{ fulfillment_channel_code: 'DEFAULT', quantity }];
       await spClient.callAPI({
-        operation: 'putListingsItem',
-        endpoint: 'listingsItems',
-        path: { sellerId, sku },
-        query: { marketplaceIds: [MARKETPLACE_ID] },
+        operation: 'putListingsItem', endpoint: 'listingsItems',
+        path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
         body: { productType, attributes },
       });
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -639,31 +498,23 @@ async function applyPendingNewListings(sellerId) {
 
 async function flagPendingRefundRequests() {
   const pendingSnap = await db.collection('spapiRefundRequests')
-    .where('account', '==', ACCOUNT_LABEL)
-    .where('status', '==', 'pending')
-    .get();
-
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
   if (pendingSnap.empty) { console.log('No pending refund requests.'); return; }
   console.log(`Flagging ${pendingSnap.size} refund request(s) for manual action...`);
-
   const batch = db.batch();
   pendingSnap.docs.forEach((doc) => {
     batch.update(doc.ref, {
       status: 'flagged_for_manual_action',
       flaggedAt: admin.firestore.FieldValue.serverTimestamp(),
-      note: 'SP-API has no reliable programmatic refund for MFN orders - process manually in Seller Central > Manage Returns/Refunds.',
+      note: 'Process manually in Seller Central > Manage Returns/Refunds.',
     });
   });
   await batch.commit();
 }
 
 async function applyPendingListingDeletions(sellerId) {
-  // ← dbMain: listing deletions queued from admin console (aikm--order-file)
   const pendingSnap = await dbMain.collection('spapiListingDeletions')
-    .where('account', '==', ACCOUNT_LABEL)
-    .where('status', '==', 'pending')
-    .get();
-
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
   if (pendingSnap.empty) { console.log('No pending listing deletions.'); return; }
   console.log(`Applying ${pendingSnap.size} pending listing deletion(s)...`);
 
@@ -677,18 +528,13 @@ async function applyPendingListingDeletions(sellerId) {
         invData = existingSnap.exists ? existingSnap.data() : null;
       }
       await spClient.callAPI({
-        operation: 'deleteListingsItem',
-        endpoint: 'listingsItems',
-        path: { sellerId, sku },
-        query: { marketplaceIds: [MARKETPLACE_ID] },
+        operation: 'deleteListingsItem', endpoint: 'listingsItems',
+        path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
       });
       await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${sku}_${Date.now()}`).set({
-        account: ACCOUNT_LABEL,
-        sku,
-        name: invData?.name || null,
-        asin: invData?.asin || asin || null,
-        price: invData?.price || null,
-        quantity: invData?.quantity || null,
+        account: ACCOUNT_LABEL, sku,
+        name: invData?.name || null, asin: invData?.asin || asin || null,
+        price: invData?.price || null, quantity: invData?.quantity || null,
         deletedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -741,14 +587,12 @@ async function run() {
   const asinToSku = {};
   for (const [sku, asin] of Object.entries(skuToAsinMap)) { asinToSku[asin] = sku; }
   const catBatch = db.batch();
-  let catWrites = 0;
-  let catSkipped = 0;
+  let catWrites = 0, catSkipped = 0;
   for (const [asin, category] of Object.entries(categoriesByAsin)) {
     const sku = asinToSku[asin];
     if (!sku) continue;
     if (productTypeCache[sku] === category) { catSkipped++; continue; }
-    const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
-    catBatch.update(ref, { amazonProductType: category });
+    catBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`), { amazonProductType: category });
     productTypeCache[sku] = category;
     catWrites++;
   }
@@ -766,8 +610,8 @@ async function run() {
       const hsnBatch = db.batch();
       let hsnWrites = 0;
       for (const [sku, data] of Object.entries(hsnData)) {
-        const ref = db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`);
-        hsnBatch.update(ref, { hsnCode: data.hsnCode, taxCode: data.taxCode });
+        hsnBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`),
+          { hsnCode: data.hsnCode, taxCode: data.taxCode });
         hsnWrites++;
       }
       if (hsnWrites > 0) await hsnBatch.commit();
@@ -783,8 +627,7 @@ async function run() {
   console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
   try {
     const mfnTest = await spClient.callAPI({
-      operation: 'getEligibleShipmentServices',
-      endpoint: 'merchantFulfillment',
+      operation: 'getEligibleShipmentServices', endpoint: 'merchantFulfillment',
       body: {
         ShipmentRequestDetails: {
           AmazonOrderId: orders[0] ? orders[0].AmazonOrderId : '000-0000000-0000000',
