@@ -38,8 +38,14 @@ const admin = require('firebase-admin');
 
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-const db = admin.firestore();
+const db = admin.firestore(); // SP-API project (noworry-b7d56)
 
+// Main project for write-back queues (spapiHsnUpdates, spapiMrpUpdates, spapiListingDeletions)
+const mainApp = admin.initializeApp(
+  { credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_MAIN_SERVICE_ACCOUNT)) },
+  'mainApp'
+);
+const dbMain = mainApp.firestore();
 const MARKETPLACE_ID = 'A21TJRUUN4KGV'; // Amazon.in
 
 const spClient = new SellingPartnerAPI({
@@ -589,7 +595,7 @@ async function applyPendingPriceUpdates(sellerId) {
 }
 
 async function applyPendingMrpUpdates(sellerId) {
-  const pendingSnap = await db.collection('spapiMrpUpdates')
+  const pendingSnap = await db.collection('spapiListingDeletions')
     .where('account', '==', ACCOUNT_LABEL)
     .where('status', '==', 'pending')
     .get();
