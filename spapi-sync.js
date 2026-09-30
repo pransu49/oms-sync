@@ -29,6 +29,7 @@ const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
 const skuToAsinMap = {};
 const productTypeCache = {};
 const changedSkus = new Set();
+const pushedTaxSkus = new Map(); // sku -> values we just pushed this run
 
 // ── QUOTA SAVER: compact snapshot ─────────────────────────────────────────────
 // Instead of reading every inventory/pricing/order document on every run (and on every
@@ -148,6 +149,28 @@ async function loadProductTypeCache() {
 function getProductTypeForSku(sku) {
   return productTypeCache[sku] || null;
 }
+
+// Amazon's Listings API often answers "INVALID" with a list of issues instead of throwing an
+// error, so a "successful" call can still mean nothing changed. Treat that as a failure and keep
+// Amazon's own reason, so the page can show exactly why.
+function assertListingsOk(res) {
+  const r = res && (res.payload || res);
+  const issues = (r && r.issues) || [];
+  const errors = issues.filter((i) => (i.severity || '').toUpperCase() === 'ERROR');
+  if ((r && r.status && r.status !== 'ACCEPTED') || errors.length) {
+    const msg = (errors.length ? errors : issues).map((i) => i.message || i.code).filter(Boolean).join(' | ');
+    throw new Error(`Amazon rejected the change (${(r && r.status) || 'ERROR'})${msg ? ': ' + msg : ''}`);
+  }
+  return r;
+}
+
+// Amazon India tax codes (PTC) for each GST rate, as published for the 22-Sep-2025 GST change.
+const TAX_CODE_RATE = {
+  A_GEN_EXEMPT: 0, A_GEN_STANDARDtoEXEMPT2025: 0, A_GEN_SUPERREDUCEDtoEXEMPT2025: 0, A_GEN_REDUCEDtoEXEMPT2025: 0,
+  A_GEN_MINIMUM: 0.25, A_GEN_JEWELLERY: 3, A_GEN_SUPERREDUCED: 5, A_GEN_REDUCED: 5, A_GEN_STANDARDtoREDUCED2025: 5,
+  A_GEN_STANDARD: 18, A_GEN_PEAK: 18, A_GEN_REDUCEDtoSTANDARD2025: 18,
+  A_GEN_PEAK_CESS12: 40, A_GEN_STANDARDtoHIGHPEAK2025: 40, A_GEN_HIGHPEAK: 40,
+};
 
 async function syncOrders() {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -488,12 +511,12 @@ async function applyPendingPriceUpdates(sellerId) {
     try {
       const productType = getProductTypeForSku(sku);
       if (!productType) throw new Error('No known product type for this SKU yet.');
-      await spClient.callAPI({
+      assertListingsOk(await spClient.callAPI({
         operation: 'patchListingsItem', endpoint: 'listingsItems',
         path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
         body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer',
           value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', our_price: [{ schedule: [{ value_with_tax: newPrice }] }] }] }] },
-      });
+      }));
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       // Write new price directly to inventory so UI stays in sync
       await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ price: newPrice });
@@ -518,12 +541,12 @@ async function applyPendingMrpUpdates(sellerId) {
     try {
       const productType = getProductTypeForSku(sku);
       if (!productType) throw new Error('No known product type for this SKU yet.');
-      await spClient.callAPI({
+      assertListingsOk(await spClient.callAPI({
         operation: 'patchListingsItem', endpoint: 'listingsItems',
         path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
         body: { productType, patches: [{ op: 'replace', path: '/attributes/list_price',
           value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: newMrp }] }] },
-      });
+      }));
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       // Write new MRP directly to inventory so UI stays in sync
       await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ mrp: newMrp });
@@ -538,31 +561,56 @@ async function applyPendingMrpUpdates(sellerId) {
 }
 
 async function applyPendingHsnUpdates(sellerId) {
+  // One request doc per SKU (spapiHsnUpdates/<account>_<sku>). It can carry a new GST tax code,
+  // a new HSN code, or both:  { newTaxCode: 'A_GEN_SUPERREDUCED', newHsnCode: '21069099' }.
+  // Older requests only had "newHsn" - those are read as a tax code if they start with A_GEN,
+  // otherwise as an HSN code (the old code wrongly sent HSN numbers into the tax-code field).
   const pendingSnap = await dbMain.collection('spapiHsnUpdates')
     .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
-  if (pendingSnap.empty) { console.log('No pending HSN/tax code updates.'); return; }
-  console.log(`Applying ${pendingSnap.size} pending HSN update(s)...`);
+  if (pendingSnap.empty) { console.log('No pending GST/HSN updates.'); return; }
+  console.log(`Applying ${pendingSnap.size} pending GST/HSN update(s)...`);
 
   for (const doc of pendingSnap.docs) {
-    const { sku, newHsn } = doc.data();
+    const d = doc.data();
+    const sku = d.sku;
+    const legacy = d.newHsn != null ? String(d.newHsn).trim() : '';
+    const taxCode = d.newTaxCode || (/^A_GEN/i.test(legacy) ? legacy : null);
+    const hsn = d.newHsnCode ? String(d.newHsnCode).trim() : (/^\d{4,8}$/.test(legacy) ? legacy : null);
+    const invId = `${ACCOUNT_LABEL}_${sku}`;
     try {
+      if (!taxCode && !hsn) throw new Error('Nothing to update - no valid GST tax code or HSN code in the request.');
+      if (taxCode && !(taxCode in TAX_CODE_RATE)) throw new Error(`Unknown GST tax code "${taxCode}".`);
+      if (hsn && !/^\d{4,8}$/.test(hsn)) throw new Error(`HSN "${hsn}" must be 4 to 8 digits.`);
       const productType = getProductTypeForSku(sku);
-      if (!productType) throw new Error('No known product type for this SKU yet.');
-      await spClient.callAPI({
+      if (!productType) throw new Error('No known product type for this SKU yet - wait for the next sync.');
+
+      const patches = [];
+      if (taxCode) patches.push({ op: 'replace', path: '/attributes/product_tax_code',
+        value: [{ value: taxCode, marketplace_id: MARKETPLACE_ID }] });
+      if (hsn) patches.push({ op: 'replace', path: '/attributes/external_product_information',
+        value: [{ entity: 'HSN Code', value: hsn, marketplace_id: MARKETPLACE_ID }] });
+
+      assertListingsOk(await spClient.callAPI({
         operation: 'patchListingsItem', endpoint: 'listingsItems',
         path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
-        body: { productType, patches: [{ op: 'replace', path: '/attributes/product_tax_code',
-          value: [{ value: String(newHsn) }] }] },
-      });
-      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
-      // Write new taxCode directly to inventory so UI shows immediately after Refresh
-      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ taxCode: newHsn });
-      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { taxCode: newHsn });
-      changedSkus.add(sku); // also re-fetch from Amazon in Step 2c to confirm
-      console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
+        body: { productType, patches },
+      }));
+
+      const now = Date.now();
+      const invPatch = { lastTaxPush: { status: 'applied', at: now, taxCode: taxCode || null, hsnCode: hsn || null } };
+      if (taxCode) invPatch.taxCode = taxCode;
+      if (hsn) invPatch.hsnCode = hsn;
+      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp(), appliedTaxCode: taxCode || null, appliedHsnCode: hsn || null });
+      await db.collection('spapiInventory').doc(invId).set(invPatch, { merge: true });
+      snapPatch('inventory', invId, invPatch);
+      pushedTaxSkus.set(sku, invPatch); // keep our values even if Amazon's read-back lags behind
+      changedSkus.add(sku);             // re-read from Amazon in Step 2c to confirm
+      console.log(`GST/HSN updated for SKU ${sku}:${taxCode ? ' tax ' + taxCode : ''}${hsn ? ' HSN ' + hsn : ''}`);
     } catch (e) {
-      await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
-      console.warn(`HSN update FAILED for SKU ${sku}:`, e.message || e);
+      const error = e.message || String(e);
+      await doc.ref.update({ status: 'failed', error, failedAt: admin.firestore.FieldValue.serverTimestamp() });
+      snapPatch('inventory', invId, { lastTaxPush: { status: 'failed', at: Date.now(), error, taxCode: taxCode || null, hsnCode: hsn || null } });
+      console.warn(`GST/HSN update FAILED for SKU ${sku}:`, error);
     }
     await new Promise((r) => setTimeout(r, 800));
   }
@@ -717,9 +765,12 @@ async function run() {
       const hsnBatch = db.batch();
       let hsnWrites = 0;
       for (const [sku, data] of Object.entries(hsnData)) {
-        hsnBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`),
-          { hsnCode: data.hsnCode, taxCode: data.taxCode });
-        snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { hsnCode: data.hsnCode, taxCode: data.taxCode });
+        // Amazon can take a few minutes to show a change we just pushed - keep our pushed values for now.
+        const pushed = pushedTaxSkus.get(sku);
+        const hsnCode = pushed && pushed.hsnCode ? pushed.hsnCode : data.hsnCode;
+        const taxCode = pushed && pushed.taxCode ? pushed.taxCode : data.taxCode;
+        hsnBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`), { hsnCode, taxCode });
+        snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { hsnCode, taxCode });
         hsnWrites++;
       }
       if (hsnWrites > 0) await hsnBatch.commit();
