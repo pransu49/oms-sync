@@ -30,6 +30,8 @@ const skuToAsinMap = {};
 const productTypeCache = {};
 const changedSkus = new Set();
 const pushedTaxSkus = new Map(); // sku -> values we just pushed this run
+let inventoryFresh = false;          // true once this run's listings report has been read
+const reportSkus = new Set();        // SKUs present in this run's listings report
 
 // ── QUOTA SAVER: compact snapshot ─────────────────────────────────────────────
 // Instead of reading every inventory/pricing/order document on every run (and on every
@@ -318,7 +320,7 @@ async function syncInventory() {
   const skuIdx = headers.indexOf('seller-sku'), qtyIdx = headers.indexOf('quantity'),
     priceIdx = headers.indexOf('price'), asinIdx = headers.indexOf('asin1'),
     nameIdx = headers.indexOf('item-name'), categoryIdx = headers.indexOf('zshop-category1'),
-    mrpIdx = headers.indexOf('maximum-retail-price');
+    mrpIdx = headers.indexOf('maximum-retail-price'), fcIdx = headers.indexOf('fulfillment-channel');
   console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx, 'mrp:', mrpIdx);
 
   // Compare against the snapshot (0 reads) instead of reading every inventory doc.
@@ -327,6 +329,7 @@ async function syncInventory() {
   const batch = db.batch();
   let changedCount = 0, skippedCount = 0;
   const asins = [];
+  inventoryFresh = true; // the report arrived - safe to act on these stock numbers this run
 
   for (let i = 1; i < lines.length; i++) {
     const cols = lines[i].split('\t');
@@ -337,6 +340,9 @@ async function syncInventory() {
     if (asin) { asins.push(asin); skuToAsinMap[sku] = asin; }
 
     const docId = `${ACCOUNT_LABEL}_${sku}`;
+    const fc = fcIdx >= 0 ? (cols[fcIdx] || '').trim() : '';
+    reportSkus.add(sku);
+    if (SNAP.inventory[docId]) SNAP.inventory[docId].fulfillmentChannel = fc || 'DEFAULT';
     const newData = {
       account: ACCOUNT_LABEL, sku,
       name: cols[nameIdx] || '',
@@ -356,7 +362,7 @@ async function syncInventory() {
     if (changed) {
       batch.set(db.collection('spapiInventory').doc(docId),
         { ...newData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-      snapPatch('inventory', docId, newData);
+      snapPatch('inventory', docId, { ...newData, fulfillmentChannel: fc || 'DEFAULT' });
       changedCount++;
     } else { skippedCount++; }
   }
@@ -696,6 +702,133 @@ async function applyPendingListingDeletions(sellerId) {
   }
 }
 
+
+// ── STOCK GUARD: follow LOTS stock on Amazon ────────────────────────────────────
+// Rule (asked for by the owner):
+//   • LOTS stock below STOCK_GUARD_MIN (10)  → set the Amazon listing to 0 (out of stock),
+//     remembering the Amazon stock it had.
+//   • LOTS stock back at 10 or more          → put that remembered Amazon stock back.
+// Safety:
+//   • Only listings whose LOTS link is CONFIRMED (saved ASIN mapping or saved name mapping) -
+//     never on a name guess, so a wrong match can't switch off a good product.
+//   • Only self-ship / Easy Ship listings (FBA stock is controlled by Amazon, not us).
+//   • Only when this run's Amazon listings report was read (never on stale numbers).
+//   • Circuit breaker: if LOTS looks broken (catalogue missing, or it would switch off more than
+//     STOCK_GUARD_MAX_ZERO listings in one run) nothing is changed and the reason is logged.
+// State lives in spapiStockGuard/<account> (1 read + 1 write per run).
+const STOCK_GUARD_MIN = 10;
+const STOCK_GUARD_MAX_ZERO = 60;
+function normalizeName(e) { return String(e).toLowerCase().replace(/[|/,_\-()]/g, ' ').replace(/[^a-z0-9. ]/g, ' ').replace(/\s+/g, ' ').trim(); }
+
+async function loadLotsForGuard() {
+  const [lotsSnap, mapSnap, asinDoc] = await Promise.all([
+    dbMain.collection('aikm_admin').doc('lotsCatalog').collection('chunks').get(),
+    dbMain.collection('aikm_admin').doc('masterMapping').collection('chunks').get(),
+    dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').get(),
+  ]);
+  const lotsByCode = {};
+  lotsSnap.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code != null) lotsByCode[String(p.code)] = p; }));
+  const nameMap = {};
+  mapSnap.forEach((d) => Object.assign(nameMap, d.data().map || {}));
+  const asinMap = asinDoc.exists ? (asinDoc.data().map || {}) : {};
+  return { lotsByCode, nameMap, asinMap };
+}
+
+function confirmedLotsFor(item, L) {
+  const a = item.asin && L.asinMap[item.asin];
+  if (a && a.code && (a.vendorName || 'LOTS') === 'LOTS') return L.lotsByCode[String(a.code)] || null;
+  const n = item.name && L.nameMap[normalizeName(item.name)];
+  if (n && n.code && n.vendorName === 'LOTS') return L.lotsByCode[String(n.code)] || null;
+  return null;
+}
+
+async function setAmazonQuantity(sellerId, sku, qty) {
+  const productType = getProductTypeForSku(sku);
+  if (!productType) throw new Error('No known product type for this SKU yet.');
+  assertListingsOk(await spClient.callAPI({
+    operation: 'patchListingsItem', endpoint: 'listingsItems',
+    path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
+    body: { productType, patches: [{ op: 'replace', path: '/attributes/fulfillment_availability',
+      value: [{ fulfillment_channel_code: 'DEFAULT', quantity: qty }] }] },
+  }));
+}
+
+async function runStockGuard(sellerId) {
+  if (!sellerId) { console.log('Stock guard skipped: SPAPI_SELLER_ID not set.'); return; }
+  if (!inventoryFresh) { console.log('Stock guard skipped: Amazon listings report not read this run.'); return; }
+  const L = await loadLotsForGuard();
+  const lotsCount = Object.keys(L.lotsByCode).length;
+  if (lotsCount < 500) { console.warn(`Stock guard STOPPED: LOTS catalogue has only ${lotsCount} products - looks incomplete.`); return; }
+
+  const guardRef = db.collection('spapiStockGuard').doc(ACCOUNT_LABEL);
+  const guardDoc = await guardRef.get();
+  const guard = guardDoc.exists ? (guardDoc.data().items || {}) : {};
+
+  const toZero = [], toRestore = [], release = [];
+  for (const item of Object.values(SNAP.inventory)) {
+    if (!item.sku || item.account !== ACCOUNT_LABEL || !reportSkus.has(item.sku)) continue; // only live listings
+    if ((item.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT') continue; // FBA - Amazon controls stock
+    const lots = confirmedLotsFor(item, L);
+    const g = guard[item.sku];
+    const lotsQty = lots ? parseFloat(lots.qty) : NaN;
+    const amzQty = parseInt(item.quantity, 10) || 0;
+    const docId = `${ACCOUNT_LABEL}_${item.sku}`;
+    SNAP.inventory[docId].lotsQty = isNaN(lotsQty) ? null : lotsQty;
+    SNAP.inventory[docId].stockGuard = g ? { zeroed: true, prevQty: g.prevQty, since: g.since } : null;
+    if (isNaN(lotsQty)) { if (g) release.push(item.sku); continue; } // link removed / no LOTS stock - stop managing it
+    if (lotsQty < STOCK_GUARD_MIN) {
+      if (amzQty > 0) toZero.push({ item, lotsQty, amzQty, prevQty: g ? g.prevQty : amzQty, since: g ? g.since : Date.now() });
+    } else if (g) {
+      toRestore.push({ item, lotsQty, amzQty, prevQty: g.prevQty });
+    }
+  }
+  release.forEach((sku) => { delete guard[sku]; });
+
+  if (toZero.length > STOCK_GUARD_MAX_ZERO) {
+    console.warn(`Stock guard STOPPED: would switch off ${toZero.length} listings at once (limit ${STOCK_GUARD_MAX_ZERO}). Check the LOTS stock upload; nothing was changed.`);
+    await guardRef.set({ items: guard, blocked: { at: Date.now(), wouldZero: toZero.length }, updatedAt: Date.now() });
+    return;
+  }
+
+  let zeroed = 0, restored = 0, failed = 0;
+  for (const z of toZero) {
+    const docId = `${ACCOUNT_LABEL}_${z.item.sku}`;
+    try {
+      await setAmazonQuantity(sellerId, z.item.sku, 0);
+      guard[z.item.sku] = { prevQty: z.prevQty, since: z.since, lotsQtyAtZero: z.lotsQty };
+      snapPatch('inventory', docId, { quantity: 0, stockGuard: { zeroed: true, prevQty: z.prevQty, since: z.since },
+        lastStockPush: { status: 'applied', at: Date.now(), qty: 0, reason: `LOTS stock ${z.lotsQty} is below ${STOCK_GUARD_MIN}` } });
+      await db.collection('spapiInventory').doc(docId).set({ quantity: 0 }, { merge: true });
+      zeroed++;
+    } catch (e) {
+      failed++;
+      snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: 0, error: e.message || String(e) } });
+      console.warn(`Stock guard: could not set ${z.item.sku} to 0:`, e.message || e);
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  for (const r2 of toRestore) {
+    const docId = `${ACCOUNT_LABEL}_${r2.item.sku}`;
+    try {
+      if (r2.amzQty === 0 && r2.prevQty > 0) {
+        await setAmazonQuantity(sellerId, r2.item.sku, r2.prevQty);
+        await db.collection('spapiInventory').doc(docId).set({ quantity: r2.prevQty }, { merge: true });
+        snapPatch('inventory', docId, { quantity: r2.prevQty, lastStockPush: { status: 'applied', at: Date.now(), qty: r2.prevQty, reason: `LOTS stock back to ${r2.lotsQty}` } });
+        restored++;
+      }
+      delete guard[r2.item.sku];
+      snapPatch('inventory', docId, { stockGuard: null });
+    } catch (e) {
+      failed++;
+      snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: r2.prevQty, error: e.message || String(e) } });
+      console.warn(`Stock guard: could not restore ${r2.item.sku} to ${r2.prevQty}:`, e.message || e);
+    }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  await guardRef.set({ items: guard, blocked: null, updatedAt: Date.now() });
+  console.log(`Stock guard: ${zeroed} set out of stock, ${restored} restored, ${failed} failed, ${Object.keys(guard).length} currently held at 0.`);
+}
+
 async function run() {
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
   const test = await spClient.callAPI({ operation: 'getMarketplaceParticipations', endpoint: 'sellers' });
@@ -782,6 +915,9 @@ async function run() {
 
   console.log('Step 3: syncing competitive pricing...');
   await syncCompetitivePricing(asinsFromInventory);
+
+  console.log('Step 3a: stock guard (LOTS stock below 10 -> out of stock on Amazon)...');
+  await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
 
   console.log('Step 3b: saving compact snapshot for the Amazon page...');
   await writeSnapshot();
