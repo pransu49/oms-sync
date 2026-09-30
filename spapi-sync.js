@@ -716,6 +716,11 @@ async function applyPendingListingDeletions(sellerId) {
 //   • Circuit breaker: if LOTS looks broken (catalogue missing, or it would switch off more than
 //     STOCK_GUARD_MAX_ZERO listings in one run) nothing is changed and the reason is logged.
 // State lives in spapiStockGuard/<account> (1 read + 1 write per run).
+// SWITCHED OFF (owner decision, 1 Oct 2026): OMS Guru also pushes stock to Amazon, so two systems
+// were fighting. OMS Guru owns Amazon stock. This tool now only reads LOTS stock for the page, and
+// one time puts back any listing it had set to 0 earlier. Set to true only if OMS Guru's Amazon
+// inventory sync is turned off.
+const STOCK_GUARD_ENABLED = false;
 const STOCK_GUARD_MIN = 10;
 const STOCK_GUARD_MAX_ZERO = 60;
 function normalizeName(e) { return String(e).toLowerCase().replace(/[|/,_\-()]/g, ' ').replace(/[^a-z0-9. ]/g, ' ').replace(/\s+/g, ' ').trim(); }
@@ -783,6 +788,33 @@ async function runStockGuard(sellerId) {
     }
   }
   release.forEach((sku) => { delete guard[sku]; });
+
+  if (!STOCK_GUARD_ENABLED) {
+    // Undo: put back the Amazon stock of listings this tool had set to 0, then stop managing them.
+    let undone = 0, undoFailed = 0;
+    for (const [sku, g] of Object.entries(guard)) {
+      const docId = `${ACCOUNT_LABEL}_${sku}`, item = SNAP.inventory[docId];
+      const amzQty = item ? (parseInt(item.quantity, 10) || 0) : 0;
+      try {
+        if (item && reportSkus.has(sku) && amzQty === 0 && g.prevQty > 0) {
+          await setAmazonQuantity(sellerId, sku, g.prevQty);
+          await db.collection('spapiInventory').doc(docId).set({ quantity: g.prevQty }, { merge: true });
+          snapPatch('inventory', docId, { quantity: g.prevQty, lastStockPush: { status: 'applied', at: Date.now(), qty: g.prevQty, reason: 'Stock rule switched off - previous Amazon stock put back' } });
+          undone++;
+        }
+        if (item) snapPatch('inventory', docId, { stockGuard: null });
+        delete guard[sku];
+      } catch (e) {
+        undoFailed++;
+        if (item) snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: g.prevQty, error: e.message || String(e) } });
+        console.warn(`Stock guard undo: could not put back ${sku} to ${g.prevQty}:`, e.message || e);
+      }
+      await new Promise((r) => setTimeout(r, 800));
+    }
+    await guardRef.set({ items: guard, disabled: true, updatedAt: Date.now() });
+    console.log(`Stock guard is OFF (OMS Guru owns Amazon stock): ${undone} listing(s) put back, ${undoFailed} failed, ${Object.keys(guard).length} still to put back.`);
+    return;
+  }
 
   if (toZero.length > STOCK_GUARD_MAX_ZERO) {
     console.warn(`Stock guard STOPPED: would switch off ${toZero.length} listings at once (limit ${STOCK_GUARD_MAX_ZERO}). Check the LOTS stock upload; nothing was changed.`);
