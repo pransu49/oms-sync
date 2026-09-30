@@ -659,21 +659,21 @@ async function run() {
   const sellerId = process.env.SPAPI_SELLER_ID;
   if (sellerId) {
     console.log('Step 0b: applying any pending price updates...');
-    await applyPendingPriceUpdates(sellerId);
+    await applyPendingPriceUpdates(sellerId).catch((e) => console.warn('Skipped applyPendingPriceUpdates (sync continues):', e.message || e));
     console.log('Step 0c: applying any pending MRP updates...');
-    await applyPendingMrpUpdates(sellerId);
+    await applyPendingMrpUpdates(sellerId).catch((e) => console.warn('Skipped applyPendingMrpUpdates (sync continues):', e.message || e));
     console.log('Step 0d: applying any pending HSN/tax code updates...');
-    await applyPendingHsnUpdates(sellerId);
+    await applyPendingHsnUpdates(sellerId).catch((e) => console.warn('Skipped applyPendingHsnUpdates (sync continues):', e.message || e));
     console.log('Step 0e: applying any pending new-listing requests...');
-    await applyPendingNewListings(sellerId);
+    await applyPendingNewListings(sellerId).catch((e) => console.warn('Skipped applyPendingNewListings (sync continues):', e.message || e));
     console.log('Step 0f: applying any pending listing deletions...');
-    await applyPendingListingDeletions(sellerId);
+    await applyPendingListingDeletions(sellerId).catch((e) => console.warn('Skipped applyPendingListingDeletions (sync continues):', e.message || e));
   } else {
     console.log('Step 0b-0f: SPAPI_SELLER_ID not set - skipping all listing write-backs this run.');
   }
 
   console.log('Step 0g: flagging any pending refund requests for manual action...');
-  await flagPendingRefundRequests();
+  await flagPendingRefundRequests().catch((e) => console.warn('Skipped flagPendingRefundRequests (sync continues):', e.message || e));
 
   console.log('Step 1: syncing orders...');
   const orders = await syncOrders();
