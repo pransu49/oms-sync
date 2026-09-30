@@ -6,6 +6,7 @@ const spaApp = admin.initializeApp(
   'spaApp'
 );
 const db = spaApp.firestore();
+db.settings({ ignoreUndefinedProperties: true });
 
 const mainApp = admin.initializeApp(
   { credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) },
@@ -29,10 +30,115 @@ const skuToAsinMap = {};
 const productTypeCache = {};
 const changedSkus = new Set();
 
+// ── QUOTA SAVER: compact snapshot ─────────────────────────────────────────────
+// Instead of reading every inventory/pricing/order document on every run (and on every
+// page open), the full data is kept in a few large "snapshot" documents:
+//   spapiSnapshots/<account>_meta              -> which chunks are current
+//   spapiSnapshots/<account>_<kind>_<run>_<n>  -> the data (kind = inventory/pricing/orders)
+// One sync run now costs ~10 reads instead of thousands; one page open ~10 reads.
+// The individual documents are still written (only when changed) so nothing else breaks.
+const SNAP = { inventory: {}, pricing: {}, orders: {} };
+const SNAP_KINDS = ['inventory', 'pricing', 'orders'];
+const SNAP_COL = 'spapiSnapshots';
+const ORDERS_WINDOW_DAYS = 90;
+const CHUNK_BYTES = 700 * 1024; // Firestore max is 1 MiB per document - stay well under
+let prevSnapMeta = null;
+
+function plain(data) {
+  const out = {};
+  for (const [k, v] of Object.entries(data || {})) {
+    out[k] = v && typeof v.toMillis === 'function' ? v.toMillis() : v;
+  }
+  return out;
+}
+
+async function loadSnapshot() {
+  const metaDoc = await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_meta`).get();
+  if (metaDoc.exists && metaDoc.data().run) {
+    prevSnapMeta = metaDoc.data();
+    const refs = [];
+    for (const kind of SNAP_KINDS) {
+      const n = (prevSnapMeta.chunks || {})[kind] || 0;
+      for (let i = 0; i < n; i++) refs.push(db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${kind}_${prevSnapMeta.run}_${i}`));
+    }
+    const docs = refs.length ? await db.getAll(...refs) : [];
+    docs.forEach((d) => {
+      if (!d.exists) return;
+      const { kind, items } = d.data();
+      (items || []).forEach((it) => { if (it && it._id) SNAP[kind][it._id] = it; });
+    });
+    console.log(`Snapshot loaded (${1 + refs.length} reads): inventory ${Object.keys(SNAP.inventory).length}, pricing ${Object.keys(SNAP.pricing).length}, orders ${Object.keys(SNAP.orders).length}`);
+  } else {
+    // First run only: build the snapshot from the existing collections (one-time full read).
+    console.log('No snapshot yet - one-time bootstrap from existing collections...');
+    const cutoff = new Date(Date.now() - ORDERS_WINDOW_DAYS * 864e5).toISOString();
+    const [inv, pr, ord] = await Promise.all([
+      db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).get(),
+      db.collection('spapiCompetitivePricing').where('account', '==', ACCOUNT_LABEL).get(),
+      db.collection('spapiOrders').where('account', '==', ACCOUNT_LABEL).where('purchaseDate', '>=', cutoff).get(),
+    ]);
+    inv.forEach((d) => { SNAP.inventory[d.id] = { ...plain(d.data()), _id: d.id }; });
+    pr.forEach((d) => { SNAP.pricing[d.id] = { ...plain(d.data()), _id: d.id }; });
+    ord.forEach((d) => { SNAP.orders[d.id] = { ...plain(d.data()), _id: d.id }; });
+    console.log(`Bootstrap done: inventory ${inv.size}, pricing ${pr.size}, orders ${ord.size}`);
+  }
+}
+
+function snapPatch(kind, docId, patch) {
+  if (!SNAP[kind][docId] && !patch.account) return; // write-back for an item we don't track
+  SNAP[kind][docId] = { ...(SNAP[kind][docId] || {}), ...patch, _id: docId, updatedAt: Date.now() };
+}
+
+function chunkItems(items) {
+  const chunks = [];
+  let cur = [], size = 0;
+  for (const it of items) {
+    const b = Buffer.byteLength(JSON.stringify(it)) + 16;
+    if (cur.length && size + b > CHUNK_BYTES) { chunks.push(cur); cur = []; size = 0; }
+    cur.push(it); size += b;
+  }
+  if (cur.length) chunks.push(cur);
+  return chunks;
+}
+
+async function writeSnapshot() {
+  const cutoff = new Date(Date.now() - ORDERS_WINDOW_DAYS * 864e5).toISOString();
+  for (const [id, o] of Object.entries(SNAP.orders)) {
+    if (!o.purchaseDate || o.purchaseDate < cutoff) delete SNAP.orders[id];
+  }
+  const run = Date.now().toString(36);
+  const chunks = {}, counts = {};
+  for (const kind of SNAP_KINDS) {
+    const items = Object.values(SNAP[kind]);
+    counts[kind] = items.length;
+    const parts = chunkItems(items);
+    chunks[kind] = parts.length;
+    for (let i = 0; i < parts.length; i++) {
+      await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${kind}_${run}_${i}`).set({
+        account: ACCOUNT_LABEL, kind, run, index: i, items: parts[i],
+      });
+    }
+  }
+  // Switch the page over to the new chunks only after all of them are written.
+  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_meta`).set({
+    account: ACCOUNT_LABEL, run, chunks, counts, syncedAt: Date.now(),
+  });
+  // Remove the previous run's chunks (a little later, so an open page can finish reading).
+  if (prevSnapMeta && prevSnapMeta.run && prevSnapMeta.run !== run) {
+    await new Promise((r) => setTimeout(r, 15000));
+    const batch = db.batch();
+    for (const kind of SNAP_KINDS) {
+      const n = (prevSnapMeta.chunks || {})[kind] || 0;
+      for (let i = 0; i < n; i++) batch.delete(db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${kind}_${prevSnapMeta.run}_${i}`));
+    }
+    await batch.commit();
+  }
+  console.log(`Snapshot written: ${JSON.stringify(counts)} in ${JSON.stringify(chunks)} chunk(s)`);
+}
+
 async function loadProductTypeCache() {
-  const snap = await db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).get();
-  snap.forEach((d) => {
-    const data = d.data();
+  await loadSnapshot();
+  Object.values(SNAP.inventory).forEach((data) => {
     if (data.sku && data.amazonProductType) productTypeCache[data.sku] = data.amazonProductType;
     if (data.sku && data.asin) skuToAsinMap[data.sku] = data.asin;
   });
@@ -104,7 +210,7 @@ async function syncOrders() {
     await new Promise((r) => setTimeout(r, 600));
 
     const ref = db.collection('spapiOrders').doc(`${ACCOUNT_LABEL}_${order.AmazonOrderId}`);
-    batch.set(ref, {
+    const orderData = {
       account: ACCOUNT_LABEL,
       orderId: order.AmazonOrderId,
       status: order.OrderStatus,
@@ -117,8 +223,9 @@ async function syncOrders() {
       earliestShipDate: order.EarliestShipDate || null,
       latestShipDate: order.LatestShipDate || null,
       items, amazonFees,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    }, { merge: true });
+    };
+    batch.set(ref, { ...orderData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    snapPatch('orders', ref.id, orderData);
   }
 
   await batch.commit();
@@ -191,14 +298,8 @@ async function syncInventory() {
     mrpIdx = headers.indexOf('maximum-retail-price');
   console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx, 'mrp:', mrpIdx);
 
-  console.log('Fetching existing inventory docs for delta comparison...');
-  const existingSnap = await db.collection('spapiInventory').where('account', '==', ACCOUNT_LABEL).get();
-  const existingBySku = {};
-  existingSnap.forEach((d) => {
-    existingBySku[d.id] = d.data();
-    const data = d.data();
-    if (data.sku && data.amazonProductType) productTypeCache[data.sku] = data.amazonProductType;
-  });
+  // Compare against the snapshot (0 reads) instead of reading every inventory doc.
+  const existingBySku = SNAP.inventory;
 
   const batch = db.batch();
   let changedCount = 0, skippedCount = 0;
@@ -232,6 +333,7 @@ async function syncInventory() {
     if (changed) {
       batch.set(db.collection('spapiInventory').doc(docId),
         { ...newData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      snapPatch('inventory', docId, newData);
       changedCount++;
     } else { skippedCount++; }
   }
@@ -296,10 +398,8 @@ async function syncCompetitivePricing(asinList) {
   }
 
   const mySellerId = process.env.SPAPI_SELLER_ID || null;
-  console.log('Fetching existing competitive pricing docs for delta comparison...');
-  const existingSnap = await db.collection('spapiCompetitivePricing').where('account', '==', ACCOUNT_LABEL).get();
-  const existingByAsin = {};
-  existingSnap.forEach((d) => { existingByAsin[d.id] = d.data(); });
+  // Compare against the snapshot (0 reads) instead of reading every pricing doc.
+  const existingByAsin = SNAP.pricing;
 
   const batch = db.batch();
   let firstLogged = false, changedCount = 0, skippedCount = 0;
@@ -354,7 +454,7 @@ async function syncCompetitivePricing(asinList) {
       || old.iHoldBuyBox !== iHoldBuyBox || old.isDuplicate !== isDuplicate;
 
     if (changed) {
-      batch.set(db.collection('spapiCompetitivePricing').doc(docId), {
+      const pricingData = {
         account: ACCOUNT_LABEL, asin,
         mySkus: mySkusForAsin, isDuplicate, duplicateSkuCount: mySkusForAsin.length,
         myPrice, myLandedPrice, lowestCompetitorPrice: lowest,
@@ -362,8 +462,10 @@ async function syncCompetitivePricing(asinList) {
         buyBoxWinnerPrice: buyBoxWinner?.price ?? null,
         buyBoxWinnerSellerId: buyBoxWinner?.sellerId ?? null,
         rawOffers: offers.length, offers,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
+      };
+      batch.set(db.collection('spapiCompetitivePricing').doc(docId),
+        { ...pricingData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      snapPatch('pricing', docId, pricingData);
       changedCount++;
     } else { skippedCount++; }
   }
@@ -395,6 +497,7 @@ async function applyPendingPriceUpdates(sellerId) {
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       // Write new price directly to inventory so UI stays in sync
       await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ price: newPrice });
+      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { price: newPrice });
       console.log(`Price updated for SKU ${sku}: now ${newPrice}`);
     } catch (e) {
       await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -424,6 +527,7 @@ async function applyPendingMrpUpdates(sellerId) {
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       // Write new MRP directly to inventory so UI stays in sync
       await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ mrp: newMrp });
+      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { mrp: newMrp });
       console.log(`MRP updated for SKU ${sku}: now ${newMrp}`);
     } catch (e) {
       await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -453,6 +557,7 @@ async function applyPendingHsnUpdates(sellerId) {
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       // Write new taxCode directly to inventory so UI shows immediately after Refresh
       await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ taxCode: newHsn });
+      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { taxCode: newHsn });
       changedSkus.add(sku); // also re-fetch from Amazon in Step 2c to confirm
       console.log(`HSN updated for SKU ${sku}: now ${newHsn}`);
     } catch (e) {
@@ -522,11 +627,7 @@ async function applyPendingListingDeletions(sellerId) {
     const { sku } = doc.data();
     try {
       const asin = skuToAsinMap[sku] || null;
-      let invData = null;
-      if (asin) {
-        const existingSnap = await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).get();
-        invData = existingSnap.exists ? existingSnap.data() : null;
-      }
+      const invData = SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`] || null; // from snapshot - no read
       await spClient.callAPI({
         operation: 'deleteListingsItem', endpoint: 'listingsItems',
         path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
@@ -593,6 +694,7 @@ async function run() {
     if (!sku) continue;
     if (productTypeCache[sku] === category) { catSkipped++; continue; }
     catBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`), { amazonProductType: category });
+    snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { amazonProductType: category });
     productTypeCache[sku] = category;
     catWrites++;
   }
@@ -612,6 +714,7 @@ async function run() {
       for (const [sku, data] of Object.entries(hsnData)) {
         hsnBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`),
           { hsnCode: data.hsnCode, taxCode: data.taxCode });
+        snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { hsnCode: data.hsnCode, taxCode: data.taxCode });
         hsnWrites++;
       }
       if (hsnWrites > 0) await hsnBatch.commit();
@@ -623,6 +726,9 @@ async function run() {
 
   console.log('Step 3: syncing competitive pricing...');
   await syncCompetitivePricing(asinsFromInventory);
+
+  console.log('Step 3b: saving compact snapshot for the Amazon page...');
+  await writeSnapshot();
 
   console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
   try {
