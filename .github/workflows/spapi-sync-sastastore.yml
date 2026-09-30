@@ -1,10 +1,14 @@
 name: SP-API Sync (Sasta Store)
 
 on:
-  # PAUSED: Firestore read quota being exceeded — re-enable schedule once quota fix is deployed.
-  # schedule:
-  #   - cron: '0 */4 * * *'   # every 4 hours
+  schedule:
+    - cron: '30 */4 * * *'   # every 4 hours (30 min after Praso, so the two never overlap)
   workflow_dispatch: {}
+  push:                      # run right away whenever the sync script or this file is updated
+    branches: [main]
+    paths:
+      - 'spapi-sync.js'
+      - '.github/workflows/spapi-sync-sastastore.yml'
 
 jobs:
   sync:
@@ -21,10 +25,13 @@ jobs:
 
       - name: Run SP-API sync
         env:
+          # Same Amazon developer app as Praso - only the refresh token and seller ID differ per account.
           SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
           SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
           SPAPI_REFRESH_TOKEN: ${{ secrets.SPAPI_REFRESH_TOKEN_SASTASTORE }}
           SPAPI_SELLER_ID: ${{ secrets.SPAPI_SELLER_ID_SASTASTORE }}
+          # Same two Firebase projects as Praso (the Amazon page reads from the SP-API one).
+          FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           ACCOUNT_LABEL: sastastore
         run: node spapi-sync.js
