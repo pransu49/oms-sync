@@ -682,7 +682,12 @@ async function run() {
   const asinsFromInventory = await syncInventory();
 
   console.log('Step 2b: fetching real product categories for referral fee calc...');
-  const categoriesByAsin = await fetchProductCategories(asinsFromInventory);
+  // Speed-up: category rarely changes - only ask Amazon for ASINs we don't know yet
+  // (saves ~0.8 sec per product on every run).
+  const knownAsins = new Set(Object.entries(skuToAsinMap).filter(([sku]) => productTypeCache[sku]).map(([, asin]) => asin));
+  const asinsNeedingCategory = asinsFromInventory.filter((a) => !knownAsins.has(a));
+  console.log(`Category lookup needed for ${asinsNeedingCategory.length} of ${asinsFromInventory.length} ASINs (rest already known).`);
+  const categoriesByAsin = await fetchProductCategories(asinsNeedingCategory);
   console.log('Sample categories:', JSON.stringify(Object.entries(categoriesByAsin).slice(0, 10)));
 
   const asinToSku = {};
