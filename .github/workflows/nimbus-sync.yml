@@ -18,8 +18,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install firebase-admin node-fetch@2
+      - run: npm install firebase-admin
       - run: node nimbus-sync.js
         env:
           NIMBUS_API_KEY: ${{ secrets.NIMBUS_API_KEY }}
+          NIMBUS_API_SECRET: ${{ secrets.NIMBUS_API_SECRET }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
