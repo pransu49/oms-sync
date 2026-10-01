@@ -247,6 +247,14 @@ function slimOrder(row) {
     returnReason: row['Return Reason'] || '',
     returnDate: row['Return Date'] || '',
     warehouse: row['Warehouse Name'] || '',
+    // Address + invoice details — used by the console's NimbusPost bulk-upload file
+    buyerAddress1: row['Buyer Address1'] || '',
+    buyerAddress2: row['Buyer Address2'] || '',
+    buyerEmail: row['Buyer Email'] || '',
+    codCollectible: row['COD Collectible'] || '',
+    shippingCharge: row['Shipping Charge Per Item'] || '',
+    hsn: row['Hsn Code'] || '',
+    taxRate: row['Tax Rate'] || '',
   };
 }
 
