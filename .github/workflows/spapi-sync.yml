@@ -2,7 +2,8 @@ name: SP-API Sync (Praso)
 
 on:
   schedule:
-    - cron: '10 * * * *'    # every hour (at :10)
+    - cron: '10 * * * *'   # FULL sync (incl. competitor prices)
+    - cron: '25,40,55 * * * *'   # QUICK sync (stock, price, orders, pushes)
   workflow_dispatch: {}
   push:                      # run right away whenever the sync script is updated
     branches: [main]
@@ -36,5 +37,7 @@ jobs:
           SPAPI_SELLER_ID: ${{ secrets.SPAPI_SELLER_ID }}
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # Quick sync on the 15-minute schedules, full sync otherwise (incl. manual / code updates).
+          SYNC_MODE: ${{ github.event_name == 'schedule' && github.event.schedule != '10 * * * *' && 'fast' || 'full' }}
           ACCOUNT_LABEL: praso
         run: node spapi-sync.js

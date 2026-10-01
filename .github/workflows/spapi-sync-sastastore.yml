@@ -2,7 +2,9 @@ name: SP-API Sync (Sasta Store)
 
 on:
   schedule:
-    - cron: '40 */2 * * *'  # every 2 hours (at :40) - one run takes 45-75 min
+    - cron: '40 */2 * * *'   # FULL sync (incl. competitor prices)
+    - cron: '10,25,55 * * * *'   # QUICK sync (stock, price, orders, pushes)
+    - cron: '40 1-23/2 * * *'   # QUICK sync (stock, price, orders, pushes)
   workflow_dispatch: {}
   push:                      # run right away whenever the sync script or this file is updated
     branches: [main]
@@ -38,5 +40,7 @@ jobs:
           # Same two Firebase projects as Praso (the Amazon page reads from the SP-API one).
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # Quick sync on the 15-minute schedules, full sync otherwise (incl. manual / code updates).
+          SYNC_MODE: ${{ github.event_name == 'schedule' && github.event.schedule != '40 */2 * * *' && 'fast' || 'full' }}
           ACCOUNT_LABEL: sastastore
         run: node spapi-sync.js

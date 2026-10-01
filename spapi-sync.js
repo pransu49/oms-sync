@@ -26,6 +26,12 @@ const spClient = new SellingPartnerAPI({
 });
 
 const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
+// QUICK vs FULL sync
+//   quick (every 15 min): write-backs, orders changed since last sync, stock/price/MRP report.
+//   full  (hourly Praso / 2-hourly Sasta Store): everything, incl. competitor prices & buy box.
+const SYNC_MODE = String(process.env.SYNC_MODE || 'full').toLowerCase() === 'fast' ? 'fast' : 'full';
+const RUN_STARTED = Date.now();
+let ordersSyncedOk = false;
 const skuToAsinMap = {};
 const productTypeCache = {};
 const changedSkus = new Set();
@@ -124,7 +130,9 @@ async function writeSnapshot() {
   }
   // Switch the page over to the new chunks only after all of them are written.
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_meta`).set({
-    account: ACCOUNT_LABEL, run, chunks, counts, syncedAt: Date.now(),
+    account: ACCOUNT_LABEL, run, chunks, counts, syncedAt: Date.now(), mode: SYNC_MODE,
+    ordersSyncedAt: ordersSyncedOk ? RUN_STARTED : ((prevSnapMeta && prevSnapMeta.ordersSyncedAt) || null),
+    fullSyncedAt: SYNC_MODE === 'full' ? Date.now() : ((prevSnapMeta && prevSnapMeta.fullSyncedAt) || null),
   });
   // Remove the previous run's chunks (a little later, so an open page can finish reading).
   if (prevSnapMeta && prevSnapMeta.run && prevSnapMeta.run !== run) {
@@ -175,20 +183,30 @@ const TAX_CODE_RATE = {
 };
 
 async function syncOrders() {
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  const res = await spClient.callAPI({
-    operation: 'getOrders',
-    endpoint: 'orders',
-    query: { MarketplaceIds: [MARKETPLACE_ID], CreatedAfter: since },
-  });
+  // Orders changed since the last sync (new orders AND status changes like cancellations),
+  // with a 10-minute overlap. First run / no history: orders created in the last 24 hours.
+  const lastOk = prevSnapMeta && prevSnapMeta.ordersSyncedAt;
+  const query = { MarketplaceIds: [MARKETPLACE_ID] };
+  if (lastOk && RUN_STARTED - lastOk < 3 * 864e5) query.LastUpdatedAfter = new Date(lastOk - 10 * 60 * 1000).toISOString();
+  else query.CreatedAfter = new Date(RUN_STARTED - 24 * 60 * 60 * 1000).toISOString();
+  const orders = [];
+  let nextToken = null, pages = 0;
+  do {
+    const res = await spClient.callAPI({ operation: 'getOrders', endpoint: 'orders',
+      query: nextToken ? { MarketplaceIds: [MARKETPLACE_ID], NextToken: nextToken } : query });
+    orders.push(...(res.Orders || res.payload?.Orders || []));
+    nextToken = res.NextToken || res.payload?.NextToken || null;
+    if (nextToken) await new Promise((r) => setTimeout(r, 1000));
+  } while (nextToken && ++pages < 20);
+  console.log(`Orders: ${orders.length} changed since ${query.LastUpdatedAfter || query.CreatedAfter}`);
 
-  const orders = res.Orders || [];
   const batch = db.batch();
-  let financeFailCount = 0;
+  let financeFailCount = 0, written = 0, unchanged = 0;
 
   for (const order of orders) {
-    let items = [];
-    try {
+    const existing = SNAP.orders[`${ACCOUNT_LABEL}_${order.AmazonOrderId}`];
+    let items = existing && Array.isArray(existing.items) && existing.items.length ? existing.items : [];
+    if (!items.length) try {
       const itemsRes = await spClient.callAPI({
         operation: 'getOrderItems',
         endpoint: 'orders',
@@ -210,10 +228,10 @@ async function syncOrders() {
     } catch (e) {
       console.warn(`getOrderItems failed for ${order.AmazonOrderId}:`, e.message || e);
     }
-    await new Promise((r) => setTimeout(r, 600));
+    if (!(existing && existing.items && existing.items.length)) await new Promise((r) => setTimeout(r, 600));
 
-    let amazonFees = null;
-    try {
+    let amazonFees = existing && existing.amazonFees != null ? existing.amazonFees : null;
+    if (amazonFees == null && (!existing || SYNC_MODE === 'full')) try {
       const finRes = await spClient.callAPI({
         operation: 'listFinancialEventsByOrderId',
         endpoint: 'finances',
@@ -231,8 +249,8 @@ async function syncOrders() {
         });
       });
       if (hasFeeData) amazonFees = Math.abs(feeTotal);
-    } catch (e) { financeFailCount++; }
-    await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 600));
+    } catch (e) { financeFailCount++; await new Promise((r) => setTimeout(r, 600)); }
 
     const ref = db.collection('spapiOrders').doc(`${ACCOUNT_LABEL}_${order.AmazonOrderId}`);
     const orderData = {
@@ -249,12 +267,17 @@ async function syncOrders() {
       latestShipDate: order.LatestShipDate || null,
       items, amazonFees,
     };
+    const same = existing && ['status', 'total', 'isEasyShip', 'latestShipDate', 'amazonFees'].every((k) => String(existing[k] ?? '') === String(orderData[k] ?? ''))
+      && (existing.items || []).length === items.length;
+    if (same) { unchanged++; continue; }
     batch.set(ref, { ...orderData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     snapPatch('orders', ref.id, orderData);
+    written++;
   }
 
-  await batch.commit();
-  console.log(`Orders synced: ${orders.length}`);
+  if (written) await batch.commit();
+  ordersSyncedOk = true;
+  console.log(`Orders synced: ${written} saved, ${unchanged} unchanged`);
   if (financeFailCount > 0) console.log(`Finances API still blocked (${financeFailCount}/${orders.length} orders)`);
   return orders;
 }
@@ -357,7 +380,7 @@ async function syncInventory() {
       || old.mrp !== newData.mrp || old.name !== newData.name
       || old.asin !== newData.asin || old.category !== newData.category;
     const hsnMissing = !old || (old.hsnCode == null && old.taxCode == null);
-    if (changed || hsnMissing) changedSkus.add(sku);
+    if (SYNC_MODE === 'full' ? (changed || hsnMissing) : (!old || old.name !== newData.name || old.asin !== newData.asin)) changedSkus.add(sku);
 
     if (changed) {
       batch.set(db.collection('spapiInventory').doc(docId),
@@ -417,8 +440,40 @@ async function fetchHsnTaxData(sellerId, skuList) {
   return results;
 }
 
+// Amazon's batch call returns offers for up to 20 ASINs at once (rate: 1 call / 10 s), which is
+// ~3x faster than one-by-one. Any ASIN the batch doesn't return falls back to the single call.
+async function prefetchOffersBatch(asinList) {
+  const out = new Map();
+  let ok = 0, fail = 0;
+  for (let i = 0; i < asinList.length; i += 20) {
+    const group = asinList.slice(i, i + 20);
+    try {
+      const res = await spClient.callAPI({
+        operation: 'getItemOffersBatch', endpoint: 'productPricing',
+        body: { requests: group.map((a) => ({ uri: `/products/pricing/v0/items/${a}/offers`, method: 'GET', MarketplaceId: MARKETPLACE_ID, ItemCondition: 'New' })) },
+      });
+      const list = res.responses || (res.payload && res.payload.responses) || [];
+      list.forEach((r, idx) => {
+        const code = r.status && r.status.statusCode;
+        const p = (r.body && (r.body.payload || r.body)) || null;
+        const asin = (p && p.ASIN) || (r.request && (r.request.Asin || r.request.ASIN)) || group[idx];
+        if (code === 200 && p && asin) out.set(asin, p.Offers || []);
+      });
+      ok++;
+    } catch (e) {
+      fail++;
+      if (fail === 1) console.warn('getItemOffersBatch failed - those ASINs fall back to one-by-one:', e.message || e);
+      if (fail >= 3 && ok === 0) { console.warn('Batch competitor pricing not available - using one-by-one for all.'); break; }
+    }
+    await new Promise((r) => setTimeout(r, 10500));
+  }
+  console.log(`Competitor prices via batch: ${out.size} of ${asinList.length} ASINs`);
+  return out;
+}
+
 async function syncCompetitivePricing(asinList) {
   if (!asinList.length) return;
+  const prefetched = await prefetchOffersBatch(asinList);
 
   const asinToSkus = {};
   for (const [sku, asin] of Object.entries(skuToAsinMap)) {
@@ -436,13 +491,18 @@ async function syncCompetitivePricing(asinList) {
 
   for (const asin of asinList) {
     let offers = [];
+    const fromBatch = prefetched.has(asin);
     try {
-      const res = await spClient.callAPI({
-        operation: 'getItemOffers', endpoint: 'productPricing', path: { Asin: asin },
-        query: { MarketplaceId: MARKETPLACE_ID, ItemCondition: 'New' },
-      });
-      if (!firstLogged) { console.log('Sample getItemOffers for', asin, ':', JSON.stringify(res).slice(0, 500)); firstLogged = true; }
-      const rawOffers = res.Offers || res.payload?.Offers || [];
+      let rawOffers;
+      if (fromBatch) rawOffers = prefetched.get(asin);
+      else {
+        const res = await spClient.callAPI({
+          operation: 'getItemOffers', endpoint: 'productPricing', path: { Asin: asin },
+          query: { MarketplaceId: MARKETPLACE_ID, ItemCondition: 'New' },
+        });
+        if (!firstLogged) { console.log('Sample getItemOffers for', asin, ':', JSON.stringify(res).slice(0, 500)); firstLogged = true; }
+        rawOffers = res.Offers || res.payload?.Offers || [];
+      }
       offers = rawOffers.map((o) => ({
         sellerId: o.SellerId || '',
         price: parseFloat(o.ListingPrice?.Amount) || null,
@@ -454,7 +514,7 @@ async function syncCompetitivePricing(asinList) {
         condition: o.SubCondition || 'New',
       })).sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
     } catch (e) { console.warn(`getItemOffers failed for ${asin}:`, e.message || e); }
-    await new Promise((r) => setTimeout(r, 1200));
+    if (!fromBatch) await new Promise((r) => setTimeout(r, 1200));
 
     const lowest = offers[0]?.price ?? null;
     const buyBoxWinner = offers.find(o => o.isBuyBoxWinner) || null;
@@ -884,6 +944,7 @@ async function pruneRemovedListings(liveAsins) {
 }
 
 async function run() {
+  console.log(`=== ${SYNC_MODE === 'fast' ? 'QUICK' : 'FULL'} sync for ${ACCOUNT_LABEL} ===`);
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
   const test = await spClient.callAPI({ operation: 'getMarketplaceParticipations', endpoint: 'sellers' });
   console.log('Step 0 result:', JSON.stringify(test));
@@ -991,11 +1052,13 @@ async function run() {
     console.log('Step 2c skipped: SPAPI_SELLER_ID not set.');
   }
 
-  console.log('Step 3: syncing competitive pricing...');
-  await syncCompetitivePricing(asinsFromInventory);
+  if (SYNC_MODE === 'full') {
+    console.log('Step 3: syncing competitive pricing...');
+    await syncCompetitivePricing(asinsFromInventory);
+  } else console.log('Step 3: quick sync - competitor prices skipped (done in the full sync).');
 
   console.log('Step 3a: stock guard (LOTS stock below 10 -> out of stock on Amazon)...');
-  await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
+  if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
 
   console.log('Step 3a2: removing listings that no longer exist on Amazon...');
   await pruneRemovedListings(asinsFromInventory).catch((e) => console.warn('Prune skipped (sync continues):', e.message || e));
@@ -1003,6 +1066,7 @@ async function run() {
   console.log('Step 3b: saving compact snapshot for the Amazon page...');
   await writeSnapshot();
 
+  if (SYNC_MODE === 'fast') { console.log(`Quick sync complete in ${Math.round((Date.now() - RUN_STARTED) / 1000)}s.`); return; }
   console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
   try {
     const mfnTest = await spClient.callAPI({
