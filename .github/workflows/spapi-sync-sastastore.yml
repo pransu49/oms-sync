@@ -2,13 +2,18 @@ name: SP-API Sync (Sasta Store)
 
 on:
   schedule:
-    - cron: '30 */4 * * *'   # every 4 hours (30 min after Praso, so the two never overlap)
+    - cron: '40 */2 * * *'  # every 2 hours (at :40) - one run takes 45-75 min
   workflow_dispatch: {}
   push:                      # run right away whenever the sync script or this file is updated
     branches: [main]
     paths:
       - 'spapi-sync.js'
       - '.github/workflows/spapi-sync-sastastore.yml'
+
+# Never run two syncs for the same account at once - a new one waits for the current one.
+concurrency:
+  group: spapi-sastastore
+  cancel-in-progress: false
 
 jobs:
   sync:

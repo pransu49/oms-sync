@@ -2,13 +2,18 @@ name: SP-API Sync (Praso)
 
 on:
   schedule:
-    - cron: '0 */4 * * *'   # every 4 hours
+    - cron: '10 * * * *'    # every hour (at :10)
   workflow_dispatch: {}
   push:                      # run right away whenever the sync script is updated
     branches: [main]
     paths:
       - 'spapi-sync.js'
       - '.github/workflows/spapi-sync.yml'
+
+# Never run two syncs for the same account at once - a new one waits for the current one.
+concurrency:
+  group: spapi-praso
+  cancel-in-progress: false
 
 jobs:
   sync:
