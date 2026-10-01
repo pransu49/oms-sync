@@ -920,6 +920,16 @@ async function run() {
   console.log(`Step 2b done: ${catWrites} category update(s) written, ${catSkipped} unchanged (skipped).`);
 
   console.log('Step 2c: checking HSN/tax for changed/new SKUs...');
+  // Verify earlier GST/HSN pushes: re-read them from Amazon once (at least 30 min after the push)
+  // and mark each as live on Amazon or not.
+  const verifySkus = new Set();
+  for (const it of Object.values(SNAP.inventory)) {
+    const l = it.lastTaxPush;
+    if (it.sku && l && l.status === 'applied' && !l.checkedAt && Date.now() - l.at > 30 * 60 * 1000 && !pushedTaxSkus.has(it.sku)) {
+      verifySkus.add(it.sku); changedSkus.add(it.sku);
+    }
+  }
+  if (verifySkus.size) console.log(`Step 2c: verifying ${verifySkus.size} earlier GST/HSN push(es) against Amazon...`);
   if (sellerId) {
     const skusNeedingHsn = [...changedSkus];
     if (skusNeedingHsn.length === 0) {
@@ -939,6 +949,20 @@ async function run() {
         hsnWrites++;
       }
       if (hsnWrites > 0) await hsnBatch.commit();
+      let live = 0, notLive = 0;
+      for (const sku of verifySkus) {
+        const docId = `${ACCOUNT_LABEL}_${sku}`, it = SNAP.inventory[docId], l = it && it.lastTaxPush;
+        if (!l) continue;
+        const got = hsnData[sku] || {};
+        const okTax = !l.taxCode || got.taxCode === l.taxCode;
+        const okHsn = !l.hsnCode || String(got.hsnCode || '').replace(/\D/g, '') === String(l.hsnCode);
+        const verified = okTax && okHsn ? 'live' : 'not-live';
+        verified === 'live' ? live++ : notLive++;
+        snapPatch('inventory', docId, { lastTaxPush: { ...l, checkedAt: Date.now(), verified, seenTaxCode: got.taxCode || null, seenHsnCode: got.hsnCode || null } });
+        if (got.taxCode || got.hsnCode) snapPatch('inventory', docId, { taxCode: got.taxCode || null, hsnCode: got.hsnCode || null });
+        console.log(`Verify ${sku}: ${verified} (Amazon now tax ${got.taxCode || '-'}, HSN ${got.hsnCode || '-'})`);
+      }
+      if (verifySkus.size) console.log(`Step 2c: GST/HSN pushes verified - ${live} live on Amazon, ${notLive} not showing.`);
       console.log(`Step 2c done: ${hsnWrites} HSN/tax update(s) written for ${skusNeedingHsn.length} changed SKU(s).`);
     }
   } else {
