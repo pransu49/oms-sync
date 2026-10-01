@@ -3,7 +3,12 @@ name: NimbusPost Sync
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/15 * * * *'   # backup — main trigger is cron-job.org like your other syncs
+    - cron: '*/30 * * * *'   # every 30 min (cron-job.org can also trigger it, like the OMS sync)
+
+# never two runs at once
+concurrency:
+  group: nimbus-sync
+  cancel-in-progress: false
 
 jobs:
   sync:
@@ -16,6 +21,5 @@ jobs:
       - run: npm install firebase-admin node-fetch@2
       - run: node nimbus-sync.js
         env:
-          NIMBUS_EMAIL: ${{ secrets.NIMBUS_EMAIL }}
-          NIMBUS_PASSWORD: ${{ secrets.NIMBUS_PASSWORD }}
+          NIMBUS_API_KEY: ${{ secrets.NIMBUS_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}

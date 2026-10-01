@@ -1,137 +1,150 @@
 // nimbus-sync.js
-// Pulls order/shipment status + charges from NimbusPost (Old API, NP-API-KEY auth)
-// and syncs into Firestore — delta writes only, skips final-state shipments.
+// NimbusPost -> Firestore (project of FIREBASE_SERVICE_ACCOUNT, same one the Admin Console reads).
+//
+// Uses NimbusPost's account API (ship.nimbuspost.com/api, header NP-API-KEY).
+// Get the key in NimbusPost: Settings -> API -> Generate API Key, then save it in GitHub as
+// the secret NIMBUS_API_KEY.
+//
+// Writes (small, quota-friendly):
+//   nimbusDash/chunk_N     last DAYS_BACK days of shipments, compact rows (rewritten only if changed)
+//   nimbusDash/_meta       last sync time + counts
+//   nimbusIndex/byOrder    marketplace order id -> AWB + courier (used by Self-Ship confirmation)
 
 const admin = require('firebase-admin');
 const fetch = require('node-fetch');
+const crypto = require('crypto');
 
-const NIMBUS_BASE = 'https://api.nimbuspost.com/v1';
-const NIMBUS_EMAIL = process.env.NIMBUS_EMAIL;
-const NIMBUS_PASSWORD = process.env.NIMBUS_PASSWORD;
+const BASE = 'https://ship.nimbuspost.com/api';
+const API_KEY = (process.env.NIMBUS_API_KEY || '').trim();
+const DAYS_BACK = parseInt(process.env.NIMBUS_DAYS_BACK || '30', 10);
+const CHUNK = 700;
 
-const FINAL_STATUSES = ['delivered', 'cancelled', 'rto_delivered'];
+if (!API_KEY) {
+  console.error('Missing NIMBUS_API_KEY. In NimbusPost go to Settings -> API -> Generate API Key, then add it in GitHub -> Settings -> Secrets and variables -> Actions as NIMBUS_API_KEY.');
+  process.exit(1);
+}
 
-// ---- Firebase init ----
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
-// Login with the account email + password (GitHub secrets) -> short-lived token.
-async function login() {
-  const res = await fetch(`${NIMBUS_BASE}/users/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: NIMBUS_EMAIL, password: NIMBUS_PASSWORD }),
-  });
-  const text = await res.text();
-  let json; try { json = JSON.parse(text); } catch { json = null; }
-  const token = json && (typeof json.data === 'string' ? json.data : (json.data && (json.data.token || json.data.access_token)));
-  if (!token) throw new Error(`NimbusPost login failed (status ${res.status}): ${text.slice(0, 300)}`);
-  console.log('NimbusPost login OK');
-  return token;
+function ymd(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function rowsOf(json) {
   const d = json && json.data;
   if (Array.isArray(d)) return d;
-  if (d && Array.isArray(d.shipments)) return d.shipments;
-  if (d && Array.isArray(d.orders)) return d.orders;
   if (d && Array.isArray(d.data)) return d.data;
+  if (d && Array.isArray(d.shipments)) return d.shipments;
+  if (Array.isArray(json)) return json;
   return [];
 }
 
-async function fetchAllOrders() {
-  const token = await login();
-  const headers = { Authorization: `Bearer ${token}` };
-  // Try the shipment list first, then the order list (whichever this account's API returns).
-  for (const path of ['shipments', 'orders']) {
-    let page = 1, all = [];
-    while (page <= 60) {
-      const res = await fetch(`${NIMBUS_BASE}/${path}?page=${page}&per_page=100`, { headers });
-      const text = await res.text();
-      if (page === 1) console.log(`DEBUG /${path} status ${res.status}: ${text.slice(0, 1500)}`);
-      let json; try { json = JSON.parse(text); } catch { break; }
-      const rows = rowsOf(json);
-      if (!rows.length) break;
-      all = all.concat(rows);
-      if (rows.length < 100) break;
-      page++;
+async function fetchShipments() {
+  const to = new Date(), from = new Date();
+  from.setDate(from.getDate() - DAYS_BACK);
+  const all = [];
+  for (let page = 1; page <= 200; page++) {
+    const url = `${BASE}/shipments?page=${page}&per_page=100&sort=DESC&sort_by=id&from=${ymd(from)}&to=${ymd(to)}`;
+    let res, text;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      res = await fetch(url, { headers: { 'NP-API-KEY': API_KEY, Accept: 'application/json' } });
+      text = await res.text();
+      if (res.status !== 429) break;
+      await sleep(1500);
     }
-    if (all.length) { console.log(`Using /${path}: ${all.length} rows`); return all; }
+    if (page === 1) console.log(`DEBUG /shipments status ${res.status}: ${text.slice(0, 1500)}`);
+    let json; try { json = JSON.parse(text); } catch { throw new Error(`NimbusPost returned non-JSON (status ${res.status})`); }
+    if (json && json.status === false) throw new Error(`NimbusPost error: ${json.message || text.slice(0, 200)}`);
+    const rows = rowsOf(json);
+    if (!rows.length) break;
+    all.push(...rows);
+    if (rows.length < 100) break;
+    await sleep(150); // API limit is 10 requests/second
   }
-  return [];
+  return all;
 }
 
-async function syncOrders() {
-  const orders = await fetchAllOrders();
-  console.log(`Fetched ${orders.length} orders from NimbusPost`);
+const pick = (o, keys) => { for (const k of keys) { if (o && o[k] !== undefined && o[k] !== null && o[k] !== '') return o[k]; } return ''; };
 
-  const indexRef = db.collection('nimbusIndex').doc('statusIndex');
-  const indexSnap = await indexRef.get();
-  const prevIndex = indexSnap.exists ? indexSnap.data() : {};
-  const newIndex = {};
+// Map NimbusPost status text/code to one of our buckets
+function bucket(status, code) {
+  const s = String(status || '').toLowerCase(), c = String(code || '').toUpperCase();
+  if (c === 'RT-DL' || /rto.*deliver/.test(s)) return 'rto_delivered';
+  if (c === 'RT' || c === 'RT-IT' || /\brto\b|return/.test(s)) return 'rto';
+  if (c === 'DL' || /^delivered/.test(s)) return 'delivered';
+  if (/cancel/.test(s)) return 'cancelled';
+  if (c === 'OFD' || /out for delivery/.test(s)) return 'ofd';
+  if (c === 'EX' || /exception|ndr|undeliver|failed/.test(s)) return 'exception';
+  if (c === 'PP' || /pending pickup|booked|manifest|pickup scheduled|not picked|new/.test(s)) return 'pickup';
+  if (c === 'IT' || /transit|picked|shipped|dispatch|reached|hub/.test(s)) return 'transit';
+  return 'other';
+}
 
-  let batch = db.batch();
-  let writes = 0;
-  let pending = 0;
+function compact(s) {
+  const status = pick(s, ['status', 'shipment_status', 'current_status']);
+  const code = pick(s, ['status_code', 'current_status_code']);
+  return {
+    a: String(pick(s, ['awb_number', 'awb'])).trim(),
+    o: String(pick(s, ['order_number', 'order_no', 'channel_order_id', 'order_id'])).replace(/^#/, '').trim(),
+    c: String(pick(s, ['courier_name', 'courier'])),
+    st: String(status),
+    b: bucket(status, code),
+    cr: String(pick(s, ['created', 'created_at', 'shipment_date', 'booked_date', 'date'])).slice(0, 19),
+    pu: String(pick(s, ['pickup_date', 'picked_date', 'shipped_date', 'pickup_at'])).slice(0, 19),
+    ed: String(pick(s, ['edd', 'expected_delivery_date', 'estimated_delivery_date', 'promised_delivery_date'])).slice(0, 10),
+    dl: String(pick(s, ['delivered_date', 'delivery_date', 'delivered_at'])).slice(0, 19),
+    n: String(pick(s, ['consignee_name', 'customer_name', 'name', 'consignee'])),
+    ci: String(pick(s, ['consignee_city', 'city', 'destination'])),
+    pin: String(pick(s, ['consignee_pincode', 'pincode', 'pin'])),
+    pt: String(pick(s, ['payment_type', 'payment_method', 'payment_mode'])),
+    v: Number(pick(s, ['order_amount', 'invoice_value', 'total_amount', 'cod_amount']) || 0),
+    f: Number(pick(s, ['total_charges', 'freight_charges', 'shipping_charges', 'charged_amount']) || 0),
+    i: String(pick(s, ['shipment_info', 'additional_info'])),
+    ls: String(pick(s, ['last_status_time', 'status_updated_at', 'updated', 'updated_at'])).slice(0, 19),
+    nr: String(pick(s, ['ndr_reason', 'courier_remarks', 'remarks'])).slice(0, 120),
+  };
+}
 
-  for (const s of orders) {
-    const awb = s.awb_number || s.awb || s.order_number;
-    if (!awb) continue;
-    const status = (s.status || s.shipment_status || '').toLowerCase();
-    newIndex[awb] = status;
+const md5 = (x) => crypto.createHash('md5').update(JSON.stringify(x)).digest('hex');
 
-    if (prevIndex[awb] === status) continue;
-    if (FINAL_STATUSES.includes(prevIndex[awb])) continue;
+async function main() {
+  const raw = await fetchShipments();
+  console.log(`Fetched ${raw.length} shipments from NimbusPost (last ${DAYS_BACK} days)`);
+  if (raw.length) console.log('DEBUG first shipment fields:', Object.keys(raw[0]).join(', '));
+  const rows = raw.map(compact).filter((r) => r.a);
 
-    const ref = db.collection('nimbusShipments').doc(String(awb));
-    batch.set(ref, {
-      awb,
-      order_number: s.order_number || null,
-      courier: s.courier_name || s.courier || null,
-      status: s.status || s.shipment_status || null,
-      status_updated_at: admin.firestore.FieldValue.serverTimestamp(),
-      consignee: s.consignee_name || null,
-      destination: s.destination || s.consignee_city || null,
-      shipping_charge: s.freight_charges ?? s.freight_charge ?? s.shipping_charges ?? s.charged_amount ?? null,
-      cod_charge: s.cod_charges ?? s.cod_charge ?? null,
-      charged_weight: s.charged_weight ?? s.applied_weight ?? null,
-      other_charges: s.other_charges ?? null,
-      total_charge: s.total_charges ?? s.total_amount ?? null,
-      raw: s,
-    }, { merge: true });
-    writes++;
-    pending++;
-
-    if (pending >= 400) {
-      await batch.commit();
-      batch = db.batch();
-      pending = 0;
-    }
+  // ---- dashboard chunks (only changed chunks are rewritten) ----
+  const col = db.collection('nimbusDash');
+  const snap = await col.get();
+  const old = {}; snap.forEach((d) => { old[d.id] = d.get('hash'); });
+  const used = new Set(['_meta']);
+  let written = 0;
+  for (let i = 0, n = 0; i < rows.length; i += CHUNK, n++) {
+    const part = rows.slice(i, i + CHUNK), id = `chunk_${n}`, h = md5(part);
+    used.add(id);
+    if (old[id] !== h) { await col.doc(id).set({ rows: part, hash: h }); written++; }
   }
+  const stale = Object.keys(old).filter((id) => !used.has(id));
+  if (stale.length) { const b = db.batch(); stale.forEach((id) => b.delete(col.doc(id))); await b.commit(); }
+  const counts = {}; rows.forEach((r) => { counts[r.b] = (counts[r.b] || 0) + 1; });
+  await col.doc('_meta').set({ updatedAt: admin.firestore.FieldValue.serverTimestamp(), total: rows.length, counts, daysBack: DAYS_BACK });
 
-  if (pending > 0) await batch.commit();
-  await indexRef.set(newIndex);
-
-  // One small doc the console reads (1 read per page open): marketplace order id -> AWB + courier.
-  // Used by Self-Ship to fill tracking in the Amazon shipping-confirmation file automatically.
+  // ---- order id -> AWB index for Self-Ship confirmation ----
   const byOrder = {};
-  for (const s of orders) {
-    const r = s.raw || s;
-    const awb = String(s.awb_number || s.awb || '').trim();
-    const ord = String(s.order_number || s.order_id || s.order_no || r.order_number || '').replace(/^#/, '').trim();
-    if (!awb || !ord) continue;
-    const st = String(s.status || s.shipment_status || '').toLowerCase();
-    if (/cancel/.test(st) && byOrder[ord]) continue;
-    byOrder[ord] = { a: awb, c: String(s.courier_name || s.courier || ''), s: st };
-  }
+  rows.forEach((r) => {
+    if (!r.o) return;
+    if (r.b === 'cancelled' && byOrder[r.o]) return;
+    if (!byOrder[r.o] || byOrder[r.o].s === 'cancelled') byOrder[r.o] = { a: r.a, c: r.c, s: r.b };
+  });
   await db.collection('nimbusIndex').doc('byOrder').set({ orders: byOrder, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
-  console.log(`Order index: ${Object.keys(byOrder).length} order(s) with AWB.`);
 
-  console.log(`NimbusPost sync done. ${writes} shipment(s) updated.`);
+  console.log(`Dashboard: ${written} chunk(s) updated, ${stale.length} removed. Buckets: ${JSON.stringify(counts)}. Order index: ${Object.keys(byOrder).length}.`);
 }
 
-syncOrders().catch((err) => {
-  console.error('NimbusPost sync failed:', err);
+main().catch((err) => {
+  console.error('NimbusPost sync failed:', err.message || err);
   process.exit(1);
 });
