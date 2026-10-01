@@ -1,11 +1,16 @@
 name: Sync OMS Guru Orders
 
 on:
-  workflow_dispatch: {}      # triggered every 15 min by cron-job.org — GitHub's own
+  workflow_dispatch: {}      # triggered every 10 min by cron-job.org — GitHub's own
                               # free-tier `schedule:` trigger was removed here: running
                               # both side-by-side caused overlapping runs that raced each
                               # other writing to Firestore, leaving stale data behind
                               # even though every individual run reported success.
+
+# If a run is still going when the next trigger arrives, the new one waits (never two at once).
+concurrency:
+  group: oms-guru-sync
+  cancel-in-progress: false
 
 jobs:
   sync:
