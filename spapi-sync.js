@@ -861,6 +861,28 @@ async function runStockGuard(sellerId) {
   console.log(`Stock guard: ${zeroed} set out of stock, ${restored} restored, ${failed} failed, ${Object.keys(guard).length} currently held at 0.`);
 }
 
+// Listings deleted/replaced on Amazon disappear from the listings report. Drop them from the
+// page snapshot (so they stop showing as stock or "duplicate ASIN") and flag the old doc.
+// Safety: only when this run's report was read, and never if the report looks truncated.
+async function pruneRemovedListings(liveAsins) {
+  if (!inventoryFresh || !reportSkus.size) { console.log('Prune skipped: listings report not read this run.'); return; }
+  const mine = Object.entries(SNAP.inventory).filter(([, it]) => it.account === ACCOUNT_LABEL);
+  if (reportSkus.size < mine.length * 0.5) { console.warn(`Prune STOPPED: report has ${reportSkus.size} SKUs vs ${mine.length} known - looks incomplete.`); return; }
+  const gone = mine.filter(([, it]) => it.sku && !reportSkus.has(it.sku));
+  const batch = db.batch();
+  for (const [docId, it] of gone) {
+    delete SNAP.inventory[docId];
+    batch.set(db.collection('spapiInventory').doc(docId), { removedFromAmazon: true, removedAt: Date.now() }, { merge: true });
+  }
+  if (gone.length) await batch.commit();
+  const live = new Set(liveAsins || []);
+  let prunedPricing = 0;
+  if (live.size) for (const [docId, p] of Object.entries(SNAP.pricing)) {
+    if (p.account === ACCOUNT_LABEL && p.asin && !live.has(p.asin)) { delete SNAP.pricing[docId]; prunedPricing++; }
+  }
+  console.log(`Prune: ${gone.length} listing(s) no longer on Amazon removed${gone.length ? ' (' + gone.map(([, it]) => it.sku).slice(0, 20).join(', ') + ')' : ''}; ${prunedPricing} competitor-price row(s) removed.`);
+}
+
 async function run() {
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
   const test = await spClient.callAPI({ operation: 'getMarketplaceParticipations', endpoint: 'sellers' });
@@ -974,6 +996,9 @@ async function run() {
 
   console.log('Step 3a: stock guard (LOTS stock below 10 -> out of stock on Amazon)...');
   await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
+
+  console.log('Step 3a2: removing listings that no longer exist on Amazon...');
+  await pruneRemovedListings(asinsFromInventory).catch((e) => console.warn('Prune skipped (sync continues):', e.message || e));
 
   console.log('Step 3b: saving compact snapshot for the Amazon page...');
   await writeSnapshot();
