@@ -113,6 +113,21 @@ async function syncOrders() {
   if (pending > 0) await batch.commit();
   await indexRef.set(newIndex);
 
+  // One small doc the console reads (1 read per page open): marketplace order id -> AWB + courier.
+  // Used by Self-Ship to fill tracking in the Amazon shipping-confirmation file automatically.
+  const byOrder = {};
+  for (const s of orders) {
+    const r = s.raw || s;
+    const awb = String(s.awb_number || s.awb || '').trim();
+    const ord = String(s.order_number || s.order_id || s.order_no || r.order_number || '').replace(/^#/, '').trim();
+    if (!awb || !ord) continue;
+    const st = String(s.status || s.shipment_status || '').toLowerCase();
+    if (/cancel/.test(st) && byOrder[ord]) continue;
+    byOrder[ord] = { a: awb, c: String(s.courier_name || s.courier || ''), s: st };
+  }
+  await db.collection('nimbusIndex').doc('byOrder').set({ orders: byOrder, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+  console.log(`Order index: ${Object.keys(byOrder).length} order(s) with AWB.`);
+
   console.log(`NimbusPost sync done. ${writes} shipment(s) updated.`);
 }
 
