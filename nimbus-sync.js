@@ -6,7 +6,8 @@ const admin = require('firebase-admin');
 const fetch = require('node-fetch');
 
 const NIMBUS_BASE = 'https://api.nimbuspost.com/v1';
-const NIMBUS_API_KEY = process.env.NIMBUS_API_KEY;
+const NIMBUS_EMAIL = process.env.NIMBUS_EMAIL;
+const NIMBUS_PASSWORD = process.env.NIMBUS_PASSWORD;
 
 const FINAL_STATUSES = ['delivered', 'cancelled', 'rto_delivered'];
 
@@ -15,34 +16,50 @@ const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
 const db = admin.firestore();
 
+// Login with the account email + password (GitHub secrets) -> short-lived token.
+async function login() {
+  const res = await fetch(`${NIMBUS_BASE}/users/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: NIMBUS_EMAIL, password: NIMBUS_PASSWORD }),
+  });
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = null; }
+  const token = json && (typeof json.data === 'string' ? json.data : (json.data && (json.data.token || json.data.access_token)));
+  if (!token) throw new Error(`NimbusPost login failed (status ${res.status}): ${text.slice(0, 300)}`);
+  console.log('NimbusPost login OK');
+  return token;
+}
+
+function rowsOf(json) {
+  const d = json && json.data;
+  if (Array.isArray(d)) return d;
+  if (d && Array.isArray(d.shipments)) return d.shipments;
+  if (d && Array.isArray(d.orders)) return d.orders;
+  if (d && Array.isArray(d.data)) return d.data;
+  return [];
+}
+
 async function fetchAllOrders() {
-  let page = 1;
-  let all = [];
-  let debugged = false;
-
-  while (true) {
-    const res = await fetch(`${NIMBUS_BASE}/orders?page=${page}&per_page=100`, {
-      headers: { 'NP-API-KEY': NIMBUS_API_KEY },
-    });
-    const text = await res.text();
-
-    if (!debugged) {
-      console.log('--- DEBUG: orders response status ---', res.status);
-      console.log('--- DEBUG: orders response body (first 2000 chars) ---');
-      console.log(text.slice(0, 2000));
-      debugged = true;
+  const token = await login();
+  const headers = { Authorization: `Bearer ${token}` };
+  // Try the shipment list first, then the order list (whichever this account's API returns).
+  for (const path of ['shipments', 'orders']) {
+    let page = 1, all = [];
+    while (page <= 60) {
+      const res = await fetch(`${NIMBUS_BASE}/${path}?page=${page}&per_page=100`, { headers });
+      const text = await res.text();
+      if (page === 1) console.log(`DEBUG /${path} status ${res.status}: ${text.slice(0, 1500)}`);
+      let json; try { json = JSON.parse(text); } catch { break; }
+      const rows = rowsOf(json);
+      if (!rows.length) break;
+      all = all.concat(rows);
+      if (rows.length < 100) break;
+      page++;
     }
-
-    let json;
-    try { json = JSON.parse(text); } catch { break; }
-
-    const rows = json?.data?.orders || json?.data || [];
-    if (!Array.isArray(rows) || rows.length === 0) break;
-    all = all.concat(rows);
-    if (rows.length < 100) break;
-    page++;
+    if (all.length) { console.log(`Using /${path}: ${all.length} rows`); return all; }
   }
-  return all;
+  return [];
 }
 
 async function syncOrders() {
