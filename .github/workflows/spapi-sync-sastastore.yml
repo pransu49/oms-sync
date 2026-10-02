@@ -5,7 +5,11 @@ on:
     - cron: '40 */2 * * *'   # FULL sync (incl. competitor prices)
     - cron: '10,25,55 * * * *'   # QUICK sync (stock, price, orders, pushes)
     - cron: '40 1-23/2 * * *'   # QUICK sync (stock, price, orders, pushes)
-  workflow_dispatch: {}
+  workflow_dispatch:         # also triggered by cron-job.org (GitHub's own timer skips many runs)
+    inputs:
+      mode:
+        description: 'fast = stock/price/orders only, full = everything incl. competitor prices'
+        default: 'full'
   push:                      # run right away whenever the sync script or this file is updated
     branches: [main]
     paths:
@@ -41,6 +45,6 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           # Quick sync on the 15-minute schedules, full sync otherwise (incl. manual / code updates).
-          SYNC_MODE: ${{ github.event_name == 'schedule' && github.event.schedule != '40 */2 * * *' && 'fast' || 'full' }}
+          SYNC_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode) || (github.event_name == 'schedule' && github.event.schedule != '40 */2 * * *' && 'fast') || 'full' }}
           ACCOUNT_LABEL: sastastore
         run: node spapi-sync.js
