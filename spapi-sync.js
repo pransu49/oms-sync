@@ -191,14 +191,16 @@ async function syncOrders() {
   const query = { MarketplaceIds: [MARKETPLACE_ID] };
   if (lastOk && RUN_STARTED - lastOk < 3 * 864e5) query.LastUpdatedAfter = new Date(lastOk - 10 * 60 * 1000).toISOString();
   else query.CreatedAfter = new Date(RUN_STARTED - 24 * 60 * 60 * 1000).toISOString();
-  // One-time backfill: re-read the last 90 days of orders once so older orders also get the
-  // deliver-by date (order items are reused from the snapshot - no extra item calls).
-  if (!(prevSnapMeta && prevSnapMeta.deliveryBackfilled)) {
+  // One-time backfill: only for orders ALREADY in the snapshot that lack the deliver-by date.
+  // Re-read from the oldest such order onwards; orders we never had are skipped (no item calls).
+  const needDates = Object.values(SNAP.orders).filter((o) => o.account === ACCOUNT_LABEL && !o.latestDeliveryDate && o.purchaseDate);
+  if (!(prevSnapMeta && prevSnapMeta.deliveryBackfilled) && needDates.length) {
+    const oldest = needDates.reduce((m, o) => (o.purchaseDate < m ? o.purchaseDate : m), needDates[0].purchaseDate);
     delete query.LastUpdatedAfter;
-    query.CreatedAfter = new Date(RUN_STARTED - ORDERS_WINDOW_DAYS * 864e5).toISOString();
+    query.CreatedAfter = new Date(new Date(oldest).getTime() - 60 * 60 * 1000).toISOString();
     deliveryBackfillRun = true;
-    console.log('Orders: one-time 90-day backfill for deliver-by dates');
-  }
+    console.log(`Orders: one-time deliver-by backfill for ${needDates.length} existing orders (from ${oldest})`);
+  } else if (!(prevSnapMeta && prevSnapMeta.deliveryBackfilled)) deliveryBackfillRun = true;
   const orders = [];
   let nextToken = null, pages = 0;
   do {
@@ -210,11 +212,15 @@ async function syncOrders() {
   } while (nextToken && ++pages < 40);
   console.log(`Orders: ${orders.length} changed since ${query.LastUpdatedAfter || query.CreatedAfter}`);
 
-  const batch = db.batch();
+  let batch = db.batch();
   let financeFailCount = 0, written = 0, unchanged = 0;
 
+  let pending = 0;
+  const flush = async () => { if (pending) { await batch.commit(); batch = db.batch(); pending = 0; } };
   for (const order of orders) {
     const existing = SNAP.orders[`${ACCOUNT_LABEL}_${order.AmazonOrderId}`];
+    // During the backfill, skip old orders we never tracked (and are not recently updated).
+    if (deliveryBackfillRun && !existing && order.LastUpdateDate && (lastOk ? new Date(order.LastUpdateDate).getTime() < lastOk - 10 * 60 * 1000 : new Date(order.PurchaseDate).getTime() < RUN_STARTED - 864e5)) continue;
     let items = existing && Array.isArray(existing.items) && existing.items.length ? existing.items : [];
     if (!items.length) try {
       const itemsRes = await spClient.callAPI({
@@ -285,9 +291,10 @@ async function syncOrders() {
     batch.set(ref, { ...orderData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     snapPatch('orders', ref.id, orderData);
     written++;
+    if (++pending >= 400) await flush(); // Firestore allows max 500 writes per batch
   }
 
-  if (written) await batch.commit();
+  await flush();
   ordersSyncedOk = true;
   console.log(`Orders synced: ${written} saved, ${unchanged} unchanged`);
   if (financeFailCount > 0) console.log(`Finances API still blocked (${financeFailCount}/${orders.length} orders)`);
