@@ -32,6 +32,7 @@ const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
 const SYNC_MODE = String(process.env.SYNC_MODE || 'full').toLowerCase() === 'fast' ? 'fast' : 'full';
 const RUN_STARTED = Date.now();
 let ordersSyncedOk = false;
+let deliveryBackfillRun = false;
 const skuToAsinMap = {};
 const productTypeCache = {};
 const changedSkus = new Set();
@@ -132,6 +133,7 @@ async function writeSnapshot() {
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_meta`).set({
     account: ACCOUNT_LABEL, run, chunks, counts, syncedAt: Date.now(), mode: SYNC_MODE,
     ordersSyncedAt: ordersSyncedOk ? RUN_STARTED : ((prevSnapMeta && prevSnapMeta.ordersSyncedAt) || null),
+    deliveryBackfilled: !!((prevSnapMeta && prevSnapMeta.deliveryBackfilled) || (deliveryBackfillRun && ordersSyncedOk)),
     fullSyncedAt: SYNC_MODE === 'full' ? Date.now() : ((prevSnapMeta && prevSnapMeta.fullSyncedAt) || null),
   });
   // Remove the previous run's chunks (a little later, so an open page can finish reading).
@@ -189,6 +191,14 @@ async function syncOrders() {
   const query = { MarketplaceIds: [MARKETPLACE_ID] };
   if (lastOk && RUN_STARTED - lastOk < 3 * 864e5) query.LastUpdatedAfter = new Date(lastOk - 10 * 60 * 1000).toISOString();
   else query.CreatedAfter = new Date(RUN_STARTED - 24 * 60 * 60 * 1000).toISOString();
+  // One-time backfill: re-read the last 90 days of orders once so older orders also get the
+  // deliver-by date (order items are reused from the snapshot - no extra item calls).
+  if (!(prevSnapMeta && prevSnapMeta.deliveryBackfilled)) {
+    delete query.LastUpdatedAfter;
+    query.CreatedAfter = new Date(RUN_STARTED - ORDERS_WINDOW_DAYS * 864e5).toISOString();
+    deliveryBackfillRun = true;
+    console.log('Orders: one-time 90-day backfill for deliver-by dates');
+  }
   const orders = [];
   let nextToken = null, pages = 0;
   do {
@@ -197,7 +207,7 @@ async function syncOrders() {
     orders.push(...(res.Orders || res.payload?.Orders || []));
     nextToken = res.NextToken || res.payload?.NextToken || null;
     if (nextToken) await new Promise((r) => setTimeout(r, 1000));
-  } while (nextToken && ++pages < 20);
+  } while (nextToken && ++pages < 40);
   console.log(`Orders: ${orders.length} changed since ${query.LastUpdatedAfter || query.CreatedAfter}`);
 
   const batch = db.batch();
@@ -265,9 +275,11 @@ async function syncOrders() {
       shipServiceLevel: order.ShipServiceLevel || null,
       earliestShipDate: order.EarliestShipDate || null,
       latestShipDate: order.LatestShipDate || null,
+      earliestDeliveryDate: order.EarliestDeliveryDate || null,
+      latestDeliveryDate: order.LatestDeliveryDate || null, // Amazon's "deliver by" date
       items, amazonFees,
     };
-    const same = existing && ['status', 'total', 'isEasyShip', 'latestShipDate', 'amazonFees'].every((k) => String(existing[k] ?? '') === String(orderData[k] ?? ''))
+    const same = existing && ['status', 'total', 'isEasyShip', 'latestShipDate', 'latestDeliveryDate', 'amazonFees'].every((k) => String(existing[k] ?? '') === String(orderData[k] ?? ''))
       && (existing.items || []).length === items.length;
     if (same) { unchanged++; continue; }
     batch.set(ref, { ...orderData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
