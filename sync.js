@@ -230,6 +230,7 @@ function slimOrder(row) {
     asin: findField(row, ['ASIN', 'Asin', 'Extra Field', 'Product Asin']),
     productName: row['Product Name'] || '',
     channel: row['Channel Name'] || '',
+    channelId: String(row['Channel Id'] || '').trim(),
     category: row['Category Name'] || '',
     price: row['Selling Price Per Item'] || '',
     qty: row['Qty'] || '',

@@ -1,0 +1,31 @@
+name: Push NimbusPost tracking to OMS Guru
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = only show what would be pushed'
+        required: false
+        default: 'false'
+
+concurrency:
+  group: oms-push-tracking
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node oms-push-tracking.js
+        env:
+          OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
+          OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          DRY_RUN: ${{ inputs.dry_run }}
