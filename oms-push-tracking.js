@@ -84,6 +84,15 @@ async function main() {
     if (pushed[id] && now - pushed[id].t < REPUSH_AFTER_H * 3600e3 && pushed[id].a === n.a) { skipped.recentlyPushed++; continue; }
     rows.push({ chId, id, awb: n.a, courier: n.c || '' });
   }
+  { // match check (counts only)
+    let inNimbus = 0, sameAwb = 0, omsHasOther = 0, pendNoNb = 0;
+    for (const [id, lines] of Object.entries(byOrder)) {
+      const n = nimbus[id], oAwb = String((lines.find((o) => o.awb) || {}).awb || '').trim();
+      if (n && n.a) { inNimbus++; if (oAwb === n.a) sameAwb++; else if (oAwb) omsHasOther++; }
+      else if (!oAwb && lines.some((o) => /^new$/i.test(o.status || ''))) pendNoNb++;
+    }
+    console.log(`Match check: OMS Amazon orders found in NimbusPost ${inNimbus} · same AWB already in OMS ${sameAwb} · different AWB in OMS ${omsHasOther} · New in OMS with no NimbusPost AWB yet ${pendNoNb}`);
+  }
   console.log(`To push: ${rows.length} · skipped (no Channel Id yet): ${skipped.noChannelId} · skipped (sent < ${REPUSH_AFTER_H}h ago): ${skipped.recentlyPushed}`);
   rows.slice(0, 10).forEach((r) => console.log(`  ${r.id} -> ${r.awb} (${r.courier})`));
 
