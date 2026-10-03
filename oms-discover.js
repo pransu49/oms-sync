@@ -13,8 +13,17 @@ async function get(u) { const r = await fetch(BASE + u, { headers: { ...H, Cooki
   const dash = await get('/dashboard');
   const links = [...new Set((dash.t.match(/href="[^"]*import[^"]*"/gi) || []))]; console.log('import links:', links.join(' '));
   const page = await get('/import_data');
-  const r2 = await fetch(BASE + '/import_data', { method: 'POST', headers: { ...H, Cookie: ck(), 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest', Referer: BASE + '/import_data' }, body: 'id=49' });
-  upd(r2); const frag = await r2.text();
+  const tok = (page.t.match(/name="data\[ImportDataFileType\]\[oms_token\]" value="([^"]+)"/) || [])[1] || '';
+  console.log('meta/csrf hints:', (page.t.match(/<meta[^>]*(csrf|token)[^>]*>/gi) || []).map((m) => m.replace(/content="[^"]+"/, 'content="<x>"')).join(' '), '| ajaxSetup:', (page.t.match(/ajaxSetup[\s\S]{0,400}/) || [''])[0].replace(/\s+/g, ' ').replace(/['"][A-Za-z0-9+/=]{30,}['"]/g, '<x>'), '| cookies:', Object.keys(jar).join(','));
+  let frag = '', r2;
+  for (const [label, body, extra] of [
+    ['token-body', new URLSearchParams({ id: '49', 'data[ImportDataFileType][oms_token]': tok, _method: 'POST' }).toString(), {}],
+    ['token-hdr', 'id=49', { 'X-CSRF-Token': tok, 'X-Oms-Token': tok }],
+  ]) {
+    r2 = await fetch(BASE + '/import_data', { method: 'POST', headers: { ...H, Cookie: ck(), 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest', Referer: BASE + '/import_data', Origin: BASE, Accept: 'text/html, */*; q=0.01', ...extra }, body });
+    upd(r2); frag = await r2.text(); console.log('try', label, r2.status, frag.slice(0, 80).replace(/\s+/g, ' '));
+    if (r2.status === 200) break;
+  }
   const clean = (x) => x.replace(/value="[A-Za-z0-9+/=]{30,}"/g, 'value="<token>"').replace(/\s+/g, ' ');
   console.log('\n===== FRAGMENT', r2.status, frag.length); console.log(clean(frag).slice(0, 6000));
   const srcs = [...new Set((frag.match(/(src|href|action)=["'][^"']+["']/gi) || []))]; console.log('frag links:', srcs.join(' | '));
