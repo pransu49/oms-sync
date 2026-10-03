@@ -298,7 +298,49 @@ async function syncOrders() {
   ordersSyncedOk = true;
   console.log(`Orders synced: ${written} saved, ${unchanged} unchanged`);
   if (financeFailCount > 0) console.log(`Finances API still blocked (${financeFailCount}/${orders.length} orders)`);
+  await fillMissingDeliveryDates().catch((e) => console.warn('Deliver-by refresh skipped:', e.message || e));
   return orders;
+}
+
+// Amazon often adds the "deliver by" date a little after the order arrives, without changing
+// LastUpdateDate — so the normal "changed since" read never sees it. Re-ask Amazon for those
+// orders directly, 50 order IDs per call (a few calls per run, unshipped & newest first).
+async function fillMissingDeliveryDates() {
+  const now = Date.now();
+  const due = Object.values(SNAP.orders).filter((o) => {
+    if (o.account !== ACCOUNT_LABEL || o.latestDeliveryDate || o.isCanceled || !o.orderId) return false;
+    if (/^pending|cancel/i.test(o.status || '')) return false;
+    const open = /unshipped|partially/i.test(o.status || '');
+    if (!o.dlvCheckedAt) return true;                          // never re-checked
+    return open && now - o.dlvCheckedAt > 3 * 3600e3;          // open orders: retry every 3 h
+  }).sort((a, b) => (/unshipped|partially/i.test(b.status || '') - /unshipped|partially/i.test(a.status || '')) || String(b.purchaseDate).localeCompare(String(a.purchaseDate)));
+  if (!due.length) return;
+  const MAX_CALLS = 8;
+  let found = 0, checked = 0, batch = db.batch(), pending = 0;
+  for (let i = 0; i < due.length && i / 50 < MAX_CALLS; i += 50) {
+    const ids = due.slice(i, i + 50).map((o) => o.orderId);
+    const res = await spClient.callAPI({ operation: 'getOrders', endpoint: 'orders',
+      query: { MarketplaceIds: [MARKETPLACE_ID], AmazonOrderIds: ids } });
+    const byId = {};
+    (res.Orders || res.payload?.Orders || []).forEach((o) => { byId[o.AmazonOrderId] = o; });
+    for (const id of ids) {
+      const a = byId[id], docId = `${ACCOUNT_LABEL}_${id}`;
+      const patch = { dlvCheckedAt: now };
+      if (a && a.LatestDeliveryDate) {
+        patch.latestDeliveryDate = a.LatestDeliveryDate;
+        patch.earliestDeliveryDate = a.EarliestDeliveryDate || null;
+        found++;
+        batch.set(db.collection('spapiOrders').doc(docId), { latestDeliveryDate: patch.latestDeliveryDate, earliestDeliveryDate: patch.earliestDeliveryDate }, { merge: true });
+        if (++pending >= 400) { await batch.commit(); batch = db.batch(); pending = 0; }
+      }
+      if (a && a.OrderStatus) { patch.status = a.OrderStatus; patch.isCanceled = a.OrderStatus === 'Canceled'; }
+      snapPatch('orders', docId, patch);
+      checked++;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  if (pending) await batch.commit();
+  console.log(`Deliver-by refresh: ${found} dates found in ${checked} orders (${Math.max(0, due.length - checked)} left for next runs)`);
 }
 
 function extractWeightKg(name) {
