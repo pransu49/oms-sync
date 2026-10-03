@@ -1109,7 +1109,21 @@ async function run() {
   console.log('SP-API sync complete.');
 }
 
-run().catch((err) => {
+// Diagnostic: run with mode "debug:<orderId>" to print what Amazon returns for one order (no writes).
+async function debugOrder(id) {
+  const pick = (o) => Object.fromEntries(Object.entries(o || {}).filter(([k]) => /date|ship|deliver|promise|status|channel|prime|business|replacement|iba|ispu|transparency/i.test(k)));
+  const one = await spClient.callAPI({ operation: 'getOrder', endpoint: 'orders', path: { orderId: id } });
+  const o = one.payload || one;
+  console.log('getOrder keys:', Object.keys(o).join(', '));
+  console.log('getOrder dates:', JSON.stringify(pick(o), null, 1));
+  const list = await spClient.callAPI({ operation: 'getOrders', endpoint: 'orders', query: { MarketplaceIds: [MARKETPLACE_ID], AmazonOrderIds: [id] } });
+  const l = (list.Orders || list.payload?.Orders || [])[0];
+  console.log('getOrders keys:', l ? Object.keys(l).join(', ') : 'not found');
+  console.log('getOrders dates:', JSON.stringify(pick(l), null, 1));
+}
+const DEBUG_ID = /^debug:/i.test(process.env.SYNC_MODE || '') ? process.env.SYNC_MODE.slice(6).trim() : null;
+if (DEBUG_ID) debugOrder(DEBUG_ID).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); });
+else run().catch((err) => {
   console.error('spapi-sync failed:', err.message || err);
   console.error('Full error details:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
   process.exit(1);
