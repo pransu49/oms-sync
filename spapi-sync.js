@@ -1120,6 +1120,7 @@ async function debugOrder(id) {
   const l = (list.Orders || list.payload?.Orders || [])[0];
   console.log('getOrders keys:', l ? Object.keys(l).join(', ') : 'not found');
   console.log('getOrders dates:', JSON.stringify(pick(l), null, 1));
+  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ id, at: Date.now(), getOrderKeys: Object.keys(o), getOrder: JSON.stringify(pick(o)), getOrdersKeys: l ? Object.keys(l) : [], getOrders: JSON.stringify(pick(l)) });
 }
 const DEBUG_ID = /^debug:/i.test(process.env.SYNC_MODE || '') ? process.env.SYNC_MODE.slice(6).trim() : null;
 if (DEBUG_ID) debugOrder(DEBUG_ID).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); });
