@@ -12,16 +12,21 @@ async function get(u) { const r = await fetch(BASE + u, { headers: { ...H, Cooki
   upd(r); console.log('login', r.status);
   const dash = await get('/dashboard');
   const links = [...new Set((dash.t.match(/href="[^"]*import[^"]*"/gi) || []))]; console.log('import links:', links.join(' '));
-  for (const u of ['/imports', '/imports/add', '/import_data', '/imports/index', ...links.map((l) => l.slice(6, -1).replace(BASE, ''))]) {
-    if (!u.startsWith('/')) continue;
+  const page = await get('/import_data');
+  const r2 = await fetch(BASE + '/import_data', { method: 'POST', headers: { ...H, Cookie: ck(), 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest', Referer: BASE + '/import_data' }, body: 'id=49' });
+  upd(r2); const frag = await r2.text();
+  const clean = (x) => x.replace(/value="[A-Za-z0-9+/=]{30,}"/g, 'value="<token>"').replace(/\s+/g, ' ');
+  console.log('\n===== FRAGMENT', r2.status, frag.length); console.log(clean(frag).slice(0, 6000));
+  const srcs = [...new Set((frag.match(/(src|href|action)=["'][^"']+["']/gi) || []))]; console.log('frag links:', srcs.join(' | '));
+  for (const m of srcs) {
+    let u = m.replace(/^[a-z]+=["']/i, '').slice(0, -1).replace(BASE, '');
+    if (!u.startsWith('/') || /\.(css|js|png|jpg)$/.test(u) || /template|download/i.test(u)) continue;
     const p = await get(u);
-    console.log(`\n===== ${u} -> ${p.s} ${p.loc || ''} len=${p.t.length}`);
-    if (p.s !== 200) continue;
-    const forms = p.t.match(/<form[\s\S]*?<\/form>/gi) || [];
-    forms.forEach((f, i) => console.log(`--- form ${i}:`, f.replace(/value="[A-Za-z0-9+/=]{30,}"/g, 'value="<token>"').replace(/\s+/g, ' ').slice(0, 4000)));
-    const opts = p.t.match(/<option[^>]*>[^<]*Bulk Update Order[^<]*<\/option>/gi); if (opts) console.log('option:', opts.join(' '));
-    const urls = [...new Set(p.t.match(/(url|action)\s*[:=]\s*['"][^'"]*['"]/gi) || [])]; console.log('urls:', urls.slice(0, 40).join(' | '));
-    const scripts = (p.t.match(/<script[^>]*>[\s\S]*?<\/script>/gi) || []).filter((s) => /upload|fileupload|import/i.test(s)).map((s) => s.replace(/\s+/g, ' ').slice(0, 3000));
-    scripts.forEach((s, i) => console.log(`--- script ${i}:`, s));
+    console.log(`\n===== ${u} -> ${p.s} len=${p.t.length}`);
+    if (p.s === 200) {
+      (p.t.match(/<form[\s\S]*?<\/form>/gi) || []).forEach((f, i) => console.log('--- form', i, clean(f).slice(0, 4000)));
+      (p.t.match(/<script[^>]*>[\s\S]*?<\/script>/gi) || []).filter((x) => !/src=/.test(x.slice(0, 80))).forEach((x, i) => console.log('--- script', i, clean(x).slice(0, 3500)));
+      console.log('--- script srcs', (p.t.match(/<script[^>]*src="[^"]+"/gi) || []).join(' '));
+    }
   }
 })().catch((e) => { console.error('ERR', e.message); process.exit(1); });
