@@ -1,6 +1,10 @@
 name: Push NimbusPost tracking to OMS Guru
 
 on:
+  # runs by itself every time the NimbusPost sync finishes
+  workflow_run:
+    workflows: ['NimbusPost Sync']
+    types: [completed]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -14,6 +18,7 @@ concurrency:
 
 jobs:
   push:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
@@ -28,4 +33,4 @@ jobs:
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          DRY_RUN: ${{ inputs.dry_run }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
