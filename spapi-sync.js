@@ -1004,6 +1004,30 @@ async function pruneRemovedListings(liveAsins) {
   console.log(`Prune: ${gone.length} listing(s) no longer on Amazon removed${gone.length ? ' (' + gone.map(([, it]) => it.sku).slice(0, 20).join(', ') + ')' : ''}; ${prunedPricing} competitor-price row(s) removed.`);
 }
 
+// Deliver-by index for the Admin Console's Order/AWB Scanner: one small document per
+// seller account in the MAIN console Firebase (deliverByIndex/<account>), mapping
+// Amazon order id -> "deliver by" date (India date, YYYY-MM-DD). Written only when
+// something changed, so it costs 1 read (+ at most 1 write) per run.
+async function publishDeliverByIndex() {
+  const map = {};
+  Object.values(SNAP.orders).forEach((o) => {
+    if (!o || o.account !== ACCOUNT_LABEL || !o.orderId || !o.latestDeliveryDate) return;
+    const t = new Date(o.latestDeliveryDate).getTime();
+    if (isNaN(t)) return;
+    map[o.orderId] = new Date(t + 330 * 60000).toISOString().slice(0, 10);
+  });
+  const ref = dbMain.collection('deliverByIndex').doc(ACCOUNT_LABEL);
+  const prev = await ref.get();
+  const old = (prev.exists && prev.data().orders) || {};
+  const keys = Object.keys(map);
+  if (keys.length === Object.keys(old).length && keys.every((k) => old[k] === map[k])) {
+    console.log(`Deliver-by index unchanged (${keys.length} orders).`);
+    return;
+  }
+  await ref.set({ account: ACCOUNT_LABEL, orders: map, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+  console.log(`Deliver-by index published: ${keys.length} orders.`);
+}
+
 async function run() {
   console.log(`=== ${SYNC_MODE === 'fast' ? 'QUICK' : 'FULL'} sync for ${ACCOUNT_LABEL} ===`);
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
@@ -1126,6 +1150,7 @@ async function run() {
 
   console.log('Step 3b: saving compact snapshot for the Amazon page...');
   await writeSnapshot();
+  await publishDeliverByIndex().catch((e) => console.warn('Deliver-by index skipped (sync continues):', e.message || e));
 
   if (SYNC_MODE === 'fast') { console.log(`Quick sync complete in ${Math.round((Date.now() - RUN_STARTED) / 1000)}s.`); return; }
   console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
