@@ -2,7 +2,7 @@
 // Pushes NimbusPost AWBs into OMS Guru using OMS Guru's own "Bulk Update Order Details" import
 // (the same CSV you upload by hand at client.omsguru.com/import_data).
 //
-// Picks: Amazon orders in OMS Guru with NO AWB (any status except cancelled / delivered / returned),
+// Picks: Amazon orders in OMS Guru still New / Ready to ship / Packed with NO AWB (OMS refuses updates after Shipped),
 // where NimbusPost already has an AWB (not cancelled).
 // Fills: Channel Id, Channel Order Id, Sub Order Id = ALL, Shipment Tracker, Shipping Company, Shipment Date.
 // Order Status is left empty (OMS Guru says not to set it).
@@ -50,6 +50,14 @@ function istToday() {
   return d.toISOString().slice(0, 10);
 }
 const nid = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').replace(/\s+/g, '').trim();
+// OMS Guru allows max 20 characters for Shipping Company
+function courierName(c) {
+  c = String(c || '').trim();
+  if (c.length <= 20) return c;
+  const k = c.toLowerCase();
+  for (const [re, name] of [[/delhivery/, 'Delhivery'], [/^xb\b|xpressbees/, 'Xpressbees'], [/amazon|ats/, 'Amazon Shipping'], [/ekart/, 'Ekart'], [/shadowfax/, 'Shadowfax'], [/dtdc/, 'DTDC'], [/blue ?dart/, 'BlueDart'], [/ecom/, 'Ecom Express']]) if (re.test(k)) return name;
+  return c.slice(0, 20);
+}
 const csvCell = (v) => { v = String(v == null ? '' : v); return /[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
 
 async function main() {
@@ -76,13 +84,14 @@ async function main() {
     const live = lines.filter((o) => !/cancel/i.test(o.status || ''));
     if (!live.length) continue;
     if (live.some((o) => String(o.awb || '').trim())) continue;                       // OMS already has an AWB
-    if (live.some((o) => /deliver|return|rto|lost/i.test(String(o.status || '')))) continue;      // finished orders — leave alone
+    // OMS Guru only allows adding an AWB before the order is Shipped ("Cancel or Update Shipment not permitted in this status")
+    if (!live.every((o) => /^(new|ready to ship|packed|pending|confirmed)$/i.test(String(o.status || '').trim()))) continue;
     const n = nimbus[id];
     if (!n || !n.a || n.s === 'cancelled') continue;                                    // no NimbusPost AWB yet
     const chId = String(live[0].channelId || '').trim();
     if (!chId) { skipped.noChannelId++; continue; }
     if (pushed[id] && now - pushed[id].t < REPUSH_AFTER_H * 3600e3 && pushed[id].a === n.a) { skipped.recentlyPushed++; continue; }
-    rows.push({ chId, id, awb: n.a, courier: n.c || '' });
+    rows.push({ chId, id, awb: n.a, courier: courierName(n.c) });
   }
   { // match check (counts only)
     let inNimbus = 0, sameAwb = 0, omsHasOther = 0, pendNoNb = 0;
@@ -140,10 +149,50 @@ async function main() {
   console.log('Import step:', imp.status, at || '', '|', flash.slice(0, 5).join(' || '));
   result.message = flash.slice(0, 3).join(' | ').slice(0, 500) || `Import submitted (status ${imp.status}).`;
 
-  rows.forEach((r) => { pushed[r.id] = { a: r.awb, t: now }; });
+  // 4) wait for OMS Guru to finish the import and read its result (notification + error file)
+  const startedAt = Date.now(); let outcome = null;
+  while (Date.now() - startedAt < 4 * 60e3) {
+    await new Promise((res) => setTimeout(res, 15e3));
+    const n = await req('/notifications');
+    const items = [...n.text.matchAll(/<li class="item"[^>]*>([\s\S]*?)<\/li>/g)].map((m) => m[1]).slice(0, 8);
+    const it = items.find((x) => /Bulk Update Order Details/.test(x) && !/We are processing/.test(x));
+    if (!it) continue;
+    const when = (it.match(/@ ([A-Za-z]+ \d+, \d{4} \d+:\d+:\d+ [AP]M)/) || [])[1];
+    const t = when ? new Date(when + ' GMT+0530').getTime() : 0;
+    if (t && t < startedAt - 5 * 60e3) continue;                         // an older notification
+    if (/Failed/i.test(it)) {
+      const link = (it.match(/href="([^"]+)"/) || [])[1];
+      const errs = {};
+      if (link) {
+        const rep = await fetch(link, { headers: { ...H, Cookie: ck() }, redirect: 'follow' });
+        const body = await rep.text();
+        body.split(/\r?\n/).slice(1).forEach((line) => {
+          const cols = line.match(/("([^"]|"")*"|[^,]*)(,|$)/g) || [];
+          const clean = cols.map((c) => c.replace(/,$/, '').replace(/^"|"$/g, '').replace(/""/g, '"'));
+          if (clean[1]) errs[clean[1]] = clean[clean.length - 1] || clean[11] || 'error';
+        });
+      }
+      outcome = { ok: false, errors: errs };
+    } else outcome = { ok: true, errors: {} };
+    break;
+  }
+  const failed = outcome ? outcome.errors : {};
+  const okCount = rows.filter((r) => !failed[r.id]).length;
+  if (!outcome) result.message = 'Sent to OMS Guru — result not reported yet (check OMS Guru notifications).';
+  else if (outcome.ok) result.message = `OMS Guru imported all ${rows.length} AWB(s).`;
+  else {
+    const reasons = {}; Object.values(failed).forEach((e) => { reasons[e] = (reasons[e] || 0) + 1; });
+    result.message = `${okCount} updated, ${Object.keys(failed).length} rejected by OMS Guru: ` + Object.entries(reasons).map(([e, c]) => `${c} × ${e}`).join('; ');
+    result.failed = failed;
+  }
+  result.count = outcome ? okCount : rows.length;
+  console.log('OMS Guru result:', result.message);
+  Object.entries(failed).forEach(([id, e]) => console.log(`  rejected ${id}: ${e}`));
+
+  rows.forEach((r) => { pushed[r.id] = { a: r.awb, t: now, e: failed[r.id] || '' }; });
   Object.keys(pushed).forEach((k) => { if (now - pushed[k].t > 20 * 864e5) delete pushed[k]; });
   await logRef.set({ ids: pushed, last: result });
-  console.log(`Pushed ${rows.length} AWB(s) to OMS Guru.`);
+  console.log(`Done: ${result.count} AWB(s) updated in OMS Guru.`);
 }
 
 main().catch(async (e) => {
