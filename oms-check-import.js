@@ -11,13 +11,11 @@ const txt = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style
   r = await fetch(BASE + '/login', { method: 'POST', redirect: 'manual', headers: { ...H, 'Content-Type': 'application/x-www-form-urlencoded', Cookie: ck(), Referer: BASE + '/login' },
     body: new URLSearchParams({ _method: 'POST', 'data[Client][email]': EMAIL, 'data[Client][password]': PASSWORD, 'data[Client][otp]': '', 'data[Client][remember_me]': '0' }).toString() }); upd(r);
   const n = await get('/notifications');
-  const items = n.t.match(/<(li|tr|div|a)[^>]*>[\s\S]{0,600}?Bulk Update Order Details[\s\S]{0,400}?<\/(li|tr|div|a)>/gi) || [];
-  items.slice(0, 4).forEach((x, i) => console.log('ITEM', i, x.replace(/\s+/g, ' ').slice(0, 1200)));
-  const hrefs = [...new Set((n.t.match(/href="[^"]+"/g) || []))]; console.log('HREFS', hrefs.join(' '));
-  for (const h of hrefs) {
-    const u = h.slice(6, -1);
-    if (!/notif|download|error|import|file|tmp|report/i.test(u) || /\.(js|css|png)/.test(u)) continue;
-    const p = await get(u);
-    console.log(`\n== ${u} -> ${p.s} ${p.t.length}`, txt(p.t).slice(0, 1500));
-  }
+  const m = n.t.match(/href="(https:\/\/client\.omsguru\.com\/orders\/download\/\d+\/t)"[^>]*>[\s\S]{0,200}?Failed to process Bulk Update Order Details/);
+  if (!m) { console.log('no failure link'); return; }
+  const r1 = await fetch(m[1], { headers: { ...H, Cookie: ck() }, redirect: 'follow' });
+  const buf = Buffer.from(await r1.arrayBuffer());
+  console.log('REPORT', r1.status, r1.headers.get('content-type'), buf.length);
+  if (buf[0] === 0x50 && buf[1] === 0x4b) { const Z = require('adm-zip'); new Z(buf).getEntries().forEach((e) => console.log('FILE', e.entryName, '\n' + e.getData().toString('utf8').slice(0, 3000))); }
+  else console.log('BODY\n' + buf.toString('utf8').slice(0, 3000));
 })().catch((e) => { console.error('ERR', e.message); process.exit(1); });
