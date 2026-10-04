@@ -116,6 +116,14 @@ async function main() {
   const [orders, ndr] = await Promise.all([fetchOrders(), fetchNdr()]);
   const rows = orders.map((o) => compact(o, ndr)).filter((r) => r.a || r.b !== 'cancelled');
   const counts = {}; rows.forEach((r) => { counts[r.b] = (counts[r.b] || 0) + 1; });
+  const dbg = (process.env.DEBUG_ORDER || '').trim();
+  if (dbg) {
+    const hits = orders.filter((o) => String(o.order_number || '').includes(dbg) || JSON.stringify(o).includes(dbg));
+    console.log(`DEBUG ${dbg}: ${hits.length} match(es)`);
+    hits.forEach((o) => console.log('  ', JSON.stringify({ order_number: o.order_number, channel_order_id: o.channel_order_id, status: o.order_status, created: o.created_at, awb: o.shipment && o.shipment.awb, courier: o.shipment && o.shipment.courier_name })));
+    console.log('newest order created:', orders[0] && orders[0].created_at, '| page sizes ok, total', orders.length);
+  }
+
   console.log(`Fetched ${orders.length} NimbusPost orders (last ${DAYS_BACK} days), ${Object.keys(ndr).length} NDR. Buckets: ${JSON.stringify(counts)}`);
 
   const byOrder = {};

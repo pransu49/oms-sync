@@ -2,6 +2,10 @@ name: NimbusPost Sync
 
 on:
   workflow_dispatch:
+    inputs:
+      debug_order:
+        required: false
+        default: ''
   schedule:
     - cron: '*/30 * * * *'   # every 30 min (cron-job.org can also trigger it, like the OMS sync)
 
@@ -23,4 +27,5 @@ jobs:
         env:
           NIMBUS_API_KEY: ${{ secrets.NIMBUS_API_KEY }}
           NIMBUS_API_SECRET: ${{ secrets.NIMBUS_API_SECRET }}
+          DEBUG_ORDER: ${{ inputs.debug_order || '' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
