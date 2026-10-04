@@ -478,6 +478,44 @@ async function fetchProductCategories(asinList) {
   return categories;
 }
 
+// Product images from Amazon's catalogue (Catalog Items API, 20 ASINs per call). Kept in the
+// snapshot only (no extra Firestore docs). Asked once per ASIN; quick syncs only do a few calls.
+async function fetchProductImages() {
+  const need = new Map();
+  Object.values(SNAP.inventory).forEach((i) => {
+    if (i && i.account === ACCOUNT_LABEL && i.asin && !i.img && !(i.imgCheckedAt && Date.now() - i.imgCheckedAt < 7 * 864e5)) {
+      (need.get(i.asin) || need.set(i.asin, []).get(i.asin)).push(i._id || `${ACCOUNT_LABEL}_${i.sku}`);
+    }
+  });
+  const asins = [...need.keys()];
+  if (!asins.length) { console.log('Images: all listings already have one.'); return; }
+  const maxCalls = SYNC_MODE === 'full' ? 40 : 4;
+  let found = 0, calls = 0, logged = false;
+  for (let i = 0; i < asins.length && calls < maxCalls; i += 20, calls++) {
+    const chunk = asins.slice(i, i + 20), got = {};
+    try {
+      const res = await spClient.callAPI({
+        operation: 'searchCatalogItems', endpoint: 'catalogItems',
+        query: { marketplaceIds: [MARKETPLACE_ID], identifiers: chunk, identifiersType: 'ASIN', includedData: ['images'], pageSize: 20 },
+        options: { version: '2022-04-01' },
+      });
+      const items = res.items || res.payload?.items || [];
+      if (!logged) { console.log('Sample catalog images:', JSON.stringify(items[0] || res).slice(0, 500)); logged = true; }
+      items.forEach((it) => {
+        const set = (it.images || []).find((x) => x.marketplaceId === MARKETPLACE_ID) || (it.images || [])[0];
+        const list = (set && set.images) || [];
+        const pick = list.find((x) => x.variant === 'MAIN') || list[0];
+        if (pick && pick.link) got[it.asin] = pick.link.replace(/\._[^.\/]+_(\.[a-z]+)$/i, '$1'); // plain image, sized in the page
+      });
+    } catch (e) { console.warn('Image lookup failed:', e.message || e); }
+    chunk.forEach((a) => (need.get(a) || []).forEach((docId) => {
+      if (got[a]) { snapPatch('inventory', docId, { img: got[a] }); found++; } else snapPatch('inventory', docId, { imgCheckedAt: Date.now() });
+    }));
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  console.log(`Images: ${found} added (${Math.max(0, asins.length - calls * 20)} ASINs left for later runs).`);
+}
+
 async function fetchHsnTaxData(sellerId, skuList) {
   const results = {};
   let firstLogged = false, failCount = 0;
@@ -1037,7 +1075,7 @@ async function publishListingIndex() {
   const skus = {}, orders = {};
   Object.values(SNAP.inventory).forEach((i) => {
     if (!i || i.account !== ACCOUNT_LABEL || !i.sku) return;
-    skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null };
+    skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null, i: i.img || '' };
   });
   Object.values(SNAP.orders).forEach((o) => {
     if (!o || o.account !== ACCOUNT_LABEL || !o.orderId || !/unshipped|partially|pending/i.test(o.status || '')) return;
@@ -1109,6 +1147,8 @@ async function run() {
   }
   if (catWrites > 0) await catBatch.commit();
   console.log(`Step 2b done: ${catWrites} category update(s) written, ${catSkipped} unchanged (skipped).`);
+
+  await fetchProductImages().catch((e) => console.warn('Images skipped (sync continues):', e.message || e));
 
   console.log('Step 2c: checking HSN/tax for changed/new SKUs...');
   // Verify earlier GST/HSN pushes: re-read them from Amazon once (at least 30 min after the push)
