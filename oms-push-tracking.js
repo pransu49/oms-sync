@@ -2,7 +2,7 @@
 // Pushes NimbusPost AWBs into OMS Guru using OMS Guru's own "Bulk Update Order Details" import
 // (the same CSV you upload by hand at client.omsguru.com/import_data).
 //
-// Picks: Amazon self-ship orders in OMS Guru that are still New / Ready to ship / Packed with NO AWB,
+// Picks: Amazon orders in OMS Guru with NO AWB (any status except cancelled / delivered / returned),
 // where NimbusPost already has an AWB (not cancelled).
 // Fills: Channel Id, Channel Order Id, Sub Order Id = ALL, Shipment Tracker, Shipping Company, Shipment Date.
 // Order Status is left empty (OMS Guru says not to set it).
@@ -76,7 +76,7 @@ async function main() {
     const live = lines.filter((o) => !/cancel/i.test(o.status || ''));
     if (!live.length) continue;
     if (live.some((o) => String(o.awb || '').trim())) continue;                       // OMS already has an AWB
-    if (!live.every((o) => /^(new|ready to ship|packed|pending|confirmed)$/i.test(String(o.status || '').trim()))) continue;
+    if (live.some((o) => /deliver|return|rto|lost/i.test(String(o.status || '')))) continue;      // finished orders — leave alone
     const n = nimbus[id];
     if (!n || !n.a || n.s === 'cancelled') continue;                                    // no NimbusPost AWB yet
     const chId = String(live[0].channelId || '').trim();
