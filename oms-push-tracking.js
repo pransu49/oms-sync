@@ -79,6 +79,17 @@ async function main() {
     (byOrder[id] = byOrder[id] || []).push(o);
   });
   const rows = [], skipped = { noChannelId: 0, recentlyPushed: 0 };
+  const stuck = {};
+  for (const [id, lines] of Object.entries(byOrder)) {
+    const live = lines.filter((o) => !/cancel/i.test(o.status || ''));
+    if (!live.length || live.some((o) => String(o.awb || '').trim())) continue;
+    const n = nimbus[id]; if (!n || !n.a || n.s === 'cancelled') continue;
+    const st = String(live[0].status || '').trim();
+    if (/^(new|ready to ship|packed|pending|confirmed)$/i.test(st)) continue;
+    if (/deliver|return|rto|lost/i.test(st)) continue;
+    stuck[id] = { a: n.a, c: n.c || '', st, ch: String(live[0].channel || '').replace(/\s*-\s*Amazon.*$/i, '') };
+  }
+  console.log(`Already "${'Shipped'}" in OMS without AWB (OMS won't accept upload): ${Object.keys(stuck).length}`);
   const now = Date.now();
   for (const [id, lines] of Object.entries(byOrder)) {
     const live = lines.filter((o) => !/cancel/i.test(o.status || ''));
@@ -111,7 +122,7 @@ async function main() {
     .map((l) => l.map(csvCell).join(',')).join('\r\n') + '\r\n';
 
   const result = { at: admin.firestore.FieldValue.serverTimestamp(), count: rows.length, dry: DRY, skippedNoChannelId: skipped.noChannelId, message: '' };
-  if (!rows.length) { result.message = 'Nothing new to push.'; if (!DRY) await logRef.set({ last: result }, { merge: true }); console.log(result.message); return; }
+  if (!rows.length) { result.message = 'Nothing new to push.'; if (!DRY) await logRef.set({ last: result, stuck }, { merge: true }); console.log(result.message); return; }
   if (DRY) { console.log('DRY RUN — nothing uploaded.'); return; }
 
   // 3) upload to OMS Guru (Import Data -> Bulk Update Order Details, type 49)
@@ -191,7 +202,7 @@ async function main() {
 
   rows.forEach((r) => { pushed[r.id] = { a: r.awb, t: now, e: failed[r.id] || '' }; });
   Object.keys(pushed).forEach((k) => { if (now - pushed[k].t > 20 * 864e5) delete pushed[k]; });
-  await logRef.set({ ids: pushed, last: result });
+  await logRef.set({ ids: pushed, last: result, stuck });
   console.log(`Done: ${result.count} AWB(s) updated in OMS Guru.`);
 }
 
