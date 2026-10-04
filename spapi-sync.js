@@ -1041,7 +1041,7 @@ async function publishListingIndex() {
   });
   Object.values(SNAP.orders).forEach((o) => {
     if (!o || o.account !== ACCOUNT_LABEL || !o.orderId || !/unshipped|partially|pending/i.test(o.status || '')) return;
-    orders[o.orderId] = (o.items || []).map((it) => [it.sku || '', it.asin || '', it.price ?? null]);
+    orders[o.orderId] = (o.items || []).map((it) => ({ s: it.sku || '', a: it.asin || '', p: it.price ?? null })); // Firestore allows no nested arrays
   });
   const ref = dbMain.collection('listingIndex').doc(ACCOUNT_LABEL);
   const prev = await ref.get();
