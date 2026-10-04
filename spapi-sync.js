@@ -628,12 +628,14 @@ async function syncCompetitivePricing(asinList) {
 // ── Write-back functions ──────────────────────────────────────────────────────────
 
 async function applyPendingPriceUpdates(sellerId) {
-  const pendingSnap = await db.collection('spapiPriceUpdates')
-    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
-  if (pendingSnap.empty) { console.log('No pending price updates.'); return; }
-  console.log(`Applying ${pendingSnap.size} pending price update(s)...`);
+  // Requests come from the Amazon page (SP-API Firebase) and from the Admin Console (main Firebase)
+  const snaps = await Promise.all([db, dbMain].map((d) => d.collection('spapiPriceUpdates')
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get()));
+  const docs = snaps.flatMap((s) => s.docs);
+  if (!docs.length) { console.log('No pending price updates.'); return; }
+  console.log(`Applying ${docs.length} pending price update(s)...`);
 
-  for (const doc of pendingSnap.docs) {
+  for (const doc of docs) {
     const { sku, newPrice } = doc.data();
     try {
       const productType = getProductTypeForSku(sku);
@@ -1028,6 +1030,27 @@ async function publishDeliverByIndex() {
   console.log(`Deliver-by index published: ${keys.length} orders.`);
 }
 
+// Listing index for the Admin Console (MAIN Firebase, listingIndex/<account>): SKU -> ASIN,
+// Amazon selling price and MRP, plus open order id -> Amazon SKUs. One small document,
+// written only when something changed.
+async function publishListingIndex() {
+  const skus = {}, orders = {};
+  Object.values(SNAP.inventory).forEach((i) => {
+    if (!i || i.account !== ACCOUNT_LABEL || !i.sku) return;
+    skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null };
+  });
+  Object.values(SNAP.orders).forEach((o) => {
+    if (!o || o.account !== ACCOUNT_LABEL || !o.orderId || !/unshipped|partially|pending/i.test(o.status || '')) return;
+    orders[o.orderId] = (o.items || []).map((it) => [it.sku || '', it.asin || '', it.price ?? null]);
+  });
+  const ref = dbMain.collection('listingIndex').doc(ACCOUNT_LABEL);
+  const prev = await ref.get();
+  const same = prev.exists && JSON.stringify(prev.data().skus || {}) === JSON.stringify(skus) && JSON.stringify(prev.data().orders || {}) === JSON.stringify(orders);
+  if (same) { console.log(`Listing index unchanged (${Object.keys(skus).length} SKUs).`); return; }
+  await ref.set({ account: ACCOUNT_LABEL, skus, orders, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+  console.log(`Listing index published: ${Object.keys(skus).length} SKUs, ${Object.keys(orders).length} open orders.`);
+}
+
 async function run() {
   console.log(`=== ${SYNC_MODE === 'fast' ? 'QUICK' : 'FULL'} sync for ${ACCOUNT_LABEL} ===`);
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
@@ -1151,6 +1174,7 @@ async function run() {
   console.log('Step 3b: saving compact snapshot for the Amazon page...');
   await writeSnapshot();
   await publishDeliverByIndex().catch((e) => console.warn('Deliver-by index skipped (sync continues):', e.message || e));
+  await publishListingIndex().catch((e) => console.warn('Listing index skipped (sync continues):', e.message || e));
 
   if (SYNC_MODE === 'fast') { console.log(`Quick sync complete in ${Math.round((Date.now() - RUN_STARTED) / 1000)}s.`); return; }
   console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
