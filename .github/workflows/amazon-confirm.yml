@@ -1,0 +1,36 @@
+name: Confirm self-ship orders on Amazon
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = only list what would be confirmed'
+        default: 'false'
+      probe:
+        description: 'true = permission test only'
+        default: 'false'
+
+concurrency:
+  group: amazon-confirm
+  cancel-in-progress: false
+
+jobs:
+  confirm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install amazon-sp-api firebase-admin
+      - run: node amazon-confirm.js
+        env:
+          SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
+          SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
+          SPAPI_REFRESH_TOKEN_PRASO: ${{ secrets.SPAPI_REFRESH_TOKEN }}
+          SPAPI_REFRESH_TOKEN_SASTASTORE: ${{ secrets.SPAPI_REFRESH_TOKEN_SASTASTORE }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          PROBE: ${{ inputs.probe || 'false' }}
