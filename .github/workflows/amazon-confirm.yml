@@ -1,6 +1,10 @@
 name: Confirm self-ship orders on Amazon
 
 on:
+  # runs by itself after every OMS Guru sync (about every 10 min)
+  workflow_run:
+    workflows: ['Sync OMS Guru Orders']
+    types: [completed]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -16,6 +20,7 @@ concurrency:
 
 jobs:
   confirm:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
