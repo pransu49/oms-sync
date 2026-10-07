@@ -1275,6 +1275,17 @@ async function debugOrder(id) {
   console.log('getOrders dates:', JSON.stringify(pick(l), null, 1));
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ id, at: Date.now(), getOrderKeys: Object.keys(o), getOrder: JSON.stringify(pick(o)), getOrdersKeys: l ? Object.keys(l) : [], getOrders: JSON.stringify(pick(l)) });
 }
+async function debugSku(sku) {
+  const res = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId: process.env.SPAPI_SELLER_ID, sku },
+    query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries', 'offers'] } });
+  const a = res.attributes || {};
+  const pick = Object.fromEntries(Object.entries(a).filter(([k]) => /price|mrp|retail|list/i.test(k)));
+  console.log('attribute keys:', Object.keys(a).join(', '));
+  console.log('price attrs:', JSON.stringify(pick));
+  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku, at: Date.now(), keys: Object.keys(a), price: JSON.stringify(pick), summaries: JSON.stringify(res.summaries || []).slice(0, 2000), offers: JSON.stringify(res.offers || []).slice(0, 2000) });
+}
+if (/^debugsku:/i.test(process.env.SYNC_MODE || '')) { debugSku(process.env.SYNC_MODE.slice(9).trim()).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); }); }
+else {
 const DEBUG_ID = /^debug:/i.test(process.env.SYNC_MODE || '') ? process.env.SYNC_MODE.slice(6).trim() : null;
 if (DEBUG_ID) debugOrder(DEBUG_ID).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); });
 else run().catch((err) => {
@@ -1282,3 +1293,4 @@ else run().catch((err) => {
   console.error('Full error details:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
   process.exit(1);
 });
+}
