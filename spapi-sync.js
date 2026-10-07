@@ -701,7 +701,8 @@ async function applyPendingMrpUpdates(sellerId) {
   const pendingSnap = await dbMain.collection('spapiMrpUpdates')
     .where('account', '==', ACCOUNT_LABEL).where('status', 'in', ['pending', 'failed']).get();
   // Retry requests that only failed because of the old MRP field format (fixed 7 Oct 2026)
-  const docs = pendingSnap.docs.filter((d) => d.data().status === 'pending' || /value_with_tax/.test(d.data().error || ''));
+  const docs = pendingSnap.docs.filter((d) => d.data().status === 'pending'
+    || (/value_with_tax|does not belong/.test(d.data().error || '') && !d.data().retriedFormat));
   if (!docs.length) { console.log('No pending MRP updates.'); return; }
   console.log(`Applying ${docs.length} pending MRP update(s)...`);
 
@@ -710,20 +711,38 @@ async function applyPendingMrpUpdates(sellerId) {
     try {
       const productType = getProductTypeForSku(sku);
       if (!productType) throw new Error('No known product type for this SKU yet.');
-      assertListingsOk(await spClient.callAPI({
-        operation: 'patchListingsItem', endpoint: 'listingsItems',
-        path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
-        body: { productType, patches: [{ op: 'replace', path: '/attributes/list_price',
-          // Amazon India wants the MRP as "value_with_tax" (List Price with Tax)
-          value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value_with_tax: newMrp }] }] },
-      }));
-      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
+      // Where Amazon keeps the MRP depends on the product type: most use "List Price with Tax",
+      // some only "Maximum Retail Price". Try them in order; move on only when Amazon says the
+      // attribute/field doesn't apply to this product type.
+      const tries = [
+        ['list_price', { value_with_tax: newMrp }],
+        ['maximum_retail_price', { value: newMrp }],
+        ['maximum_retail_price', { value_with_tax: newMrp }],
+      ];
+      let usedField = null, lastErr = null;
+      for (const [attr, v] of tries) {
+        try {
+          assertListingsOk(await spClient.callAPI({
+            operation: 'patchListingsItem', endpoint: 'listingsItems',
+            path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
+            body: { productType, patches: [{ op: 'replace', path: `/attributes/${attr}`,
+              value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', ...v }] }] },
+          }));
+          usedField = `${attr}.${Object.keys(v)[0]}`; break;
+        } catch (e) {
+          lastErr = e;
+          if (!/does not belong|no longer applicable|not have enough values|not allowed|is not valid|unknown|not.*part of/i.test(e.message || '')) break;
+          await new Promise((r) => setTimeout(r, 600));
+        }
+      }
+      if (!usedField) throw lastErr || new Error('MRP update failed');
+      await doc.ref.update({ status: 'applied', field: usedField, appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       // Write new MRP directly to inventory so UI stays in sync
       await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ mrp: newMrp });
       snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { mrp: newMrp });
       console.log(`MRP updated for SKU ${sku}: now ${newMrp}`);
     } catch (e) {
-      await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
+      await doc.ref.update({ status: 'failed', retriedFormat: true, error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`MRP update FAILED for SKU ${sku}:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
