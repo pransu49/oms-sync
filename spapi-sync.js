@@ -749,6 +749,28 @@ async function applyPendingMrpUpdates(sellerId) {
   }
 }
 
+// Check MRP pushes against Amazon's own listings report. Amazon often "accepts" an MRP change
+// but keeps the catalogue MRP (offer-only listings can't change it) - mark those not-live.
+async function verifyMrpPushes() {
+  if (!inventoryFresh) return;
+  const snap = await dbMain.collection('spapiMrpUpdates').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'applied').get();
+  let live = 0, notLive = 0;
+  const batch = dbMain.batch();
+  snap.docs.forEach((d) => {
+    const x = d.data();
+    if (x.verified) return;
+    const at = x.appliedAt && x.appliedAt.toMillis ? x.appliedAt.toMillis() : 0;
+    if (!at || Date.now() - at < 90 * 60 * 1000) return;           // give Amazon time to update
+    const it = SNAP.inventory[`${ACCOUNT_LABEL}_${x.sku}`];
+    if (!it || it.mrp == null) return;
+    const ok = Math.abs(Number(it.mrp) - Number(x.newMrp)) < 0.5;
+    batch.update(d.ref, { verified: ok ? 'live' : 'not-live', seenMrp: it.mrp, checkedAt: admin.firestore.FieldValue.serverTimestamp() });
+    ok ? live++ : notLive++;
+  });
+  if (live + notLive) await batch.commit();
+  console.log(`MRP push check: ${live} live on Amazon, ${notLive} NOT changed by Amazon.`);
+}
+
 async function applyPendingHsnUpdates(sellerId) {
   // One request doc per SKU (spapiHsnUpdates/<account>_<sku>). It can carry a new GST tax code,
   // a new HSN code, or both:  { newTaxCode: 'A_GEN_SUPERREDUCED', newHsnCode: '21069099' }.
@@ -1144,6 +1166,8 @@ async function run() {
 
   console.log('Step 2: syncing inventory...');
   const asinsFromInventory = await syncInventory();
+
+  await verifyMrpPushes().catch((e) => console.warn('MRP check skipped (sync continues):', e.message || e));
 
   console.log('Step 2b: fetching real product categories for referral fee calc...');
   // Speed-up: category rarely changes - only ask Amazon for ASINs we don't know yet
