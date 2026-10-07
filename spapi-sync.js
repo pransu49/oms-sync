@@ -699,11 +699,13 @@ async function applyPendingPriceUpdates(sellerId) {
 
 async function applyPendingMrpUpdates(sellerId) {
   const pendingSnap = await dbMain.collection('spapiMrpUpdates')
-    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
-  if (pendingSnap.empty) { console.log('No pending MRP updates.'); return; }
-  console.log(`Applying ${pendingSnap.size} pending MRP update(s)...`);
+    .where('account', '==', ACCOUNT_LABEL).where('status', 'in', ['pending', 'failed']).get();
+  // Retry requests that only failed because of the old MRP field format (fixed 7 Oct 2026)
+  const docs = pendingSnap.docs.filter((d) => d.data().status === 'pending' || /value_with_tax/.test(d.data().error || ''));
+  if (!docs.length) { console.log('No pending MRP updates.'); return; }
+  console.log(`Applying ${docs.length} pending MRP update(s)...`);
 
-  for (const doc of pendingSnap.docs) {
+  for (const doc of docs) {
     const { sku, newMrp } = doc.data();
     try {
       const productType = getProductTypeForSku(sku);
@@ -712,7 +714,8 @@ async function applyPendingMrpUpdates(sellerId) {
         operation: 'patchListingsItem', endpoint: 'listingsItems',
         path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
         body: { productType, patches: [{ op: 'replace', path: '/attributes/list_price',
-          value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: newMrp }] }] },
+          // Amazon India wants the MRP as "value_with_tax" (List Price with Tax)
+          value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value_with_tax: newMrp }] }] },
       }));
       await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       // Write new MRP directly to inventory so UI stays in sync
