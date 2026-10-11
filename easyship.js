@@ -65,7 +65,7 @@ const ck = () => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
 async function req(path, opt = {}, tries = 3) {
   for (let t = 1; ; t++) {
     try {
-      const r = await fetch(path.startsWith('http') ? path : BASE + path, { redirect: 'manual', ...opt, headers: { ...H, Cookie: ck(), ...(opt.headers || {}) } });
+      const r = await fetch(path.startsWith('http') ? path : BASE + path, { redirect: 'manual', signal: AbortSignal.timeout(60000), ...opt, headers: { ...H, Cookie: ck(), ...(opt.headers || {}) } });
       upd(r);
       const buf = opt.raw ? Buffer.from(await r.arrayBuffer()) : null;
       return { status: r.status, loc: r.headers.get('location'), ct: r.headers.get('content-type') || '', text: buf ? '' : await r.text(), buf };
@@ -234,7 +234,7 @@ async function downloadLabel(labelId) {
   for (let t = 1; t <= 3; t++) {
     const r = await req(`/orders/download/${labelId}`);
     if (r.loc && /^https?:/.test(r.loc) && !/omsguru\.com\/(login|users)/.test(r.loc)) {
-      const s = await fetch(r.loc);
+      const s = await fetch(r.loc, { signal: AbortSignal.timeout(60000) });
       if (s.ok) { const b = Buffer.from(await s.arrayBuffer()); if (b.slice(0, 4).toString() === '%PDF') return b; }
     }
     await sleep(3000 * t);
