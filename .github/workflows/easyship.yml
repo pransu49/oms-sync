@@ -1,8 +1,10 @@
 name: Easy Ship - pack and labels
 
 on:
-  # started every day at 11:30 AM IST by cron-job.org (same way as the OMS sync),
-  # and by the "Run now" buttons in the console's Easy Ship tab
+  # every day ~11:30 AM IST (05:55 UTC; GitHub may start it a few minutes late),
+  # plus the "Run now" buttons in the console's Easy Ship tab
+  schedule:
+    - cron: '55 5 * * *'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -41,4 +43,4 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           LIMIT: ${{ inputs.limit || '0' }}
           SLA_DATE: ${{ inputs.sla_date || '' }}
-          TRIGGER: ${{ inputs.trigger || 'manual' }}
+          TRIGGER: ${{ github.event_name == 'schedule' && 'schedule' || inputs.trigger || 'manual' }}
