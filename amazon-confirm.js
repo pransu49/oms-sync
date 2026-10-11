@@ -69,8 +69,9 @@ async function main() {
     return;
   }
 
-  const chunks = await omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks').get();
-  const oms = []; chunks.forEach((d) => oms.push(...(d.get('orders') || [])));
+  // 1 small record written by the OMS sync (instead of reading every OMS order chunk — saves Firebase quota)
+  const readyDoc = await omsDb.collection('aikm_admin').doc('omsReadyToConfirm').get();
+  const oms = (readyDoc.exists && readyDoc.get('orders')) || [];
   const nbDoc = await db.collection('nimbusIndex').doc('byOrder').get();
   const nimbus = {}; let nbAll = {};
   if (nbDoc.exists) { try { nbAll = nbDoc.get('data') ? JSON.parse(nbDoc.get('data')) : (nbDoc.get('orders') || {}); } catch (e) { nbAll = nbDoc.get('orders') || {}; } }

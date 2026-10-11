@@ -322,6 +322,22 @@ async function pushToFirestore(orders) {
   console.log(`Pushed: ${written} chunk(s) updated, ${unchanged} unchanged (skipped), ${deletes} stale chunk(s) removed.`);
 }
 
+// Small list for the Amazon-confirmation job: Amazon orders that already have an AWB in OMS
+// but are still New / Ready to ship / Packed. The job reads this 1 record instead of all order chunks.
+async function saveReadyToConfirm(orders) {
+  const by = {};
+  orders.forEach((o) => { if (/amazon/i.test(o.channel || '') && o.channelOrderId) (by[o.channelOrderId] = by[o.channelOrderId] || []).push(o); });
+  const list = [];
+  Object.values(by).forEach((lines) => {
+    if (!lines.some((o) => String(o.awb || '').trim())) return;
+    if (!lines.some((o) => /^(new|ready to ship|packed|pending|confirmed)$/i.test(String(o.status || '').trim()))) return;
+    lines.forEach((o) => list.push({ channel: o.channel, channelOrderId: o.channelOrderId, channelSubOrderId: o.channelSubOrderId, status: o.status,
+      buyerPhone: o.buyerPhone, awb: o.awb, courier: o.courier, qty: o.qty }));
+  });
+  await admin.firestore().collection('aikm_admin').doc('omsReadyToConfirm').set({ orders: list.slice(0, 3000), count: list.length, at: admin.firestore.FieldValue.serverTimestamp() });
+  console.log(`Ready to confirm on Amazon (have AWB, not shipped): ${list.length} line(s).`);
+}
+
 async function main() {
   console.log(`Logging into OMS Guru as ${EMAIL}...`);
   await login();
@@ -338,6 +354,7 @@ async function main() {
   }
   const orders = rawRows.map(slimOrder);
   await pushToFirestore(orders);
+  await saveReadyToConfirm(orders);
   console.log('Done.');
 }
 
