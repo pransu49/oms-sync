@@ -144,7 +144,10 @@ async function readOrder(vid) {
   });
   let labelId = '';
   $('a[href*="/orders/download/"]').each((_, a) => { if (/^\s*Shipping Label\s*$/i.test($(a).text())) labelId = ($(a).attr('href') || '').split('/').pop(); });
-  const inv = (txt.match(/Invoice Number:\s*(\S+)/) || [])[1] || '';
+  // dt/dd pairs (x-editable shows "Empty" only in the browser, so read the real values)
+  const dd = {};
+  $('dt').each((_, el) => { const k = clean($(el).text()).replace(/:$/, '').toLowerCase(); if (k && !(k in dd)) dd[k] = clean($(el).next('dd').text()); });
+  const inv = dd['invoice number'] || '';
   // newest row of the "Invoice Failed Logs" table
   let lastFail = '', lastFailAt = 0;
   $('table').each((_, t) => {
@@ -157,11 +160,11 @@ async function readOrder(vid) {
     });
   });
   return {
-    orderId: (txt.match(/Order:\s*([0-9]{3}-[0-9]{7}-[0-9]{7})/) || [])[1] || '',
+    orderId: ((dd['order'] || '').match(/\d{3}-\d{7}-\d{7}/) || [])[0] || '',
     phone: (txt.match(/Phone:\s*(\S+)/) || [])[1] || '',
-    invoice: /^empty$/i.test(inv) ? '' : inv,
-    awb: (txt.match(/Shipment Tracker:\s*(\d{6,})/) || [])[1] || '',
-    sla: slaToIso((txt.match(/Sla Date:\s*([^:]+?\d{4})/) || [])[1] || ''),
+    invoice: /^(empty|0)?$/i.test(inv) ? '' : inv,
+    awb: ((dd['shipment tracker'] || '').match(/\d{6,}/) || [])[0] || '',
+    sla: slaToIso(dd['sla date'] || ''),
     items, labelId, lastFail, lastFailAt,
   };
 }
