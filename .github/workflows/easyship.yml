@@ -1,0 +1,44 @@
+name: Easy Ship - pack and labels
+
+on:
+  # started every day at 11:30 AM IST by cron-job.org (same way as the OMS sync),
+  # and by the "Run now" buttons in the console's Easy Ship tab
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = only list what would be packed (nothing is packed)'
+        default: 'false'
+      limit:
+        description: 'pack at most this many orders (0 = all)'
+        default: '0'
+      sla_date:
+        description: 'SLA date YYYY-MM-DD (empty = today)'
+        default: ''
+      trigger:
+        description: 'who started it (schedule / console / manual)'
+        default: 'manual'
+
+# never two runs at once
+concurrency:
+  group: easyship
+  cancel-in-progress: false
+
+jobs:
+  easyship:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-save cheerio@1.0.0 pdf-lib@1.17.1 firebase-admin@12
+      - run: node easyship.js
+        env:
+          OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
+          OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          LIMIT: ${{ inputs.limit || '0' }}
+          SLA_DATE: ${{ inputs.sla_date || '' }}
+          TRIGGER: ${{ inputs.trigger || 'manual' }}
