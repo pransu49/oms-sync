@@ -1,0 +1,238 @@
+<!-- ===================== EASY SHIP TAB (AIKM) =====================
+     Paste this whole block in page.dalbhaat-admin-console.liquid, just ABOVE the line:
+     <script src="{{ 'dalbhaat-admin-console.js' | asset_url }}" defer></script>
+     It adds the "Easy Ship" item to the sidebar and its page. Nothing else changes. -->
+<style>
+html#aikm body #tab-easyship .es-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;}
+html#aikm body #tab-easyship .es-state{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:20px;border:1px solid var(--x-line);background:var(--x-surface);font-size:12.5px;font-weight:600;color:var(--x-text-2);}
+html#aikm body #tab-easyship .es-dot{width:8px;height:8px;border-radius:50%;background:var(--x-muted);}
+html#aikm body #tab-easyship .es-state.run .es-dot{background:var(--x-amber);animation:esPulse 1.2s infinite;}
+html#aikm body #tab-easyship .es-state.ok .es-dot{background:var(--x-green);}
+html#aikm body #tab-easyship .es-state.bad .es-dot{background:var(--x-red);}
+@keyframes esPulse{50%{opacity:.35;}}
+html#aikm body #tab-easyship .es-meta{font-size:12px;color:var(--x-muted);}
+html#aikm body #tab-easyship .es-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px;}
+html#aikm body #tab-easyship .es-acc{display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--x-line);border-radius:10px;background:var(--x-surface-2);margin-bottom:8px;}
+html#aikm body #tab-easyship .es-acc-ic{width:38px;height:38px;flex:0 0 38px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--x-gold-soft);color:var(--x-gold);font-size:19px;}
+html#aikm body #tab-easyship .es-acc-name{font-weight:600;font-size:13.5px;color:var(--x-text);}
+html#aikm body #tab-easyship .es-acc-sub{font-size:12px;color:var(--x-muted);margin-top:2px;}
+html#aikm body #tab-easyship .es-acc-info{flex:1;min-width:0;}
+html#aikm body #tab-easyship .es-empty{padding:18px;text-align:center;color:var(--x-muted);font-size:13px;border:1px dashed var(--x-line-2);border-radius:10px;}
+html#aikm body #tab-easyship .es-tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600;background:var(--x-red-soft);color:var(--x-red);}
+html#aikm body #tab-easyship .es-tag.amber{background:var(--x-amber-soft);color:var(--x-amber);}
+html#aikm body #tab-easyship .es-rule{font-size:12px;color:var(--x-muted);line-height:1.6;}
+html#aikm body #tab-easyship .es-rule b{color:var(--x-text-2);}
+html#aikm body #subtab-easyship .es-btn-main{background:var(--x-primary) !important;color:var(--x-primary-ink) !important;border-color:var(--x-primary) !important;}
+html#aikm body #tab-easyship td.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;}
+@media (max-width:1100px){html#aikm body #tab-easyship .es-grid{grid-template-columns:1fr;}}
+</style>
+<script>
+(function () {
+  if (window.__aikmEasyShip) return; window.__aikmEasyShip = true;
+  var REPO = "pransu49/oms-sync", WF = "easyship.yml", TK = "aikm_gh_sync_token";
+
+  /* ---------- 1. add sidebar item, page header and page ---------- */
+  function mount() {
+    var bar = document.getElementById("mainTabbar"), content = document.querySelector(".app-content");
+    if (!bar || !content || document.getElementById("tab-easyship")) return;
+    var b = document.createElement("button");
+    b.className = "tabbtn"; b.dataset.tab = "easyship";
+    b.innerHTML = '<i class="ti ti-truck-loading tab-ic"></i>Easy Ship<span class="rtab-count" id="esSideCount" style="display:none"></span>';
+    var after = bar.querySelector('[data-tab="selfship"]');
+    after ? after.insertAdjacentElement("afterend", b) : bar.appendChild(b);
+
+    var sub = document.createElement("div");
+    sub.className = "subtabbar no-print"; sub.id = "subtab-easyship"; sub.style.display = "none";
+    sub.innerHTML = '<span class="subtab-label">Amazon Easy Ship</span>' +
+      '<span class="es-meta">Auto-packs every day at 11:30 AM · 2 PM pickup on SLA date</span>' +
+      '<span style="flex:1"></span>' +
+      '<button type="button" class="subbtn" id="esDryBtn" title="Shows what would be packed — packs nothing"><i class="ti ti-eye"></i> Preview today</button>' +
+      '<button type="button" class="subbtn" id="esTestBtn" title="Packs just 1 order — for testing"><i class="ti ti-flask"></i> Test 1 order</button>' +
+      '<button type="button" class="subbtn es-btn-main" id="esRunBtn"><i class="ti ti-player-play"></i> Run now</button>';
+    content.insertBefore(sub, content.firstChild);
+
+    var p = document.createElement("div");
+    p.id = "tab-easyship"; p.className = "tabpanel";
+    p.innerHTML =
+      '<div class="es-head"><span class="es-state" id="esState"><span class="es-dot"></span><span id="esStateTxt">Connecting…</span></span><span class="es-meta" id="esLastLine"></span></div>' +
+      '<div class="cx-kpis" style="grid-template-columns:repeat(4,minmax(0,1fr)) !important;">' +
+        kpi("esKpiPacked", "Packed (last run)", "esKpiPackedSub") + kpi("esKpiFailed", "Failed", "esKpiFailedSub") +
+        kpi("esKpiCheck", "Check manually", "esKpiCheckSub") + kpi("esKpiNext", "Due tomorrow", "esKpiNextSub") +
+      "</div>" +
+      '<div class="es-grid"><div>' +
+        '<div class="panel"><h2>Labels <span id="esLabelsFor" class="es-meta"></span></h2><div id="esLabels"></div></div>' +
+        '<div class="panel"><h2>Failed — fix in OMS Guru <span class="es-meta" id="esFailedCount"></span></h2><div id="esFailed"></div></div>' +
+        '<div class="panel"><h2>Check manually <span class="es-meta" id="esCheckCount"></span></h2><small class="hint">Not packed — the two Easy Ship rules (no mobile number + no Self-Fulfilled tag) did not agree, or the order already has an invoice.</small><div id="esCheck" style="margin-top:10px"></div></div>' +
+      '</div><div>' +
+        '<div class="panel"><h2>Picklist <span class="es-meta" id="esPickCount"></span></h2><div id="esPick"></div></div>' +
+        '<div class="panel"><h2>Coming up (Easy Ship in New)</h2><div id="esUpcoming"></div></div>' +
+        '<div class="panel"><h2>How it works</h2><div class="es-rule">' +
+          "<b>When:</b> every day at 11:30 AM (or Run now).<br>" +
+          "<b>Which orders:</b> Amazon New orders with <b>no buyer mobile</b> and <b>no Self-Fulfilled tag</b>, SLA date today (or overdue).<br>" +
+          "<b>Pickup slot:</b> always <b>2:00–4:00 PM on the SLA date</b>, never earlier.<br>" +
+          "<b>Labels:</b> one PDF per account, sorted by product, product name + qty already printed on each label.<br>" +
+          "<b>Weights:</b> taken from OMS Guru.</div></div>" +
+      "</div></div>";
+    content.appendChild(p);
+
+    document.getElementById("esRunBtn").addEventListener("click", function () { runNow({ dry_run: "false", limit: "0" }, "Pack ALL Easy Ship orders due today (SLA " + today() + ") and generate their labels?"); });
+    document.getElementById("esTestBtn").addEventListener("click", function () { runNow({ dry_run: "false", limit: "1" }, "Pack just 1 Easy Ship order due today as a test?"); });
+    document.getElementById("esDryBtn").addEventListener("click", function () { runNow({ dry_run: "true", limit: "0" }); });
+  }
+  function kpi(id, label, subId) {
+    return '<div class="cx-kpi"><div class="cx-kpi-label">' + label + '</div><div class="cx-kpi-num" id="' + id + '">–</div><div class="cx-kpi-sub" id="' + subId + '">&nbsp;</div></div>';
+  }
+  mount(); document.addEventListener("DOMContentLoaded", mount);
+
+  /* ---------- helpers ---------- */
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function today() { return new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10); }
+  function addDays(iso, n) { var d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+  function nice(iso) { if (!iso) return "–"; var d = new Date(iso + "T00:00:00Z"); return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }); }
+  function when(ts) { if (!ts) return ""; var d = new Date(ts); return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }); }
+  function toast(msg, warn) {
+    var t = document.createElement("div"); t.className = "mh-toast" + (warn ? " warn" : ""); t.textContent = msg;
+    document.body.appendChild(t); requestAnimationFrame(function () { t.classList.add("show"); });
+    setTimeout(function () { t.classList.remove("show"); setTimeout(function () { t.remove(); }, 300); }, 4500);
+  }
+  function table(head, rows) {
+    return '<div class="table-scroll" style="max-height:360px;"><table class="data"><thead><tr>' + head.map(function (h) { return "<th>" + h + "</th>"; }).join("") +
+      "</tr></thead><tbody>" + rows.join("") + "</tbody></table></div>";
+  }
+
+  /* ---------- 2. live data (reads only while this page is open) ---------- */
+  var unsub = null, data = null;
+  function db() { return typeof fbDb !== "undefined" && fbDb ? fbDb : null; }
+  function listen() {
+    if (unsub || !db()) return;
+    unsub = db().collection("aikm_admin").doc("easyShip").onSnapshot(function (d) { data = d.exists ? d.data() : {}; render(); }, function () { setState("bad", "Could not read Easy Ship data"); });
+  }
+  function stop() { if (unsub) { unsub(); unsub = null; } }
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest(".tabbtn[data-tab]"); if (!t) return;
+    if (t.dataset.tab === "easyship") { var w = setInterval(function () { if (db()) { clearInterval(w); listen(); } }, 500); listen(); }
+    else stop();
+  });
+  document.addEventListener("visibilitychange", function () {
+    var open = document.querySelector('.tabbtn.active[data-tab="easyship"]');
+    if (document.hidden) stop(); else if (open) listen();
+  });
+
+  function setState(cls, txt) { var s = $("esState"); if (!s) return; s.className = "es-state " + (cls || ""); $("esStateTxt").textContent = txt; }
+
+  function render() {
+    if (!$("tab-easyship")) return;
+    var live = data.live || {}, last = data.last || null, dry = data.lastDry || null;
+    var running = live.state === "running" && Date.now() - new Date(live.updatedAt).getTime() < 20 * 60000;
+    setState(running ? "run" : live.state === "failed" ? "bad" : last ? "ok" : "", running ? live.step : live.state === "failed" ? live.step : last ? "Last run " + when(last.finishedAt) : "Not run yet");
+    ["esRunBtn", "esTestBtn", "esDryBtn"].forEach(function (id) { if ($(id)) $(id).disabled = running; });
+
+    // dry-run preview is shown when it is newer than the last real run
+    var showDry = dry && (!last || dry.finishedAt > last.finishedAt);
+    var cur = showDry ? dry : last;
+    $("esLastLine").textContent = cur ? (showDry ? "Preview only (nothing packed) · " : "") + "SLA " + nice(cur.target) + " · " + (cur.trigger === "schedule" ? "auto 11:30 AM" : cur.trigger || "manual") + (cur.limit ? " · test (" + cur.limit + " order)" : "") : "";
+
+    var failed = (cur && cur.failed) || [], check = (cur && cur.check) || [];
+    $("esKpiPacked").textContent = cur ? (showDry ? (cur.preview || []).length : cur.packed || 0) : "–";
+    $("esKpiPackedSub").textContent = cur ? (showDry ? "would be packed" : "of " + (cur.found || 0) + " Easy Ship due") : "";
+    $("esKpiFailed").textContent = cur ? failed.length : "–";
+    $("esKpiFailedSub").textContent = failed.length ? "need fixing in OMS" : cur ? "none" : "";
+    $("esKpiCheck").textContent = cur ? check.length : "–";
+    $("esKpiCheckSub").textContent = check.length ? "rules disagree" : cur ? "none" : "";
+    var up = (cur && cur.upcoming) || {}, tom = addDays(today(), 1), nx = up[tom] || { total: 0 };
+    $("esKpiNext").textContent = cur ? nx.total : "–";
+    $("esKpiNextSub").textContent = "SLA " + nice(tom);
+    document.querySelectorAll("#tab-easyship .cx-kpi")[1].classList.toggle("cx-kpi-danger", failed.length > 0);
+    document.querySelectorAll("#tab-easyship .cx-kpi")[2].classList.toggle("cx-kpi-warn", check.length > 0);
+    var sc = $("esSideCount"); if (sc) { sc.textContent = failed.length + check.length; sc.style.display = failed.length + check.length ? "" : "none"; }
+
+    // labels
+    var lf = last && last.labelFiles ? last.labelFiles : {};
+    var accs = Object.keys(lf);
+    $("esLabelsFor").textContent = last ? "· SLA " + nice(last.target) + " · " + when(last.finishedAt) : "";
+    $("esLabels").innerHTML = accs.length ? accs.map(function (a) {
+      var f = lf[a];
+      return '<div class="es-acc"><div class="es-acc-ic"><i class="ti ti-file-type-pdf"></i></div><div class="es-acc-info"><div class="es-acc-name">' + esc(a) + '</div><div class="es-acc-sub">' +
+        f.pages + " labels · " + (f.sizeKB > 1024 ? (f.sizeKB / 1024).toFixed(1) + " MB" : f.sizeKB + " KB") + '</div></div><button type="button" class="btn-gold" data-es-dl="' + esc(a) + '"><i class="ti ti-download"></i> Download PDF</button></div>';
+    }).join("") : '<div class="es-empty">No labels yet' + (showDry ? " — this was only a preview." : ".") + "</div>";
+    (data.history || []).slice(1).forEach(function (h) {
+      Object.keys(h.labelFiles || {}).forEach(function (a) {
+        $("esLabels").insertAdjacentHTML("beforeend", '<div class="es-acc" style="opacity:.75"><div class="es-acc-ic" style="background:var(--x-raise);color:var(--x-muted)"><i class="ti ti-history"></i></div><div class="es-acc-info"><div class="es-acc-name">' + esc(a) + '</div><div class="es-acc-sub">Earlier run · SLA ' + nice(h.target) + " · " + h.labelFiles[a].pages + ' labels</div></div><button type="button" class="secondary" data-es-dl="' + esc(a) + '" data-es-run="' + esc(h.runId) + '"><i class="ti ti-download"></i></button></div>');
+      });
+    });
+
+    // failed / check
+    $("esFailedCount").textContent = failed.length ? "· " + failed.length : "";
+    $("esFailed").innerHTML = failed.length ? table(["Order", "Account", "Product", "Reason"], failed.map(function (f) {
+      return "<tr><td class='cx-awb'>" + esc(f.orderId) + "</td><td>" + esc(f.account) + "</td><td>" + esc(f.sku) + "</td><td><span class='es-tag'>" + esc(f.reason) + "</span></td></tr>";
+    })) : '<div class="es-empty">Nothing failed.</div>';
+    $("esCheckCount").textContent = check.length ? "· " + check.length : "";
+    $("esCheck").innerHTML = check.length ? table(["Order", "Account", "SLA", "Reason"], check.map(function (f) {
+      return "<tr><td class='cx-awb'>" + esc(f.orderId) + "</td><td>" + esc(f.account) + "</td><td>" + nice(f.sla) + "</td><td><span class='es-tag amber'>" + esc(f.reason) + "</span></td></tr>";
+    })) : '<div class="es-empty">Nothing to check.</div>';
+
+    // picklist (real run) or preview list (dry run)
+    if (showDry) {
+      var pv = cur.preview || [], agg = {};
+      pv.forEach(function (o) { agg[o.account] = (agg[o.account] || 0) + 1; });
+      $("esPickCount").textContent = "· preview";
+      $("esPick").innerHTML = pv.length ? table(["Account", "Orders"], Object.keys(agg).map(function (a) { return "<tr><td>" + esc(a) + "</td><td class='num'>" + agg[a] + "</td></tr>"; })) : '<div class="es-empty">Nothing due.</div>';
+    } else {
+      var pk = (cur && cur.picklist) || [];
+      $("esPickCount").textContent = pk.length ? "· " + pk.length + " products · " + pk.reduce(function (s, x) { return s + x.qty; }, 0) + " units" : "";
+      $("esPick").innerHTML = pk.length ? table(["Product", "Qty"], pk.map(function (x) { return "<tr><td>" + esc(x.sku) + "</td><td class='num'>" + x.qty + "</td></tr>"; })) : '<div class="es-empty">No packed orders yet.</div>';
+    }
+
+    // upcoming
+    var days = Object.keys(up).filter(function (k) { return k !== "unknown"; }).sort();
+    $("esUpcoming").innerHTML = days.length ? table(["SLA date", "Orders", "By account"], days.slice(0, 8).map(function (k) {
+      var ba = up[k].byAccount || {};
+      return "<tr><td>" + nice(k) + (k < today() ? " <span class='es-tag'>overdue</span>" : k === today() ? " <span class='es-tag amber'>today</span>" : "") + "</td><td class='num'>" + up[k].total + "</td><td class='es-meta'>" + Object.keys(ba).map(function (a) { return esc(a) + " " + ba[a]; }).join(" · ") + "</td></tr>";
+    })) : '<div class="es-empty">Shows after the first run.</div>';
+  }
+
+  /* ---------- 3. download a label PDF (stored in parts) ---------- */
+  document.addEventListener("click", async function (e) {
+    var btn = e.target.closest("[data-es-dl]"); if (!btn || !db()) return;
+    var acc = btn.dataset.esDl, runId = btn.dataset.esRun;
+    var src = runId ? (data.history || []).filter(function (h) { return h.runId === runId; })[0] : data.last;
+    var f = src && src.labelFiles && src.labelFiles[acc]; if (!f) return;
+    var old = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> Preparing…';
+    try {
+      var parts = await Promise.all(f.docIds.map(function (id) { return db().collection("aikm_admin").doc("easyShip").collection("labels").doc(id).get(); }));
+      var bytes = parts.map(function (d) { var b = d.get("data"); return b && b.toUint8Array ? b.toUint8Array() : new Uint8Array(0); });
+      var blob = new Blob(bytes, { type: "application/pdf" });
+      var a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+      a.download = f.fileName || ("EasyShip_" + acc + ".pdf"); document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+    } catch (err) { toast("Download failed: " + err.message, true); }
+    btn.disabled = false; btn.innerHTML = old;
+  });
+
+  /* ---------- 4. Run now (same shared GitHub token as the other Sync-now buttons) ---------- */
+  async function getToken() {
+    var t = "";
+    try { var d = await db().collection("aikm_admin").doc("ghSync").get(); t = (d.exists && d.data().token) || ""; } catch (e) {}
+    if (!t) try { t = localStorage.getItem(TK) || ""; } catch (e) {}
+    return String(t).replace(/^\s*bearer\s+/i, "").trim();
+  }
+  async function runNow(inputs, confirmMsg) {
+    if (!db()) { toast("Still connecting — try again in a few seconds.", true); return; }
+    if (confirmMsg && !confirm(confirmMsg + "\n\nThis books Amazon pickups and cannot be undone.")) return;
+    var tok = await getToken();
+    if (!tok) { toast("GitHub token missing — click any 'Sync OMS now' button once to set it up, then try again.", true); return; }
+    inputs.trigger = "console"; inputs.sla_date = "";
+    setState("run", "Starting…");
+    try {
+      var r = await fetch("https://api.github.com/repos/" + REPO + "/actions/workflows/" + WF + "/dispatches", {
+        method: "POST", headers: { Accept: "application/vnd.github+json", Authorization: "Bearer " + tok, "Content-Type": "application/json" },
+        body: JSON.stringify({ ref: "main", inputs: inputs }) });
+      if (r.status !== 204) throw new Error("GitHub said " + r.status);
+      toast(inputs.dry_run === "true" ? "Preview started — results in about 2–4 minutes." : "Easy Ship run started — labels appear here when done (5–20 minutes).");
+      listen();
+    } catch (err) { setState("bad", "Could not start: " + err.message); toast("Could not start: " + err.message, true); }
+  }
+})();
+</script>
+<!-- =================== END EASY SHIP TAB =================== -->
