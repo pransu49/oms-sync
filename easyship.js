@@ -32,7 +32,7 @@ const ACCOUNTS = { 45608: 'AIKM Pharma', 45614: 'E Commerce Munda', 45619: 'Pras
 const WAREHOUSE = 22452;            // DEFAULT 310803 (own warehouse)
 const SLOT_TIME = '2:00 PM';        // pickup slot start — always the 2 PM slot
 const BATCH = 25;                   // orders per Pack request
-const CONC = 4;                     // parallel page reads
+const CONC = 2;                     // parallel page reads (gentle on OMS Guru)
 const KEEP_RUNS = 3;                // label PDFs kept in Firestore for the last N runs
 const CHUNK = 900 * 1024;           // Firestore doc limit is 1 MB
 
@@ -62,11 +62,13 @@ async function status(patch) {
 let jar = {};
 const upd = (r) => (r.headers.getSetCookie ? r.headers.getSetCookie() : []).forEach((c) => { const p = c.split(';')[0], i = p.indexOf('='); if (i > 0) jar[p.slice(0, i).trim()] = p.slice(i + 1); });
 const ck = () => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
-async function req(path, opt = {}, tries = 3) {
+async function req(path, opt = {}, tries = 5) {
   for (let t = 1; ; t++) {
     try {
       const r = await fetch(path.startsWith('http') ? path : BASE + path, { redirect: 'manual', signal: AbortSignal.timeout(60000), ...opt, headers: { ...H, Cookie: ck(), ...(opt.headers || {}) } });
       upd(r);
+      // OMS Guru is busy (502/503/504) — wait and try again instead of failing the order
+      if (r.status >= 500 && t < tries) { await r.arrayBuffer().catch(() => {}); await sleep(5000 * t); continue; }
       const buf = opt.raw ? Buffer.from(await r.arrayBuffer()) : null;
       return { status: r.status, loc: r.headers.get('location'), ct: r.headers.get('content-type') || '', text: buf ? '' : await r.text(), buf };
     } catch (e) {
@@ -133,6 +135,7 @@ async function listNewOrders() {
 async function readOrder(vid) {
   const r = await req(`/orders/view/${vid}`);
   if (r.status === 302) throw new Error('session expired');
+  if (r.status >= 400) throw new Error(`OMS Guru busy (HTTP ${r.status})`);
   const $ = cheerio.load(r.text);
   $('script,style').remove();
   const txt = clean($('body').text());
@@ -319,6 +322,7 @@ async function main() {
       let res;
       try { res = await packBatch(part.map((o) => o.vid), g.slotDate); }
       catch (e) { res = { ok: false, reason: 'Pack request error: ' + e.message }; }
+      if (!res.ok && /\b50[234]\b|Temporarily Unavailable|busy/i.test(res.reason || '')) { await sleep(30000); res = await packBatch(part.map((o) => o.vid), g.slotDate); }
       if (!res.ok && /session|login/i.test(res.reason || '')) { await login(); await getToken(); res = await packBatch(part.map((o) => o.vid), g.slotDate); }
       batchNotes.push({ account: ACCOUNTS[g.cc], slotDate: g.slotDate, orders: part.length, ok: res.ok, reason: res.reason || '', msg: res.msg || '' });
       if (!res.ok) part.forEach((o) => { o.packError = res.reason; });
