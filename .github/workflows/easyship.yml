@@ -35,7 +35,8 @@ jobs:
         with:
           node-version: '20'
       - run: npm install --no-save cheerio@1.0.0 pdf-lib@1.17.1 firebase-admin@12
-      - run: node easyship.js
+      - shell: bash
+        run: node easyship.js 2>&1 | tee run.log
         env:
           OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
@@ -44,3 +45,11 @@ jobs:
           LIMIT: ${{ inputs.limit || '0' }}
           SLA_DATE: ${{ inputs.sla_date || '' }}
           TRIGGER: ${{ github.event_name == 'schedule' && 'schedule' || inputs.trigger || 'manual' }}
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+        run: node report-health.js easyship "Easy Ship labels" run.log || true

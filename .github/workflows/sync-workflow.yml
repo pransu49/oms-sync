@@ -31,4 +31,13 @@ jobs:
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
           OMS_DAYS_BACK: '15'
-        run: node sync.js
+        shell: bash
+        run: node sync.js 2>&1 | tee run.log
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+        run: node report-health.js oms "OMS Guru sync" run.log || true

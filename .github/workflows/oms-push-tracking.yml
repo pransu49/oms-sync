@@ -27,10 +27,19 @@ jobs:
         with:
           node-version: '20'
       - run: npm install
-      - run: node oms-push-tracking.js
+      - shell: bash
+        run: node oms-push-tracking.js 2>&1 | tee run.log
         env:
           OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+        run: node report-health.js push "Tracking push to OMS" run.log || true

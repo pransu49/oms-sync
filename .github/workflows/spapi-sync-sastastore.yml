@@ -47,4 +47,13 @@ jobs:
           # Quick sync on the 15-minute schedules, full sync otherwise (incl. manual / code updates).
           SYNC_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode) || (github.event_name == 'schedule' && github.event.schedule != '40 */2 * * *' && 'fast') || 'full' }}
           ACCOUNT_LABEL: sastastore
-        run: node spapi-sync.js
+        shell: bash
+        run: node spapi-sync.js 2>&1 | tee run.log
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+        run: node report-health.js spapi_sasta "Amazon sync (Sasta Store)" run.log || true

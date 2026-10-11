@@ -23,9 +23,18 @@ jobs:
         with:
           node-version: '20'
       - run: npm install firebase-admin
-      - run: node nimbus-sync.js
+      - shell: bash
+        run: node nimbus-sync.js 2>&1 | tee run.log
         env:
           NIMBUS_API_KEY: ${{ secrets.NIMBUS_API_KEY }}
           NIMBUS_API_SECRET: ${{ secrets.NIMBUS_API_SECRET }}
           DEBUG_ORDER: ${{ inputs.debug_order || '' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+        run: node report-health.js nimbus "NimbusPost sync" run.log || true

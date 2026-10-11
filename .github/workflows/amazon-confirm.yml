@@ -29,7 +29,8 @@ jobs:
         with:
           node-version: '20'
       - run: npm install amazon-sp-api firebase-admin
-      - run: node amazon-confirm.js
+      - shell: bash
+        run: node amazon-confirm.js 2>&1 | tee run.log
         env:
           SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
           SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
@@ -39,3 +40,11 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           PROBE: ${{ inputs.probe || 'false' }}
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+        run: node report-health.js amazon "Amazon confirmation" run.log || true
