@@ -186,10 +186,10 @@ async function ajaxPost(path, params) {
   return { ...r, json: j };
 }
 // OMS Guru long tasks: keep asking "/orders/rwtYet" until it says done
-async function waitTask(j) {
+async function waitTask(j, maxSec = 90) {
   if (!j || !j.id) return j;
   let last = j;
-  for (let i = 0; i < 180; i++) {
+  for (let i = 0; i < Math.ceil(maxSec / 4); i++) {
     await sleep(4000);
     const b = new URLSearchParams({ id: j.id, command: j.command || '', task: j.task || 0 });
     const r = await ajaxPost('/orders/rwtYet', b);
@@ -206,7 +206,7 @@ async function packBatch(vids, slotDate) {
   p1.append('data[Click][command]', 'Pack Orders'); p1.append('data[Click][show_progress]', '1');
   vids.forEach((v) => p1.append('data[Invoice][][id]', v));
   let r1 = await ajaxPost('/orders/newOrders', p1);
-  let j1 = r1.json && r1.json.id ? await waitTask(r1.json) : r1.json;
+  let j1 = r1.json && r1.json.id ? await waitTask(r1.json, 120) : r1.json;
   const html = (j1 && (j1.body || j1.html)) || r1.text || '';
   const $ = cheerio.load(html);
   const form = $('form#InvoiceNewOrdersForm').first();
@@ -223,7 +223,8 @@ async function packBatch(vids, slotDate) {
   form.find('input').each((_, el) => { const n = $(el).attr('name'); if (n) p2.append(n, $(el).attr('value') || ''); });
   p2.set('data[Invoice][easyship_date]', slot);
   let r2 = await ajaxPost(form.attr('action') ? new URL(form.attr('action'), BASE).pathname : '/orders/newOrders', p2);
-  const j2 = r2.json && r2.json.id ? await waitTask(r2.json) : r2.json;
+  // OMS keeps working in the background; the label check below confirms each order, so don't wait long here
+  const j2 = r2.json && r2.json.id ? await waitTask(r2.json, 60) : r2.json;
   const msg = clean(cheerio.load((j2 && (j2.html || j2.body || j2.title)) || r2.text || '').text()).slice(0, 300);
   return { ok: true, slot, msg, httpStatus: r2.status };
 }
