@@ -76,8 +76,17 @@
   }
 
   /* ---------- 2. live data (reads only while this page is open) ---------- */
-  var unsub = null, data = null;
-  function db() { return typeof fbDb !== "undefined" && fbDb ? fbDb : null; }
+  var unsub = null, data = null, esDb = null;
+  // Easy Ship data lives in the "aikm-oms-sync" Firebase project (its own free quota)
+  var OMS_CFG = { apiKey: "AIzaSyCKvAQr48JeVTJzvwcCg0YBNf7SBdaCVsk", authDomain: "aikm-oms-sync.firebaseapp.com", projectId: "aikm-oms-sync",
+    storageBucket: "aikm-oms-sync.firebasestorage.app", messagingSenderId: "464184383750", appId: "1:464184383750:web:4fb422b90e519a87d76687" };
+  function db() {
+    if (esDb) return esDb;
+    if (typeof firebase === "undefined" || !firebase.initializeApp || !firebase.firestore) return null;
+    try { var app = (firebase.apps || []).filter(function (a) { return a.name === "omsSync"; })[0] || firebase.initializeApp(OMS_CFG, "omsSync"); esDb = app.firestore(); } catch (e) { return null; }
+    return esDb;
+  }
+  function mainDb() { return typeof fbDb !== "undefined" && fbDb ? fbDb : null; }
   function listen() {
     if (unsub || !db()) return;
     unsub = db().collection("aikm_admin").doc("easyShip").onSnapshot(function (d) { data = d.exists ? d.data() : {}; render(); }, function () { setState("bad", "Could not read Easy Ship data"); });
@@ -188,7 +197,7 @@
   /* ---------- 4. Run now (same shared GitHub token as the other Sync-now buttons) ---------- */
   async function getToken() {
     var t = "";
-    try { var d = await db().collection("aikm_admin").doc("ghSync").get(); t = (d.exists && d.data().token) || ""; } catch (e) {}
+    try { if (mainDb()) { var d = await mainDb().collection("aikm_admin").doc("ghSync").get(); t = (d.exists && d.data().token) || ""; } } catch (e) {}
     if (!t) try { t = localStorage.getItem(TK) || ""; } catch (e) {}
     return String(t).replace(/^\s*bearer\s+/i, "").trim();
   }
