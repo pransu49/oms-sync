@@ -16,7 +16,7 @@ const lines = log.split(/\r?\n/);
 const tail = lines.slice(-250).join('\n').slice(-60000);
 
 const REASONS = [
-  [/RESOURCE_EXHAUSTED|Quota exceeded|quota.*exceed/i, 'Firebase free daily limit reached', 'Wait — it resets around 1:30 pm IST. If it keeps happening, tell Claude.'],
+  [/RESOURCE_EXHAUSTED|Quota exceeded|quota.*exceed/i, 'Firebase free daily limit reached', 'Wait — it resets around 12:30 pm IST (1:30 pm from November). If it keeps happening, tell Claude.'],
   [/CSRF token|export form|form changed|could not find the export download|download link|page changed|Export was not queued/i, 'OMS Guru page changed', 'OMS Guru changed its website — share the log with Claude to update the robot.'],
   [/login failed|did not redirect|Invalid email or password|password field/i, 'Login failed', 'Password may have changed — update it in GitHub secrets, or share the log with Claude.'],
   [/Invalid API key|UNAUTHORIZED|unauthori[sz]ed|invalid_grant|access token/i, 'Key / token rejected', 'The API key or token expired or was changed — share the log with Claude.'],
