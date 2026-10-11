@@ -134,6 +134,7 @@ html#aikm body #tab-easyship td.num{text-align:right;font-variant-numeric:tabula
     $("esLastLine").textContent = cur ? (showDry ? "Preview only (nothing packed) · " : "") + "SLA " + nice(cur.target) + " · " + (cur.trigger === "schedule" ? "auto 11:30 AM" : cur.trigger || "manual") + (cur.limit ? " · test (" + cur.limit + " order)" : "") : "";
 
     var failed = (cur && cur.failed) || [], check = (cur && cur.check) || [];
+    document.querySelector("#tab-easyship .cx-kpi-label").textContent = showDry ? "Ready to pack (preview)" : "Packed (last run)";
     $("esKpiPacked").textContent = cur ? (showDry ? (cur.preview || []).length : cur.packed || 0) : "–";
     $("esKpiPackedSub").textContent = cur ? (showDry ? "would be packed" : "of " + (cur.found || 0) + " Easy Ship due") : "";
     $("esKpiFailed").textContent = cur ? failed.length : "–";
