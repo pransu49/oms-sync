@@ -83,7 +83,7 @@
   function db() {
     if (esDb) return esDb;
     if (typeof firebase === "undefined" || !firebase.initializeApp || !firebase.firestore) return null;
-    try { var app = (firebase.apps || []).filter(function (a) { return a.name === "omsSync"; })[0] || firebase.initializeApp(OMS_CFG, "omsSync"); esDb = app.firestore(); } catch (e) { return null; }
+    try { var app = (firebase.apps || []).filter(function (a) { return a.name === "omsSync" || (a.options && a.options.projectId === "aikm-oms-sync"); })[0] || firebase.initializeApp(OMS_CFG, "omsSync"); esDb = app.firestore(); } catch (e) { return null; }
     return esDb;
   }
   function mainDb() { return typeof fbDb !== "undefined" && fbDb ? fbDb : null; }
