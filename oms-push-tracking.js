@@ -65,7 +65,9 @@ async function main() {
   const chunks = await omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks').get();
   const oms = []; chunks.forEach((d) => oms.push(...(d.get('orders') || [])));
   const nbDoc = await db.collection('nimbusIndex').doc('byOrder').get();
-  const nimbus = {}; Object.entries((nbDoc.exists && nbDoc.get('orders')) || {}).forEach(([k, v]) => { nimbus[nid(k)] = v; });
+  const nimbus = {}; let nbAll = {};
+  if (nbDoc.exists) { try { nbAll = nbDoc.get('data') ? JSON.parse(nbDoc.get('data')) : (nbDoc.get('orders') || {}); } catch (e) { nbAll = nbDoc.get('orders') || {}; } }
+  Object.entries(nbAll).forEach(([k, v]) => { nimbus[nid(k)] = v; });
   const logRef = db.collection('aikm_admin').doc('omsTrackingPush');
   const logDoc = await logRef.get();
   const pushed = (logDoc.exists && logDoc.get('ids')) || {};

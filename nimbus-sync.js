@@ -152,7 +152,11 @@ async function main() {
   const stale = Object.keys(old).filter((id) => !used.has(id));
   if (stale.length) { const b = db.batch(); stale.forEach((id) => b.delete(col.doc(id))); await b.commit(); }
   await col.doc('_meta').set({ updatedAt: admin.firestore.FieldValue.serverTimestamp(), total: rows.length, counts, daysBack: DAYS_BACK });
-  await db.collection('nimbusIndex').doc('byOrder').set({ orders: byOrder, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+  // Full list as one JSON text (Firestore doesn't index inside text, so no "too many index entries" limit).
+  // Small 'orders' map = only shipments still awaiting pickup (what the console's confirmation page needs).
+  const pending = {};
+  Object.entries(byOrder).filter(([, v]) => v.s === 'pickup').slice(0, 3000).forEach(([k, v]) => { pending[k] = v; });
+  await db.collection('nimbusIndex').doc('byOrder').set({ data: JSON.stringify(byOrder), orders: pending, count: Object.keys(byOrder).length, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
 
   console.log(`Dashboard: ${written} chunk(s) updated, ${stale.length} removed. Order index: ${Object.keys(byOrder).length}.`);
 }
