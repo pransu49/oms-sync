@@ -29,6 +29,7 @@ const H = {
   'Accept-Language': 'en-US,en;q=0.9',
 };
 const ACCOUNTS = { 45608: 'AIKM Pharma', 45614: 'E Commerce Munda', 45619: 'Praso Enterprises', 45611: 'Sasta Store', 45616: 'Vishal E Commerce' };
+const WAREHOUSE = 22452;            // DEFAULT 310803 (own warehouse)
 const SLOT_TIME = '2:00 PM';        // pickup slot start — always the 2 PM slot
 const BATCH = 25;                   // orders per Pack request
 const CONC = 4;                     // parallel page reads
@@ -83,6 +84,7 @@ async function login() {
     body: new URLSearchParams({ _method: 'POST', 'data[Client][email]': EMAIL, 'data[Client][password]': PASSWORD, 'data[Client][otp]': '', 'data[Client][remember_me]': '0' }).toString(),
   });
   if (r.status !== 302) throw new Error(`OMS Guru login failed (status ${r.status})`);
+  await req(`/orders/setCurWarehouse/${WAREHOUSE}`);   // order pages need a warehouse chosen (DEFAULT 310803)
 }
 let TOKEN = '';
 async function getToken() {
@@ -106,6 +108,7 @@ async function listNewOrders() {
   for (let p = 1; p <= 40; p++) {
     const r = await req(`/orders/newOrders/page:${p}?filter=${filter}`);
     if (r.status === 302) throw new Error('OMS Guru session expired while reading orders');
+    if (/Please select a warehouse to continue/i.test(r.text)) throw new Error('OMS Guru asked to choose a warehouse — could not read orders');
     const $ = cheerio.load(r.text);
     const trs = $('table tbody tr').toArray();
     for (const tr of trs) {
