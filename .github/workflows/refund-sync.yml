@@ -7,7 +7,7 @@ on:
   workflow_dispatch: {}      # "Update now" button in the console's Bulk Refund tab
 
 concurrency:
-  group: refund-sync
+  group: oms-guru-sync     # same queue as the 10-min OMS sync - they never run at the same time
   cancel-in-progress: false
 
 jobs:

@@ -259,22 +259,28 @@ async function main() {
   console.log(`Logging into OMS Guru as ${EMAIL}...`);
   await login();
   await new Promise((r) => setTimeout(r, 1500 + Math.floor(Math.random() * 1500)));
-  // OMS Guru returns at most ~15 days per export, so pull the period in 14-day windows.
-  const WINDOW = 14;
-  const rows = [];
-  for (let from = 0; from < DAYS_BACK; from += WINDOW) {
-    const end = new Date(); end.setDate(end.getDate() - from);
-    const start = new Date(); start.setDate(start.getDate() - Math.min(from + WINDOW - 1, DAYS_BACK));
-    console.log(`Requesting export ${fmtDate(start)} -> ${fmtDate(end)}...`);
-    const link = await requestExport(start, end);
-    const buf = await pollAndDownload(link, 60, 6000);
-    const part = parseOrders(buf);
-    const dates = part.map((r) => Date.parse(dateOnly(r['Order Date'] || ''))).filter(Boolean);
-    console.log(`  ${part.length} rows` + (dates.length ? ` (orders ${fmtDate(new Date(Math.min(...dates)))} .. ${fmtDate(new Date(Math.max(...dates)))})` : ''));
-    rows.push(...part);
-    await new Promise((r) => setTimeout(r, 2000 + Math.floor(Math.random() * 2000)));
+  // OMS Guru's "download" link is always the PREVIOUS export on the account, not the one just asked for.
+  // So: 1) queue our 60-day export (the link we get back belongs to someone else - ignored),
+  //     2) queue a normal 15-day export - its link is OUR 60-day file. That 15-day export is also what
+  //        the 10-min OMS sync downloads next, so its data stays correct.
+  // This workflow shares the OMS sync's queue, so the two never run at the same time.
+  const today = new Date();
+  const start60 = new Date(); start60.setDate(start60.getDate() - DAYS_BACK);
+  const start15 = new Date(); start15.setDate(start15.getDate() - 15);
+  console.log(`Queueing export ${fmtDate(start60)} -> ${fmtDate(today)}...`);
+  await requestExport(start60, today);
+  await new Promise((r) => setTimeout(r, 45000));
+  console.log(`Queueing normal 15-day export ${fmtDate(start15)} -> ${fmtDate(today)} (its link = our 60-day file)...`);
+  const link = await requestExport(start15, today);
+  const rows = parseOrders(await pollAndDownload(link, 60, 6000));
+  const dates = rows.map((r) => Date.parse(dateOnly(r['Order Date'] || ''))).filter(Boolean);
+  const oldest = dates.length ? Math.min(...dates) : 0, newest = dates.length ? Math.max(...dates) : 0;
+  console.log(`Parsed ${rows.length} rows (orders ${oldest ? fmtDate(new Date(oldest)) : '-'} .. ${newest ? fmtDate(new Date(newest)) : '-'}).`);
+  // Safety: refuse to save a file that is not our 60-day export.
+  const dayMs = 86400000;
+  if (!dates.length || oldest > Date.now() - (DAYS_BACK - 10) * dayMs || newest < Date.now() - 3 * dayMs) {
+    throw new Error(`OMS returned a different export (orders ${oldest ? fmtDate(new Date(oldest)) : '-'} .. ${newest ? fmtDate(new Date(newest)) : '-'}) - nothing saved. Yesterday's refund list is kept.`);
   }
-  console.log(`Parsed ${rows.length} rows in total.`);
   const list = rows
     .filter((r) => isAmazon(r['Channel Name']) && isRefundStatus(r['Order Status']))
     .map(slim)
