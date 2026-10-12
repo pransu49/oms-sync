@@ -372,7 +372,9 @@ async function main() {
 
   if (DRY) {
     summary.packed = 0; summary.failed = [];
-    summary.preview = toPack.map((o) => ({ orderId: o.orderId, account: o.account, sla: o.sla, sku: o.items.map((x) => `${x.sku} ×${x.qty}`).join(', ') }));
+    summary.preview = toPack.map((o) => ({ orderId: o.orderId, account: o.account, sla: o.sla, sku: o.items.map((x) => `${x.sku} ×${x.qty}`).join(', '), lastError: failReason(o.lastFail) }));
+    const lastErr = {}; toPack.forEach((o) => { const k = o.lastFail ? failReason(o.lastFail).slice(0, 160) : ''; if (k) lastErr[`${o.account} — ${k}`] = (lastErr[`${o.account} — ${k}`] || 0) + 1; });
+    Object.entries(lastErr).forEach(([k, n]) => console.log(`  earlier OMS error ×${n}: ${k}`));
     summary.byAccount = {}; toPack.forEach((o) => { summary.byAccount[o.account] = summary.byAccount[o.account] || { packed: 0, wouldPack: 0, labels: 0 }; summary.byAccount[o.account].wouldPack++; });
     summary.finishedAt = new Date().toISOString(); summary.state = 'done';
     await mainRef.set({ live: { runId: RUN_ID, state: 'done', step: 'Dry run finished', updatedAt: summary.finishedAt }, lastDry: summary }, { merge: true });
@@ -422,6 +424,8 @@ async function main() {
   const packed = toPack.filter((o) => o.final === 'packed');
   const failed = toPack.filter((o) => o.final !== 'packed');
   console.log(`Packed with label: ${packed.length} · failed: ${failed.length}`);
+  const why = {}; failed.forEach((o) => { const k = (o.packError || 'unknown').slice(0, 160); why[k] = (why[k] || 0) + 1; });
+  Object.entries(why).forEach(([k, n]) => console.log(`  failed ×${n}: ${k}`));
 
   await finish(summary, packed, failed, batchNotes, t0);
 }
