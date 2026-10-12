@@ -80,7 +80,7 @@ async function login() {
   }
 }
 
-async function requestExport(daysBack) {
+async function requestExport(start, end) {
   let res = await fetch(BASE + '/reports/export_data', { headers: { ...BROWSER_HEADERS, 'Cookie': cookieHeader() } });
   updateCookies(res);
   let html = await res.text();
@@ -99,9 +99,6 @@ async function requestExport(daysBack) {
     throw new Error('Could not find CSRF token on export page — OMS Guru may have changed its form.');
   }
 
-  const end = new Date();
-  const start = new Date();
-  start.setDate(start.getDate() - daysBack);
 
   const body = new URLSearchParams({
     '_method': 'POST',
@@ -262,16 +259,27 @@ async function main() {
   console.log(`Logging into OMS Guru as ${EMAIL}...`);
   await login();
   await new Promise((r) => setTimeout(r, 1500 + Math.floor(Math.random() * 1500)));
-  console.log(`Requesting export for last ${DAYS_BACK} days...`);
-  const link = await requestExport(DAYS_BACK);
-  console.log('Export queued, polling for download (60-day file can take a few minutes)...');
-  const buf = await pollAndDownload(link, 80, 6000);
-  const rows = parseOrders(buf);
-  console.log(`Parsed ${rows.length} rows.`);
+  // OMS Guru returns at most ~15 days per export, so pull the period in 14-day windows.
+  const WINDOW = 14;
+  const rows = [];
+  for (let from = 0; from < DAYS_BACK; from += WINDOW) {
+    const end = new Date(); end.setDate(end.getDate() - from);
+    const start = new Date(); start.setDate(start.getDate() - Math.min(from + WINDOW - 1, DAYS_BACK));
+    console.log(`Requesting export ${fmtDate(start)} -> ${fmtDate(end)}...`);
+    const link = await requestExport(start, end);
+    const buf = await pollAndDownload(link, 60, 6000);
+    const part = parseOrders(buf);
+    const dates = part.map((r) => Date.parse(dateOnly(r['Order Date'] || ''))).filter(Boolean);
+    console.log(`  ${part.length} rows` + (dates.length ? ` (orders ${fmtDate(new Date(Math.min(...dates)))} .. ${fmtDate(new Date(Math.max(...dates)))})` : ''));
+    rows.push(...part);
+    await new Promise((r) => setTimeout(r, 2000 + Math.floor(Math.random() * 2000)));
+  }
+  console.log(`Parsed ${rows.length} rows in total.`);
   const list = rows
     .filter((r) => isAmazon(r['Channel Name']) && isRefundStatus(r['Order Status']))
     .map(slim)
-    .filter((o) => o.o && o.i);
+    .filter((o) => o.o && o.i)
+    .filter((o, i, all) => all.findIndex((x) => x.i === o.i) === i);
   list.sort((x, y) => (Date.parse(y.d) || 0) - (Date.parse(x.d) || 0)); // newest first
   const byStatus = {};
   list.forEach((o) => { byStatus[o.st] = (byStatus[o.st] || 0) + 1; });

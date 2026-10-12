@@ -88,6 +88,15 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
       "</div></div>";
     content.appendChild(p);
 
+    b.addEventListener("click", function () {
+      document.querySelectorAll(".tabbtn").forEach(function (x) { x.classList.remove("active"); });
+      document.querySelectorAll(".tabpanel").forEach(function (x) { x.classList.remove("active"); });
+      document.querySelectorAll(".subtabbar").forEach(function (x) { x.style.display = "none"; });
+      b.classList.add("active"); p.classList.add("active"); sub.style.display = "flex";
+      try { document.body.classList.remove("sidebar-open"); document.getElementById("appSidebarBackdrop").classList.remove("show"); } catch (e) {}
+      load(false);
+    });
+
     $("rfFindBtn").addEventListener("click", find);
     $("rfIds").addEventListener("keydown", function (e) { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) find(); });
     $("rfClearBtn").addEventListener("click", function () { $("rfIds").value = ""; sel = []; missing = []; chip(""); render(); });
