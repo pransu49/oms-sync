@@ -19,6 +19,9 @@ on:
       trigger:
         description: 'who started it (schedule / console / manual)'
         default: 'manual'
+      probe_vids:
+        description: 'debug only: OMS order ids to open the pack step for (nothing is packed)'
+        default: ''
 
 # never two runs at once
 concurrency:
@@ -44,6 +47,8 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           LIMIT: ${{ inputs.limit || '0' }}
           SLA_DATE: ${{ inputs.sla_date || '' }}
+          PROBE: ${{ inputs.probe_vids != '' && 'true' || 'false' }}
+          PROBE_VIDS: ${{ inputs.probe_vids || '' }}
           TRIGGER: ${{ github.event_name == 'schedule' && 'schedule' || inputs.trigger || 'manual' }}
 
       - name: Report sync health to console

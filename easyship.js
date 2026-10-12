@@ -223,6 +223,18 @@ async function packBatch(vids, slotDate) {
   const $ = cheerio.load(html);
   const form = $('form#InvoiceNewOrdersForm').first();
   const sel = form.find('select[name="data[Invoice][easyship_date]"]');
+  if (process.env.PROBE === 'true') {
+    const fs = require('fs');
+    fs.writeFileSync('probe.html', html);
+    const $$ = cheerio.load(html);
+    console.log('PROBE forms:', $$('form').length);
+    $$('form').each((i, f) => {
+      console.log(`PROBE form#${i} action=${$$(f).attr('action')} id=${$$(f).attr('id')}`);
+      $$(f).find('input,select,textarea,button').slice(0, 40).each((_, e) => console.log('  ', e.tagName, $$(e).attr('name') || '', $$(e).attr('type') || '', ($$(e).attr('value') || $$(e).find('option:selected').text() || '').slice(0, 40), $$(e).attr('class') || ''));
+    });
+    console.log('PROBE text:', clean($$.text()).slice(0, 600));
+    process.exit(0);
+  }
   if (!form.length || !sel.length) {
     return { ok: false, reason: 'OMS did not show the Easy Ship pickup-slot step: ' + clean(cheerio.load(html).text()).slice(0, 200) };
   }
@@ -304,6 +316,7 @@ async function main() {
     }
     easy.push(o);
   });
+  if (process.env.PROBE === 'true') { const want = (process.env.PROBE_VIDS || '').split(',').filter(Boolean); if (want.length) { const res = await packBatch(want, TARGET); console.log(res); return; } }
   let toPack = easy.sort((a, b) => (a.sla + a.cc).localeCompare(b.sla + b.cc));
   if (LIMIT) toPack = toPack.slice(0, LIMIT);
   console.log(`Confirmed Easy Ship: ${easy.length} · skipped (qty>4 or >3 kg): ${skipped.length} · check manually: ${check.length} · will pack: ${toPack.length}`);
