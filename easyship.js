@@ -322,11 +322,14 @@ async function main() {
   if (COLLECT) {
     // labels only — orders already packed (Ready To Ship) for this SLA date
     await status({ state: 'running', step: `Collecting labels for SLA ${TARGET}` });
-    const rts = (await listNewOrders('dispatchOrders')).filter((r) => !r.selfShip && r.sla === TARGET);
+    const rtsAll = [...(await listNewOrders('dispatchOrders')), ...(await listNewOrders('packOrders'))];
+    const seen = new Set(); const rts = rtsAll.filter((r) => !r.selfShip && r.sla === TARGET && !seen.has(r.vid) && seen.add(r.vid));
     const det = await pool(rts, (r) => readOrder(r.vid));
     const got = [];
     rts.forEach((r, i) => { const d = det[i]; if (d && !d.error && d.labelId && /^NA$/i.test(d.phone)) got.push({ ...r, ...d, final: 'packed' }); });
-    console.log(`Ready To Ship (SLA ${TARGET}, Easy Ship): ${got.length} with labels`);
+    console.log(`Packed / Ready To Ship (SLA ${TARGET}, Easy Ship): ${rts.length} orders · ${got.length} with labels`);
+    const byA = {}; rts.forEach((r, i) => { const d = det[i] || {}; const k = `${r.account} ${d.labelId ? 'label' : 'NO label'}`; byA[k] = (byA[k] || 0) + 1; });
+    Object.entries(byA).forEach(([k, n]) => console.log(`  ${k}: ${n}`));
     const summary = { runId: RUN_ID, target: TARGET, dryRun: false, limit: 0, trigger: TRIGGER, collect: true, startedAt: new Date(t0).toISOString(), found: got.length, check: [], skipped: [] };
     return finish(summary, got, [], [], t0);
   }
