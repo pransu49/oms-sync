@@ -13,6 +13,7 @@ html#aikm body #tab-refund .rf-chip{display:inline-flex;align-items:center;gap:6
 html#aikm body #tab-refund .rf-chip.on{background:var(--x-gold-soft);color:var(--x-gold);border-color:var(--x-gold-line);}\
 html#aikm body #tab-refund td.num,html#aikm body #tab-refund th.num{text-align:right;font-variant-numeric:tabular-nums;}\
 html#aikm body #tab-refund td.num b{font-weight:600;}\
+html#aikm body #tab-refund td.num,html#aikm body #tab-refund td.num .rf-meta{white-space:nowrap;}\
 html#aikm body #tab-refund .rf-tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600;background:var(--x-amber-soft);color:var(--x-amber);white-space:nowrap;}\
 html#aikm body #tab-refund .rf-tag.red{background:var(--x-red-soft);color:var(--x-red);}\
 html#aikm body #tab-refund .rf-tag.green{background:var(--x-green-soft,rgba(46,160,90,.14));color:var(--x-green);}\
@@ -243,11 +244,11 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     if (!sel.length) { $("rfTable").innerHTML = '<div class="rf-empty">Paste order IDs above, or click Returned / Cancelled / All.</div>'; }
     else {
       var rows = sel.map(function (o) {
-        var c = calc(o), cod = /cod|poa/i.test(o.ty || "");
+        var c = calc(o);
         var tag = /return/i.test(o.st) ? "rf-tag" : /cancel/i.test(o.st) ? "rf-tag red" : "rf-tag green";
         return "<tr" + (o.off ? ' style="opacity:.5"' : "") + "><td><input type='checkbox' data-rf-on='" + esc(o.i) + "'" + (o.off ? "" : " checked") + "></td>" +
           "<td class='cx-awb'>" + esc(o.o) + "<div class='rf-meta'>" + esc(o.i) + "</div></td><td>" + esc(o.a) + "</td>" +
-          "<td style='max-width:220px'><div style='white-space:nowrap;overflow:hidden;text-overflow:ellipsis' title='" + esc(o.n) + "'>" + esc(o.n) + "</div><div class='rf-meta'>Qty " + o.q + " · " + esc(o.ty) + (cod ? " · <b style='color:var(--x-amber)'>COD/POA</b>" : "") + "</div></td>" +
+          "<td style='max-width:220px'><div style='white-space:nowrap;overflow:hidden;text-overflow:ellipsis' title='" + esc(o.n) + "'>" + esc(o.n) + "</div><div class='rf-meta'>Qty " + o.q + " · " + esc(o.ty) + "</div></td>" +
           "<td><span class='" + tag + "'>" + esc(o.st) + "</span></td>" +
           "<td class='num'>" + f2(c.ip) + "<div class='rf-meta'>+" + f2(c.it) + " tax</div></td>" +
           "<td class='num'>" + f2(c.sp) + "<div class='rf-meta'>+" + f2(c.stx) + " tax</div></td>" +
