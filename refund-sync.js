@@ -259,14 +259,17 @@ function rtoOrders(ship) {
     const t = new Date(o.created_at || o.order_date).getTime() || 0;
     if (!byOrder[id] || t > byOrder[id].t) byOrder[id] = { t, o };
   });
-  const out = {};
+  const out = {}, latest = {};
   Object.entries(byOrder).forEach(([id, { o }]) => {
     const st = String(o.order_status || '').toLowerCase();
-    if (!st.startsWith('rto')) return;
+    latest[st] = (latest[st] || 0) + 1;
+    const lost = /lost|damage|destroy|dispos|shortage|missing/.test(st);
+    if (!st.startsWith('rto') && !lost) return;
     const sh = o.shipment || {};
-    out[id] = { ns: st.replace(/_/g, ' '), nb: st === 'rto_delivered' ? 'rto_delivered' : 'rto', aw: String(sh.awb || ''),
+    out[id] = { ns: st.replace(/_/g, ' '), nb: lost ? 'lost' : st === 'rto_delivered' ? 'rto_delivered' : 'rto', aw: String(sh.awb || ''),
       c: String(sh.courier_name || ''), nd: String(sh.delivered_at || o.updated_at || '').slice(0, 10) };
   });
+  console.log('NimbusPost latest status per order:', JSON.stringify(latest));
   return out;
 }
 
@@ -315,7 +318,7 @@ async function main() {
   console.log('Reading NimbusPost shipments (self-ship) ...');
   const ship = await nimbusShipments();
   const rto = rtoOrders(ship);
-  console.log(`NimbusPost: ${ship.length} shipments in ${DAYS_BACK} days, ${Object.keys(rto).length} order(s) whose latest shipment is RTO.`);
+  console.log(`NimbusPost: ${ship.length} shipments in ${DAYS_BACK} days, ${Object.keys(rto).length} order(s) whose latest shipment is RTO / lost / damaged.`);
 
   // OMS Guru's "download" link is always the PREVIOUS export on the account, not the one just asked for.
   // So: 1) queue our long export (the link we get back belongs to someone else - ignored),
