@@ -48,7 +48,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     var sub = document.createElement("div");
     sub.className = "subtabbar no-print"; sub.id = "subtab-refund"; sub.style.display = "none";
     sub.innerHTML = '<span class="subtab-label">Amazon Bulk Refund</span>' +
-      '<span class="rf-meta" id="rfSyncLine">Self-ship RTO · NimbusPost · last 60 days</span>' +
+      '<span class="rf-meta" id="rfSyncLine">Self-ship RTO / lost · NimbusPost · last 60 days</span>' +
       '<span style="flex:1"></span>' +
       '<label class="subbtn" style="cursor:pointer;" title="Order older than 60 days? Upload an OMS Guru export (zip / csv / xlsx). Read here only, nothing is saved."><i class="ti ti-upload"></i> Upload OMS export<input type="file" id="rfFile" accept=".zip,.csv,.xlsx,.xls" style="display:none"></label>' +
       '<button type="button" class="subbtn" id="rfSyncBtn" title="Pull the latest 60 days from OMS Guru now (about 3–6 minutes)"><i class="ti ti-refresh"></i> Update now</button>';
@@ -58,21 +58,21 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     p.id = "tab-refund"; p.className = "tabpanel";
     p.innerHTML =
       '<div class="cx-kpis" style="grid-template-columns:repeat(4,minmax(0,1fr)) !important;">' +
-        kpi("rfKpiAvail", "Self-ship RTO", "rfKpiAvailSub") + kpi("rfKpiSel", "Selected to refund", "rfKpiSelSub") +
+        kpi("rfKpiAvail", "Self-ship RTO + lost", "rfKpiAvailSub") + kpi("rfKpiSel", "Selected to refund", "rfKpiSelSub") +
         kpi("rfKpiAmt", "Total refund", "rfKpiAmtSub") + kpi("rfKpiAcc", "Files to upload", "rfKpiAccSub") +
       "</div>" +
       '<div class="rf-grid"><div>' +
         '<div class="panel"><h2>1 · Pick orders</h2>' +
           '<textarea id="rfIds" placeholder="Paste Amazon order IDs here — one per line, or copy a whole column from Excel.&#10;e.g. 408-1718820-2871569"></textarea>' +
           '<div class="rf-row"><button type="button" class="btn-gold" id="rfFindBtn"><i class="ti ti-search"></i> Find orders</button>' +
-          '<span class="rf-meta">or show RTO from NimbusPost:</span>' +
-          '<span class="rf-chip" data-rf-show="del">RTO delivered</span><span class="rf-chip" data-rf-show="transit">RTO in transit</span><span class="rf-chip" data-rf-show="all">All RTO</span>' +
+          '<span class="rf-meta">or show from NimbusPost:</span>' +
+          '<span class="rf-chip" data-rf-show="del">RTO delivered</span><span class="rf-chip" data-rf-show="transit">RTO in transit</span><span class="rf-chip" data-rf-show="lost">Lost / damaged</span><span class="rf-chip" data-rf-show="all">All</span>' +
           '<button type="button" class="secondary" id="rfClearBtn" style="margin-left:auto;"><i class="ti ti-x"></i> Clear</button></div>' +
           '<div id="rfMiss"></div></div>' +
         '<div class="panel"><h2>2 · Check amounts <span class="rf-meta" id="rfCount"></span>' +
           '<label class="rf-meta" style="margin-left:auto;display:flex;align-items:center;gap:6px;"><input type="checkbox" id="rfShipChk" checked> Refund shipping too</label></h2>' +
           '<small class="hint">Same split as Seller Central\'s refund screen: price without tax + tax, shipping without tax + tax.</small>' +
-          '<div id="rfTable" style="margin-top:10px"><div class="rf-empty">Paste order IDs above, or click RTO delivered / RTO in transit / All RTO.</div></div></div>' +
+          '<div id="rfTable" style="margin-top:10px"><div class="rf-empty">Paste order IDs above, or pick RTO delivered / RTO in transit / Lost / All.</div></div></div>' +
       '</div><div>' +
         '<div class="panel"><h2>3 · Download &amp; upload</h2>' +
           '<label class="rf-meta" for="rfReason" style="display:block;margin-bottom:6px;">Reason for refund</label>' +
@@ -83,7 +83,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
           "<b>2.</b> Log into <b>that account</b> in Seller Central.<br>" +
           "<b>3.</b> Orders → <b>Upload Order Related Files</b> → <b>Order Adjustment</b> → upload.<br>" +
           "<b>4.</b> Check <b>Review File Status</b> → should say Done, 0 errors.<br><br>" +
-          "<b>Self-ship only:</b> RTO status comes from NimbusPost (OMS often still says Shipped). Easy Ship orders are never listed.<br>" +
+          "<b>Self-ship only:</b> RTO and lost/damaged status come from NimbusPost (OMS often still says Shipped). Easy Ship orders are never listed.<br>" +
           "<b>Safe:</b> Amazon never refunds more than the customer paid — an order already refunded is rejected, not paid twice.<br>" +
           "<b>Older than 60 days?</b> Use <b>Upload OMS export</b> (top right)." +
         "</div></div>" +
@@ -223,7 +223,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
   async function showStatus(k) {
     await load(false); chip(k); sel = []; missing = [];
     addSel(store.filter(function (o) {
-      return k === "all" ? true : k === "del" ? o.nb === "rto_delivered" : o.nb !== "rto_delivered";
+      return k === "all" ? true : k === "del" ? o.nb === "rto_delivered" : k === "lost" ? o.nb === "lost" : o.nb === "rto";
     }));
     sel.forEach(function (o) { o.off = true; }); // nothing ticked until you choose
     render();
@@ -233,9 +233,9 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
   /* ---------- 3. render ---------- */
   function render() {
     if (!$("tab-refund")) return;
-    $("rfSyncLine").textContent = loaded ? "Self-ship RTO · NimbusPost · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship RTO · NimbusPost · last 60 days";
+    $("rfSyncLine").textContent = loaded ? "Self-ship RTO / lost · NimbusPost · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship RTO · NimbusPost · last 60 days";
     $("rfKpiAvail").textContent = loaded ? store.length : "–";
-    $("rfKpiAvailSub").textContent = loaded ? store.filter(function (o) { return o.nb === "rto_delivered"; }).length + " delivered back · rest in transit" : "loading…";
+    $("rfKpiAvailSub").textContent = loaded ? store.filter(function (o) { return o.nb === "rto_delivered"; }).length + " back · " + store.filter(function (o) { return o.nb === "rto"; }).length + " in transit · " + store.filter(function (o) { return o.nb === "lost"; }).length + " lost" : "loading…";
 
     $("rfMiss").innerHTML = missing.length ? '<div class="rf-miss"><b>Not found (' + missing.length + "):</b> " + missing.map(esc).join(", ") +
       '<br><span style="opacity:.85">Not found in OMS — older than 70 days? Upload an OMS export (top right) and click Find again.</span></div>' : "";
@@ -246,8 +246,8 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     else {
       var rows = sel.map(function (o) {
         var c = calc(o);
-        var tag = o.nb === "rto_delivered" ? "rf-tag green" : o.nb === "rto" ? "rf-tag" : "rf-tag red";
-        var nsTxt = o.ns ? o.ns.replace(/^rto/i, "RTO") : "Not RTO in NimbusPost";
+        var tag = o.nb === "rto_delivered" ? "rf-tag green" : o.nb === "rto" ? "rf-tag" : "rf-tag red";   // lost / not RTO = red
+        var nsTxt = o.ns ? o.ns.replace(/^rto/i, "RTO").replace(/^lost/i, "Lost").replace(/^damaged/i, "Damaged") : "Not RTO / lost in NimbusPost";
         return "<tr" + (o.off ? ' style="opacity:.5"' : "") + "><td><input type='checkbox' data-rf-on='" + esc(o.i) + "'" + (o.off ? "" : " checked") + "></td>" +
           "<td class='cx-awb'>" + esc(o.o) + "<div class='rf-meta'>" + esc(o.i) + "</div></td><td>" + esc(o.a) + "</td>" +
           "<td style='max-width:220px'><div style='white-space:nowrap;overflow:hidden;text-overflow:ellipsis' title='" + esc(o.n) + "'>" + esc(o.n) + "</div><div class='rf-meta'>Qty " + o.q + " · " + esc(o.ty) + "</div></td>" +
