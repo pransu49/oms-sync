@@ -264,10 +264,10 @@
       var lf = L.labelFiles || {};
       var gen = new Date().toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
       // sort by product name so pickers walk the shelf in order
-      pk.sort(function (a, b) { return a.sku.localeCompare(b.sku); });
+      pk.sort(function (a, b) { var n = function (s) { var k = s.indexOf(" - "); return k > 0 ? s.slice(k + 3) : s; }; return n(a.sku).localeCompare(n(b.sku)); });
       var rows = pk.map(function (x, i) {
         var k = x.sku.indexOf(" - "), code = k > 0 ? x.sku.slice(0, k) : x.sku, name = k > 0 ? x.sku.slice(k + 3) : "";
-        return [i + 1, name || code, name ? code : "", x.qty, ""];
+        return [i + 1, name || code, x.qty, ""];
       });
       function header() {
         doc.setFillColor.apply(doc, NAVY); doc.rect(0, 0, W, 22, "F");
@@ -297,12 +297,12 @@
       Object.keys(lf).forEach(function (a, i) { doc.text(a + "  " + lf[a].pages, lx + (i % 2) * 52, y + 7.6 + Math.floor(i / 2) * 3.6); });
       doc.autoTable({
         startY: y + 16, margin: { left: M, right: M, top: 26, bottom: 12 },
-        head: [["#", "Product", "SKU code", "Qty", "Picked"]], body: rows,
+        head: [["#", "Product", "Qty", "Picked"]], body: rows,
         theme: "plain", styles: { font: "helvetica", fontSize: 7.6, cellPadding: { top: 0.85, bottom: 0.85, left: 1.6, right: 1.6 }, textColor: INK, lineColor: [230, 224, 210], lineWidth: { bottom: 0.15 }, overflow: "ellipsize" },
         headStyles: { fillColor: NAVY, textColor: GOLD, fontStyle: "bold", fontSize: 7, cellPadding: { top: 2, bottom: 2, left: 1.6, right: 1.6 } },
         alternateRowStyles: { fillColor: [252, 250, 245] },
-        columnStyles: { 0: { cellWidth: 8, halign: "right", textColor: MUTE }, 1: { cellWidth: 104 }, 2: { cellWidth: 52, textColor: MUTE, fontSize: 6.6 }, 3: { cellWidth: 14, halign: "right", fontStyle: "bold", fontSize: 8.6 }, 4: { cellWidth: 12, halign: "center" } },
-        didDrawCell: function (d) { if (d.section === "body" && d.column.index === 4) { doc.setDrawColor.apply(doc, MUTE); doc.setLineWidth(0.25); doc.rect(d.cell.x + d.cell.width / 2 - 1.6, d.cell.y + d.cell.height / 2 - 1.6, 3.2, 3.2); } },
+        columnStyles: { 0: { cellWidth: 8, halign: "right", textColor: MUTE }, 1: { cellWidth: 154 }, 2: { cellWidth: 14, halign: "right", fontStyle: "bold", fontSize: 8.6 }, 3: { cellWidth: 14, halign: "center" } },
+        didDrawCell: function (d) { if (d.section === "body" && d.column.index === 3) { doc.setDrawColor.apply(doc, MUTE); doc.setLineWidth(0.25); doc.rect(d.cell.x + d.cell.width / 2 - 1.6, d.cell.y + d.cell.height / 2 - 1.6, 3.2, 3.2); } },
         didDrawPage: function (d) { if (d.pageNumber > 1) header(); }
       });
       var fy = doc.lastAutoTable.finalY + 4;
