@@ -53,6 +53,7 @@ const SNAP_COL = 'spapiSnapshots';
 const ORDERS_WINDOW_DAYS = 90;
 const CHUNK_BYTES = 700 * 1024; // Firestore max is 1 MiB per document - stay well under
 let prevSnapMeta = null;
+let mrpCheckedAt = null;            // when verifyMrpPushes last ran (kept in the snapshot meta doc)
 
 function plain(data) {
   const out = {};
@@ -135,6 +136,7 @@ async function writeSnapshot() {
     ordersSyncedAt: ordersSyncedOk ? RUN_STARTED : ((prevSnapMeta && prevSnapMeta.ordersSyncedAt) || null),
     deliveryBackfilled: !!((prevSnapMeta && prevSnapMeta.deliveryBackfilled) || (deliveryBackfillRun && ordersSyncedOk)),
     fullSyncedAt: SYNC_MODE === 'full' ? Date.now() : ((prevSnapMeta && prevSnapMeta.fullSyncedAt) || null),
+    mrpCheckedAt: mrpCheckedAt || (prevSnapMeta && prevSnapMeta.mrpCheckedAt) || null,
   });
   // Remove the previous run's chunks (a little later, so an open page can finish reading).
   if (prevSnapMeta && prevSnapMeta.run && prevSnapMeta.run !== run) {
@@ -752,7 +754,12 @@ async function applyPendingMrpUpdates(sellerId) {
 // Check MRP pushes against Amazon's own listings report. Amazon often "accepts" an MRP change
 // but keeps the catalogue MRP (offer-only listings can't change it) - mark those not-live.
 async function verifyMrpPushes() {
+  // At most once every 2 hours — this reads every "applied" MRP request (300+ documents), and running
+  // it on every sync (every ~12 min) was costing ~1,500 Firebase reads an hour.
   if (!inventoryFresh) return;
+  const lastCheck = (prevSnapMeta && prevSnapMeta.mrpCheckedAt) || 0;
+  if (Date.now() - lastCheck < 2 * 3600e3) { mrpCheckedAt = lastCheck; console.log('MRP push check: skipped (runs every 2 hours).'); return; }
+  mrpCheckedAt = Date.now();
   const snap = await dbMain.collection('spapiMrpUpdates').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'applied').get();
   let live = 0, notLive = 0;
   const batch = dbMain.batch();
