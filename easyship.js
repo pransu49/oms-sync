@@ -170,7 +170,7 @@ async function readOrder(vid) {
     invoice: /^(empty|0)?$/i.test(inv) ? '' : inv,
     awb: ((dd['shipment tracker'] || '').match(/\d{6,}/) || [])[0] || '',
     sla: slaToIso(dd['sla date'] || ''),
-    weightG: toGrams(dd['weight']), volWeightG: toGrams(dd['vol weight']),
+    weightG: toGrams($('a[data-name="dead_weight"]').first().text() || dd['weight']), volWeightG: toGrams(dd['vol weight']),
     items, labelId, lastFail, lastFailAt,
   };
 }
