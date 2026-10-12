@@ -168,7 +168,7 @@ html#aikm body #tab-easyship td.num{text-align:right;font-variant-numeric:tabula
     var lf = last && last.labelFiles ? last.labelFiles : {};
     var accs = Object.keys(lf);
     $("esAllBtn").style.display = accs.length > 1 ? "" : "none";
-    $("esPickPdfBtn").style.display = (!showDry && cur && (cur.picklist || []).length) ? "" : "none";
+    $("esPickPdfBtn").style.display = (last && (last.picklist || []).length) ? "" : "none";
     $("esLabelsFor").textContent = last ? "· SLA " + nice(last.target) + " · " + when(last.finishedAt) : "";
     $("esLabels").innerHTML = accs.length ? accs.map(function (a) {
       var f = lf[a];
@@ -198,14 +198,14 @@ html#aikm body #tab-easyship td.num{text-align:right;font-variant-numeric:tabula
     })) : '<div class="es-empty">Nothing to check.</div>';
 
     // picklist (real run) or preview list (dry run)
-    if (showDry) {
+    if (showDry && !(last && (last.picklist || []).length)) {
       var pv = cur.preview || [], agg = {};
       pv.forEach(function (o) { agg[o.account] = (agg[o.account] || 0) + 1; });
       $("esPickCount").textContent = "· preview";
       $("esPick").innerHTML = pv.length ? table(["Account", "Orders"], Object.keys(agg).map(function (a) { return "<tr><td>" + esc(a) + "</td><td class='num'>" + agg[a] + "</td></tr>"; })) : '<div class="es-empty">Nothing due.</div>';
     } else {
-      var pk = (cur && cur.picklist) || [];
-      $("esPickCount").textContent = pk.length ? "· " + pk.length + " products · " + pk.reduce(function (s, x) { return s + x.qty; }, 0) + " units" : "";
+      var pk = (last && last.picklist) || [];
+      $("esPickCount").textContent = pk.length ? "· SLA " + nice(last.target) + " · " + pk.length + " products · " + pk.reduce(function (s, x) { return s + x.qty; }, 0) + " units" : "";
       $("esPick").innerHTML = pk.length ? table(["Product", "Qty"], pk.map(function (x) { return "<tr><td>" + esc(x.sku) + "</td><td class='num'>" + x.qty + "</td></tr>"; })) : '<div class="es-empty">No packed orders yet.</div>';
     }
 
