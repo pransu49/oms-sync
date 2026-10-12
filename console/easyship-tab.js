@@ -18,9 +18,10 @@
     var sub = document.createElement("div");
     sub.className = "subtabbar no-print"; sub.id = "subtab-easyship"; sub.style.display = "none";
     sub.innerHTML = '<span class="subtab-label">Amazon Easy Ship</span>' +
-      '<span class="es-meta">Auto-packs every day at 11:30 AM · 2 PM pickup on SLA date</span>' +
+      '<span class="es-meta">Auto-packs daily 11:30 AM · 2 PM pickup on SLA date · skips &gt;4 units or &gt;3 kg</span>' +
       '<span style="flex:1"></span>' +
-      '<button type="button" class="subbtn" id="esDryBtn" title="Shows what would be packed — packs nothing"><i class="ti ti-eye"></i> Preview today</button>' +
+      '<label class="es-meta" for="esDate" style="display:flex;align-items:center;gap:6px;">SLA date <input type="date" id="esDate" style="min-height:34px;width:150px;"></label>' +
+      '<button type="button" class="subbtn" id="esDryBtn" title="Shows what would be packed — packs nothing"><i class="ti ti-eye"></i> Preview</button>' +
       '<button type="button" class="subbtn" id="esTestBtn" title="Packs just 1 order — for testing"><i class="ti ti-flask"></i> Test 1 order</button>' +
       '<button type="button" class="subbtn es-btn-main" id="esRunBtn"><i class="ti ti-player-play"></i> Run now</button>';
     content.insertBefore(sub, content.firstChild);
@@ -36,6 +37,7 @@
       '<div class="es-grid"><div>' +
         '<div class="panel"><h2>Labels <span id="esLabelsFor" class="es-meta"></span></h2><div id="esLabels"></div></div>' +
         '<div class="panel"><h2>Failed — fix in OMS Guru <span class="es-meta" id="esFailedCount"></span></h2><div id="esFailed"></div></div>' +
+        '<div class="panel"><h2>Skipped — bulky orders <span class="es-meta" id="esSkipCount"></span></h2><small class="hint">Not packed by the robot: more than 4 units, or heavier than 3 kg. Ship these yourself.</small><div id="esSkip" style="margin-top:10px"></div></div>' +
         '<div class="panel"><h2>Check manually <span class="es-meta" id="esCheckCount"></span></h2><small class="hint">Not packed — the two Easy Ship rules (no mobile number + no Self-Fulfilled tag) did not agree, or the order already has an invoice.</small><div id="esCheck" style="margin-top:10px"></div></div>' +
       '</div><div>' +
         '<div class="panel"><h2>Picklist <span class="es-meta" id="esPickCount"></span></h2><div id="esPick"></div></div>' +
@@ -43,15 +45,18 @@
         '<div class="panel"><h2>How it works</h2><div class="es-rule">' +
           "<b>When:</b> every day at 11:30 AM (or Run now).<br>" +
           "<b>Which orders:</b> Amazon New orders with <b>no buyer mobile</b> and <b>no Self-Fulfilled tag</b>, SLA date today (or overdue).<br>" +
+          "<b>Skipped:</b> orders with <b>more than 4 units</b> or <b>over 3 kg</b> (OMS weight) — listed separately, never packed.<br>" +
           "<b>Pickup slot:</b> always <b>2:00–4:00 PM on the SLA date</b>, never earlier.<br>" +
           "<b>Labels:</b> one PDF per account, sorted by product, product name + qty already printed on each label.<br>" +
           "<b>Weights:</b> taken from OMS Guru.</div></div>" +
       "</div></div>";
     content.appendChild(p);
 
-    document.getElementById("esRunBtn").addEventListener("click", function () { runNow({ dry_run: "false", limit: "0" }, "Pack ALL Easy Ship orders due today (SLA " + today() + ") and generate their labels?"); });
-    document.getElementById("esTestBtn").addEventListener("click", function () { runNow({ dry_run: "false", limit: "1" }, "Pack just 1 Easy Ship order due today as a test?"); });
-    document.getElementById("esDryBtn").addEventListener("click", function () { runNow({ dry_run: "true", limit: "0" }); });
+    var di = document.getElementById("esDate"); di.value = today(); di.min = today();
+    function pick() { return di.value || today(); }
+    document.getElementById("esRunBtn").addEventListener("click", function () { var d = pick(); runNow({ dry_run: "false", limit: "0", sla_date: d }, "Pack ALL Easy Ship orders with SLA " + nice(d) + (d === today() ? " (plus overdue)" : "") + "?\nPickup: " + nice(d < today() ? today() : d) + ", 2:00–4:00 PM."); });
+    document.getElementById("esTestBtn").addEventListener("click", function () { var d = pick(); runNow({ dry_run: "false", limit: "1", sla_date: d }, "Pack just 1 Easy Ship order with SLA " + nice(d) + " as a test?"); });
+    document.getElementById("esDryBtn").addEventListener("click", function () { runNow({ dry_run: "true", limit: "0", sla_date: pick() }); });
   }
   function kpi(id, label, subId) {
     return '<div class="cx-kpi"><div class="cx-kpi-label">' + label + '</div><div class="cx-kpi-num" id="' + id + '">–</div><div class="cx-kpi-sub" id="' + subId + '">&nbsp;</div></div>';
@@ -146,6 +151,12 @@
       });
     });
 
+    var skip = (cur && cur.skipped) || [];
+    $("esSkipCount").textContent = skip.length ? "· " + skip.length : "";
+    $("esSkip").innerHTML = skip.length ? table(["Order", "Account", "Product", "Why skipped"], skip.map(function (f) {
+      return "<tr><td class='cx-awb'>" + esc(f.orderId) + "</td><td>" + esc(f.account) + "</td><td>" + esc(f.sku) + "</td><td><span class='es-tag amber'>" + esc(f.reason) + "</span></td></tr>";
+    })) : '<div class="es-empty">Nothing skipped.</div>';
+
     // failed / check
     $("esFailedCount").textContent = failed.length ? "· " + failed.length : "";
     $("esFailed").innerHTML = failed.length ? table(["Order", "Account", "Product", "Reason"], failed.map(function (f) {
@@ -206,7 +217,7 @@
     if (confirmMsg && !confirm(confirmMsg + "\n\nThis books Amazon pickups and cannot be undone.")) return;
     var tok = await getToken();
     if (!tok) { toast("GitHub token missing — click any 'Sync OMS now' button once to set it up, then try again.", true); return; }
-    inputs.trigger = "console"; inputs.sla_date = "";
+    inputs.trigger = "console"; inputs.sla_date = inputs.sla_date || "";
     setState("run", "Starting…");
     try {
       var r = await fetch("https://api.github.com/repos/" + REPO + "/actions/workflows/" + WF + "/dispatches", {

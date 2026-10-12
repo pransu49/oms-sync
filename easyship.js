@@ -30,7 +30,9 @@ const H = {
 };
 const ACCOUNTS = { 45608: 'AIKM Pharma', 45614: 'E Commerce Munda', 45619: 'Praso Enterprises', 45611: 'Sasta Store', 45616: 'Vishal E Commerce' };
 const WAREHOUSE = 22452;            // DEFAULT 310803 (own warehouse)
-const SLOT_TIME = '2:00 PM';        // pickup slot start — always the 2 PM slot
+const SLOT_TIME = '2:00 PM';
+const MAX_QTY = 4;                  // skip orders with more than 4 units in total
+const MAX_WEIGHT_G = 3000;          // skip orders heavier than 3 kg (OMS weight)        // pickup slot start — always the 2 PM slot
 const BATCH = 25;                   // orders per Pack request
 const CONC = 2;                     // parallel page reads (gentle on OMS Guru)
 const KEEP_RUNS = 3;                // label PDFs kept in Firestore for the last N runs
@@ -168,8 +170,15 @@ async function readOrder(vid) {
     invoice: /^(empty|0)?$/i.test(inv) ? '' : inv,
     awb: ((dd['shipment tracker'] || '').match(/\d{6,}/) || [])[0] || '',
     sla: slaToIso(dd['sla date'] || ''),
+    weightG: toGrams(dd['weight']), volWeightG: toGrams(dd['vol weight']),
     items, labelId, lastFail, lastFailAt,
   };
+}
+function toGrams(v) {
+  const m = String(v || '').match(/([\d.]+)\s*(kg|kgs|g|gm|gms|grams)?/i);
+  if (!m) return 0;
+  const n = parseFloat(m[1]) || 0;
+  return /^kg/i.test(m[2] || '') ? n * 1000 : n;
 }
 function failReason(lastFail) {
   if (!lastFail) return '';
@@ -275,29 +284,36 @@ async function main() {
   // upcoming Easy Ship workload by SLA date (from the list — quick view)
   const upcoming = {};
   notSelf.forEach((r) => { const k = r.sla || 'unknown'; upcoming[k] = upcoming[k] || { total: 0, byAccount: {} }; upcoming[k].total++; upcoming[k].byAccount[r.account] = (upcoming[k].byAccount[r.account] || 0) + 1; });
-  const due = notSelf.filter((r) => r.sla && r.sla <= TARGET);
+  const due = notSelf.filter((r) => r.sla && (TARGET === istToday() ? r.sla <= TARGET : r.sla === TARGET));
   console.log(`New Amazon orders: ${rows.length} · without Self-Fulfilled tag: ${notSelf.length} · due by ${TARGET}: ${due.length}`);
 
   // confirm each due order on its detail page (phone must be NA)
   await status({ state: 'running', step: `Checking ${due.length} due orders` });
   const details = await pool(due, (r) => readOrder(r.vid));
-  const easy = [], check = [];
+  const easy = [], check = [], skipped = [];
   due.forEach((r, i) => {
     const d = details[i] || {};
     if (d.error) { check.push({ ...r, reason: 'Could not open order page: ' + d.error }); return; }
     const o = { ...r, ...d, sla: d.sla || r.sla, orderId: d.orderId || r.orderId };
     if (o.invoice || o.labelId) { check.push({ ...o, reason: 'Already has an invoice/label but is still in New' }); return; }
     if (!/^NA$/i.test(o.phone)) { check.push({ ...o, reason: 'Buyer mobile present — looks like Self-Ship, not packed' }); return; }
+    const units = (o.items || []).reduce((a, x) => a + (x.qty || 0), 0);
+    if (units > MAX_QTY || o.weightG > MAX_WEIGHT_G) {
+      skipped.push({ ...o, reason: [units > MAX_QTY ? `${units} units (more than ${MAX_QTY})` : '', o.weightG > MAX_WEIGHT_G ? `${(o.weightG / 1000).toFixed(2)} kg (more than 3 kg)` : ''].filter(Boolean).join(' · ') });
+      return;
+    }
     easy.push(o);
   });
   let toPack = easy.sort((a, b) => (a.sla + a.cc).localeCompare(b.sla + b.cc));
   if (LIMIT) toPack = toPack.slice(0, LIMIT);
-  console.log(`Confirmed Easy Ship: ${easy.length} · check manually: ${check.length} · will pack: ${toPack.length}`);
+  console.log(`Confirmed Easy Ship: ${easy.length} · skipped (qty>4 or >3 kg): ${skipped.length} · check manually: ${check.length} · will pack: ${toPack.length}`);
 
   const summary = {
     runId: RUN_ID, target: TARGET, dryRun: DRY, limit: LIMIT, trigger: TRIGGER,
     startedAt: new Date(t0).toISOString(), upcoming,
-    found: easy.length, check: check.map((c) => ({ orderId: c.orderId, account: c.account, sla: c.sla, sku: (c.items || []).map((x) => `${x.sku} ×${x.qty}`).join(', '), reason: c.reason })),
+    found: easy.length,
+    skipped: skipped.map((c) => ({ orderId: c.orderId, account: c.account, sla: c.sla, sku: (c.items || []).map((x) => `${x.sku} ×${x.qty}`).join(', '), reason: c.reason })),
+    check: check.map((c) => ({ orderId: c.orderId, account: c.account, sla: c.sla, sku: (c.items || []).map((x) => `${x.sku} ×${x.qty}`).join(', '), reason: c.reason })),
   };
 
   if (DRY) {
