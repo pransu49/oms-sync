@@ -1,0 +1,38 @@
+name: Refund orders (60 days)
+
+on:
+  # once a day ~2:07 AM IST (20:37 UTC) - quiet time, away from working hours
+  schedule:
+    - cron: '37 20 * * *'
+  workflow_dispatch: {}      # "Update now" button in the console's Bulk Refund tab
+
+concurrency:
+  group: refund-sync
+  cancel-in-progress: false
+
+jobs:
+  refunds:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - name: Run refund sync
+        env:
+          OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
+          OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}   # aikm-oms-sync project
+          REFUND_DAYS_BACK: '60'
+        shell: bash
+        run: node refund-sync.js 2>&1 | tee run.log
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+        run: node report-health.js refund "Refund orders (60 days)" run.log || true
