@@ -43,6 +43,16 @@ if (status !== 'success') {
   };
   if (status !== 'success') { entry.log = tail; entry.failedAt = admin.firestore.FieldValue.serverTimestamp(); }
   else entry.log = lines.slice(-40).join('\n').slice(-8000);
-  await admin.firestore().collection('aikm_admin').doc('syncHealth').set({ [key]: entry }, { merge: true });
+  const ref = admin.firestore().collection('aikm_admin').doc('syncHealth');
+  // Every open console tab re-reads this document each time it changes. A healthy sync that was
+  // already reported healthy in the last 25 minutes is not re-saved (saves thousands of reads/day).
+  if (status === 'success') {
+    try {
+      const prev = (await ref.get()).get(key);
+      const at = prev && prev.at && prev.at.toMillis ? prev.at.toMillis() : 0;
+      if (prev && prev.ok && Date.now() - at < 25 * 60e3) { console.log(`Health unchanged (${key} ok) - not re-saved.`); return; }
+    } catch (e) { /* fall through and save */ }
+  }
+  await ref.set({ [key]: entry }, { merge: true });
   console.log(`Health saved: ${key} = ${status}${reason ? ' (' + reason + ')' : ''}`);
 })().catch((e) => { console.log('Could not save health report:', e.message); });

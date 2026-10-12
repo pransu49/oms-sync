@@ -125,6 +125,14 @@ async function main() {
   }
 
   Object.keys(done).forEach((k) => { if (now - done[k].t > 30 * 864e5) delete done[k]; });
+  // Nothing confirmed, nothing failed, and the last note (under 30 min old) already says so -> skip the
+  // write, so the open console tabs don't all re-read this document after every run.
+  const quiet = ACCOUNTS.every((a) => {
+    const u = update['last_' + a.key], p = logDoc.exists && logDoc.get('last_' + a.key);
+    const at = p && p.at && p.at.toMillis ? p.at.toMillis() : 0;
+    return u && !u.count && !u.failed && p && p.message === u.message && now - at < 30 * 60e3;
+  });
+  if (quiet) { console.log('Nothing new - status note not re-saved.'); return; }
   if (!DRY) await logRef.set(update, { merge: true });
 }
 

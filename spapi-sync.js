@@ -701,7 +701,8 @@ async function applyPendingPriceUpdates(sellerId) {
 
 async function applyPendingMrpUpdates(sellerId) {
   const pendingSnap = await dbMain.collection('spapiMrpUpdates')
-    .where('account', '==', ACCOUNT_LABEL).where('status', 'in', ['pending', 'failed']).get();
+    .where('account', '==', ACCOUNT_LABEL).where('status', 'in', SYNC_MODE === 'full' ? ['pending', 'failed'] : ['pending']).get();
+  // (old failed requests are only re-checked on full syncs - saves ~20 reads on every quick sync)
   // Retry requests that only failed because of the old MRP field format (fixed 7 Oct 2026)
   const docs = pendingSnap.docs.filter((d) => d.data().status === 'pending'
     || (/value_with_tax|does not belong/.test(d.data().error || '') && !d.data().retriedFormat));
