@@ -260,6 +260,7 @@ async function packBatch(vids, slotDate) {
     });
     console.log('PROBE text:', clean($$.text()).slice(0, 1500));
     console.log('PROBE html:', html.replace(/\s+/g, ' ').slice(0, 4000));
+    await mainRef.set({ live: { runId: RUN_ID, state: 'done', step: 'Check finished', updatedAt: new Date().toISOString() } }, { merge: true });
     process.exit(0);
   }
   if (!form.length || !sel.length) {
