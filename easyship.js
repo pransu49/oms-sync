@@ -219,7 +219,33 @@ async function packBatch(vids, slotDate) {
   vids.forEach((v) => p1.append('data[Invoice][][id]', v));
   let r1 = await ajaxPost('/orders/newOrders', p1);
   let j1 = r1.json && r1.json.id ? await waitTask(r1.json, 120) : r1.json;
-  const html = (j1 && (j1.body || j1.html)) || r1.text || '';
+  let html = (j1 && (j1.body || j1.html)) || r1.text || '';
+  const removed = [];   // orders OMS could not size → left out of this batch
+  // step 1b — orders with 2+ units: OMS shows a "shipping weight and dimensions" screen,
+  // already filled in from the OMS product data. Confirm those OMS values as they are.
+  // An order is only left out if OMS has no size/weight for it.
+  for (let guard = 0; guard < 2 && !cheerio.load(html)('form#InvoiceNewOrdersForm select[name="data[Invoice][easyship_date]"]').length; guard++) {
+    const $x = cheerio.load(html);
+    const dims = $x('form#OrderExtraSkuDetailsForm').first();
+    if (!dims.length) break;
+    const p = new URLSearchParams();
+    let allIds = (dims.find('input[name="data[Invoice][all_invoice_ids]"]').attr('value') || '').split(',').filter(Boolean);
+    dims.find('tr[id^="row"]').each((_, tr) => {
+      const id = ($x(tr).attr('id') || '').replace('row', '');
+      const val = (k) => parseFloat($x(tr).find(`input[name$="[${k}]"]`).attr('value') || '0') || 0;
+      if (!(val('length') > 0 && val('width') > 0 && val('height') > 0 && val('dead_weight') > 0)) {
+        removed.push({ vid: id, reason: 'OMS has no box size / weight for this order — add it in OMS' });
+        allIds = allIds.filter((x) => x !== id);
+        $x(tr).remove();
+      }
+    });
+    if (!allIds.length) return { ok: false, reason: 'OMS has no box size / weight for these orders', removed };
+    dims.find('input').each((_, el) => { const n = $x(el).attr('name'); if (n) p.append(n, $x(el).attr('value') || ''); });
+    p.set('data[Invoice][all_invoice_ids]', allIds.join(','));
+    const rx = await ajaxPost('/orders/newOrders', p);
+    const jx = rx.json && rx.json.id ? await waitTask(rx.json, 120) : rx.json;
+    html = (jx && (jx.body || jx.html)) || rx.text || '';
+  }
   const $ = cheerio.load(html);
   const form = $('form#InvoiceNewOrdersForm').first();
   const sel = form.find('select[name="data[Invoice][easyship_date]"]');
@@ -237,12 +263,12 @@ async function packBatch(vids, slotDate) {
     process.exit(0);
   }
   if (!form.length || !sel.length) {
-    return { ok: false, reason: 'OMS did not show the Easy Ship pickup-slot step: ' + clean(cheerio.load(html).text()).slice(0, 200) };
+    return { ok: false, reason: 'OMS did not show the Easy Ship pickup-slot step: ' + clean(cheerio.load(html).text()).slice(0, 200), removed };
   }
   const opts = sel.find('option').toArray().map((o) => $(o).attr('value') || '');
   const want = `${slotDate} @ ${SLOT_TIME}`;
   const slot = opts.find((v) => v.trim() === want);
-  if (!slot) return { ok: false, reason: `No 2 PM pickup slot offered on ${slotDate}`, slotsOffered: opts.slice(0, 8) };
+  if (!slot) return { ok: false, reason: `No 2 PM pickup slot offered on ${slotDate}`, slotsOffered: opts.slice(0, 8), removed };
   // step 2 — pick the 2 PM slot and confirm
   const p2 = new URLSearchParams();
   form.find('input').each((_, el) => { const n = $(el).attr('name'); if (n) p2.append(n, $(el).attr('value') || ''); });
@@ -251,7 +277,7 @@ async function packBatch(vids, slotDate) {
   // OMS keeps working in the background; the label check below confirms each order, so don't wait long here
   const j2 = r2.json && r2.json.id ? await waitTask(r2.json, 60) : r2.json;
   const msg = clean(cheerio.load((j2 && (j2.html || j2.body || j2.title)) || r2.text || '').text()).slice(0, 300);
-  return { ok: true, slot, msg, httpStatus: r2.status };
+  return { ok: true, slot, msg, httpStatus: r2.status, removed };
 }
 
 // ---------- 3. labels ----------
@@ -355,7 +381,8 @@ async function main() {
       if (!res.ok && /\b50[234]\b|Temporarily Unavailable|busy/i.test(res.reason || '')) { await sleep(30000); res = await packBatch(part.map((o) => o.vid), g.slotDate); }
       if (!res.ok && /session|login/i.test(res.reason || '')) { await login(); await getToken(); res = await packBatch(part.map((o) => o.vid), g.slotDate); }
       batchNotes.push({ account: ACCOUNTS[g.cc], slotDate: g.slotDate, orders: part.length, ok: res.ok, reason: res.reason || '', msg: res.msg || '' });
-      if (!res.ok) part.forEach((o) => { o.packError = res.reason; });
+      (res.removed || []).forEach((rm) => { const o = part.find((x) => x.vid === rm.vid); if (o) o.packError = rm.reason; });
+      if (!res.ok) part.forEach((o) => { if (!o.packError) o.packError = res.reason; });
       console.log(`Batch ${ACCOUNTS[g.cc]} ${g.slotDate} ×${part.length}: ${res.ok ? 'sent (' + res.slot + ')' : 'NOT packed — ' + res.reason}`);
       done += part.length;
       await sleep(1500);
