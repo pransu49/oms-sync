@@ -342,3 +342,7 @@
     } catch (err) { setState("bad", "Could not start: " + err.message); toast("Could not start: " + err.message, true); }
   }
 })();
+
+/* Bulk Refund tab lives in its own file — loaded from here so no Shopify edit is needed */
+(function () { try { if (document.getElementById("aikmRefundJs")) return; var s = document.createElement("script"); s.id = "aikmRefundJs"; s.defer = true;
+  s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@main/console/refund-tab.js"; document.head.appendChild(s); } catch (e) {} })();
