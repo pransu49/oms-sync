@@ -1,8 +1,11 @@
 // OMS Guru -> Firestore: REFUND ORDERS (once a day)
 // Separate from sync.js (which keeps the last 15 days of ALL orders every 10 min).
-// This job pulls the last 60 days, keeps ONLY Amazon orders that are returned/cancelled,
-// and only the few fields the console's Bulk Refund tab needs to build Amazon's
-// Order Adjustment file. Everything goes into ONE Firestore record:
+// SELF-SHIP ONLY. RTO status comes from NimbusPost (OMS often doesn't update RTOs):
+//   1) NimbusPost API: shipments of the last 60 days whose LATEST shipment per order is RTO
+//      (an order re-shipped and delivered later is NOT included). NimbusPost = self-ship, so Easy Ship
+//      orders never appear.
+//   2) OMS Guru export (70 days): order item id, account, price, shipping, tax % for those orders.
+// Only the fields the console's Bulk Refund tab needs go into ONE Firestore record:
 //   aikm_admin/omsRefundOrders   (project aikm-oms-sync)
 // It is rewritten only when its contents changed -> at most 1 write per day.
 // It never touches omsOrders / omsReadyToConfirm / easyShip.
@@ -14,7 +17,10 @@ const crypto = require('crypto');
 
 const EMAIL = process.env.OMS_EMAIL;
 const PASSWORD = process.env.OMS_PASSWORD;
-const DAYS_BACK = parseInt(process.env.REFUND_DAYS_BACK || '60', 10);
+const DAYS_BACK = parseInt(process.env.REFUND_DAYS_BACK || '60', 10);   // NimbusPost shipments
+const OMS_DAYS = DAYS_BACK + 10;                                            // OMS orders (order date is before ship date)
+const NIMBUS_KEY = (process.env.NIMBUS_API_KEY || '').trim(), NIMBUS_SECRET = (process.env.NIMBUS_API_SECRET || '').trim();
+if (!NIMBUS_KEY || !NIMBUS_SECRET) { console.error('Missing NIMBUS_API_KEY / NIMBUS_API_SECRET.'); process.exit(1); }
 const BASE = 'https://client.omsguru.com';
 
 // Reduces the chance of being flagged as a bot and served a different/degraded
@@ -214,14 +220,62 @@ function dateOnly(str) {
 
 
 const isAmazon = (ch) => /amazon/i.test(ch || '') && !/fba/i.test(ch || '');
-const isRefundStatus = (s) => /return|cancel/i.test(s || '');
 const num = (v) => { const n = parseFloat(String(v || '').replace(/[^0-9.\-]/g, '')); return isNaN(n) ? 0 : n; };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ---------- NimbusPost (self-ship shipments) ---------- */
+async function nimbusJson(url) {
+  const headers = { 'x-api-key': NIMBUS_KEY, 'x-api-secret': NIMBUS_SECRET, Accept: 'application/json' };
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(url, { headers });
+    const text = await res.text();
+    if (res.status === 429 || res.status >= 500) { await sleep(1500 * (attempt + 1)); continue; }
+    let json; try { json = JSON.parse(text); } catch { throw new Error(`NimbusPost returned non-JSON (status ${res.status}): ${text.slice(0, 200)}`); }
+    if (!json.success) throw new Error(`NimbusPost error ${res.status}: ${JSON.stringify(json.error || json).slice(0, 300)}`);
+    return json;
+  }
+  throw new Error('NimbusPost kept failing (rate limit / server error).');
+}
+async function nimbusShipments() {
+  const cutoff = Date.now() - DAYS_BACK * 864e5, all = [];
+  for (let page = 1; page <= 500; page++) {
+    const rows = (await nimbusJson(`https://api-v2.nimbuspost.com/v2/orders?limit=100&page=${page}`)).data || [];
+    all.push(...rows);
+    if (rows.length < 100) break;
+    const last = rows[rows.length - 1];
+    if (new Date(last.created_at || last.order_date).getTime() < cutoff) break; // newest first
+    await sleep(120);
+  }
+  return all.filter((o) => new Date(o.created_at || o.order_date).getTime() >= cutoff);
+}
+// latest non-cancelled shipment per order; keep the order only if that shipment is RTO
+function rtoOrders(ship) {
+  const byOrder = {};
+  ship.forEach((o) => {
+    const st = String(o.order_status || '').toLowerCase();
+    if (st.startsWith('cancel')) return;
+    const id = String(o.order_number || '').replace(/^#/, '').trim();
+    if (!/^\d{3}-\d{7}-\d{7}$/.test(id)) return; // Amazon orders only
+    const t = new Date(o.created_at || o.order_date).getTime() || 0;
+    if (!byOrder[id] || t > byOrder[id].t) byOrder[id] = { t, o };
+  });
+  const out = {};
+  Object.entries(byOrder).forEach(([id, { o }]) => {
+    const st = String(o.order_status || '').toLowerCase();
+    if (!st.startsWith('rto')) return;
+    const sh = o.shipment || {};
+    out[id] = { ns: st.replace(/_/g, ' '), nb: st === 'rto_delivered' ? 'rto_delivered' : 'rto', aw: String(sh.awb || ''),
+      c: String(sh.courier_name || ''), nd: String(sh.delivered_at || o.updated_at || '').slice(0, 10) };
+  });
+  return out;
+}
 
 // Compact record: a=account, o=order id, i=order item id, q=qty, p=item price per unit (incl. tax),
-// s=shipping per unit (incl. tax), t=tax %, st=status, d=order date, rd=return date, ty=payment type, n=product
-function slim(row) {
+// s=shipping per unit (incl. tax), t=tax %, st=OMS status, d=order date, ty=payment type, n=product,
+// ns=NimbusPost status, nb=rto|rto_delivered, aw=AWB, c=courier, nd=RTO status date
+function slim(row, rto) {
   const ch = row['Channel Name'] || '';
-  return {
+  return Object.assign({
     a: ch.replace(/\s*-\s*amazon\s*$/i, '').trim(),
     o: cleanId(row['Channel Order Id']),
     i: cleanId(row['Channel Sub Order Id']),
@@ -231,10 +285,9 @@ function slim(row) {
     t: num(row['Tax Rate']),
     st: row['Order Status'] || '',
     d: dateOnly(row['Order Date'] || ''),
-    rd: dateOnly(row['Return Date'] || ''),
     ty: row['Order Type'] || '',
     n: String(row['Product Name'] || '').slice(0, 60),
-  };
+  }, rto);
 }
 
 async function save(list) {
@@ -251,7 +304,7 @@ async function save(list) {
   const hash = crypto.createHash('md5').update(JSON.stringify(orders)).digest('hex');
   const cur = await ref.get();
   if (cur.exists && cur.data().hash === hash) { console.log('No change since last run - nothing written.'); return; }
-  await ref.set({ orders, hash, count: orders.length, days: DAYS_BACK, at: admin.firestore.FieldValue.serverTimestamp() });
+  await ref.set({ orders, hash, count: orders.length, days: DAYS_BACK, source: "nimbus-rto", notInOms: (global.__notInOms || []).slice(0, 200), at: admin.firestore.FieldValue.serverTimestamp() });
   console.log(`Saved ${orders.length} refund line(s) (${Math.round(JSON.stringify(orders).length / 1024)} KB).`);
 }
 
@@ -259,37 +312,45 @@ async function main() {
   console.log(`Logging into OMS Guru as ${EMAIL}...`);
   await login();
   await new Promise((r) => setTimeout(r, 1500 + Math.floor(Math.random() * 1500)));
+  console.log('Reading NimbusPost shipments (self-ship) ...');
+  const ship = await nimbusShipments();
+  const rto = rtoOrders(ship);
+  console.log(`NimbusPost: ${ship.length} shipments in ${DAYS_BACK} days, ${Object.keys(rto).length} order(s) whose latest shipment is RTO.`);
+
   // OMS Guru's "download" link is always the PREVIOUS export on the account, not the one just asked for.
-  // So: 1) queue our 60-day export (the link we get back belongs to someone else - ignored),
-  //     2) queue a normal 15-day export - its link is OUR 60-day file. That 15-day export is also what
+  // So: 1) queue our long export (the link we get back belongs to someone else - ignored),
+  //     2) queue a normal 15-day export - its link is OUR long file. That 15-day export is also what
   //        the 10-min OMS sync downloads next, so its data stays correct.
   // This workflow shares the OMS sync's queue, so the two never run at the same time.
   const today = new Date();
-  const start60 = new Date(); start60.setDate(start60.getDate() - DAYS_BACK);
+  const startLong = new Date(); startLong.setDate(startLong.getDate() - OMS_DAYS);
   const start15 = new Date(); start15.setDate(start15.getDate() - 15);
-  console.log(`Queueing export ${fmtDate(start60)} -> ${fmtDate(today)}...`);
-  await requestExport(start60, today);
-  await new Promise((r) => setTimeout(r, 45000));
-  console.log(`Queueing normal 15-day export ${fmtDate(start15)} -> ${fmtDate(today)} (its link = our 60-day file)...`);
+  console.log(`Queueing OMS export ${fmtDate(startLong)} -> ${fmtDate(today)}...`);
+  await requestExport(startLong, today);
+  await sleep(45000);
+  console.log(`Queueing normal 15-day export ${fmtDate(start15)} -> ${fmtDate(today)} (its link = our long file)...`);
   const link = await requestExport(start15, today);
   const rows = parseOrders(await pollAndDownload(link, 60, 6000));
   const dates = rows.map((r) => Date.parse(dateOnly(r['Order Date'] || ''))).filter(Boolean);
   const oldest = dates.length ? Math.min(...dates) : 0, newest = dates.length ? Math.max(...dates) : 0;
-  console.log(`Parsed ${rows.length} rows (orders ${oldest ? fmtDate(new Date(oldest)) : '-'} .. ${newest ? fmtDate(new Date(newest)) : '-'}).`);
-  // Safety: refuse to save a file that is not our 60-day export.
+  console.log(`OMS: ${rows.length} rows (orders ${oldest ? fmtDate(new Date(oldest)) : '-'} .. ${newest ? fmtDate(new Date(newest)) : '-'}).`);
+  // Safety: refuse to save a file that is not our long export.
   const dayMs = 86400000;
-  if (!dates.length || oldest > Date.now() - (DAYS_BACK - 10) * dayMs || newest < Date.now() - 3 * dayMs) {
-    throw new Error(`OMS returned a different export (orders ${oldest ? fmtDate(new Date(oldest)) : '-'} .. ${newest ? fmtDate(new Date(newest)) : '-'}) - nothing saved. Yesterday's refund list is kept.`);
+  if (!dates.length || oldest > Date.now() - (OMS_DAYS - 10) * dayMs || newest < Date.now() - 3 * dayMs) {
+    throw new Error(`OMS returned a different export (orders ${oldest ? fmtDate(new Date(oldest)) : '-'} .. ${newest ? fmtDate(new Date(newest)) : '-'}) - nothing saved. The previous refund list is kept.`);
   }
+  const seen = {};
   const list = rows
-    .filter((r) => isAmazon(r['Channel Name']) && isRefundStatus(r['Order Status']))
-    .map(slim)
-    .filter((o) => o.o && o.i)
-    .filter((o, i, all) => all.findIndex((x) => x.i === o.i) === i);
-  list.sort((x, y) => (Date.parse(y.d) || 0) - (Date.parse(x.d) || 0)); // newest first
-  const byStatus = {};
-  list.forEach((o) => { byStatus[o.st] = (byStatus[o.st] || 0) + 1; });
-  console.log(`Amazon returned/cancelled lines: ${list.length}`, JSON.stringify(byStatus));
+    .filter((r) => isAmazon(r['Channel Name']) && rto[cleanId(r['Channel Order Id'])])
+    .map((r) => slim(r, rto[cleanId(r['Channel Order Id'])]))
+    .filter((o) => o.o && o.i && !seen[o.i] && (seen[o.i] = 1));
+  list.sort((x, y) => (y.nd || '').localeCompare(x.nd || '')); // latest RTO first
+  const matched = new Set(list.map((o) => o.o));
+  const notInOms = Object.keys(rto).filter((id) => !matched.has(id));
+  const byStatus = {}; list.forEach((o) => { byStatus[o.ns] = (byStatus[o.ns] || 0) + 1; });
+  console.log(`Self-ship RTO lines matched in OMS: ${list.length}`, JSON.stringify(byStatus));
+  global.__notInOms = notInOms;
+  if (notInOms.length) console.log(`RTO in NimbusPost but not found in OMS (${notInOms.length}): ${notInOms.slice(0, 30).join(', ')}`);
   await save(list);
   console.log('Done.');
 }
