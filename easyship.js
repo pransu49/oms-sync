@@ -232,7 +232,8 @@ async function packBatch(vids, slotDate) {
       console.log(`PROBE form#${i} action=${$$(f).attr('action')} id=${$$(f).attr('id')}`);
       $$(f).find('input,select,textarea,button').slice(0, 40).each((_, e) => console.log('  ', e.tagName, $$(e).attr('name') || '', $$(e).attr('type') || '', ($$(e).attr('value') || $$(e).find('option:selected').text() || '').slice(0, 40), $$(e).attr('class') || ''));
     });
-    console.log('PROBE text:', clean($$.text()).slice(0, 600));
+    console.log('PROBE text:', clean($$.text()).slice(0, 1500));
+    console.log('PROBE html:', html.replace(/\s+/g, ' ').slice(0, 4000));
     process.exit(0);
   }
   if (!form.length || !sel.length) {
