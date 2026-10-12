@@ -36,12 +36,12 @@
         kpi("esKpiCheck", "Check manually", "esKpiCheckSub") + kpi("esKpiNext", "Due tomorrow", "esKpiNextSub") +
       "</div>" +
       '<div class="es-grid"><div>' +
-        '<div class="panel"><h2>Labels <span id="esLabelsFor" class="es-meta"></span></h2><div id="esLabels"></div></div>' +
+        '<div class="panel"><h2>Labels <span id="esLabelsFor" class="es-meta"></span><button type="button" class="btn-gold" id="esAllBtn" style="margin-left:auto;display:none;"><i class="ti ti-files"></i> Download all labels (1 PDF)</button></h2><div id="esLabels"></div></div>' +
         '<div class="panel"><h2>Failed — fix in OMS Guru <span class="es-meta" id="esFailedCount"></span></h2><div id="esFailed"></div></div>' +
         '<div class="panel"><h2>Skipped — bulky orders <span class="es-meta" id="esSkipCount"></span></h2><small class="hint">Not packed by the robot: more than 4 units, or heavier than 3 kg. Ship these yourself.</small><div id="esSkip" style="margin-top:10px"></div></div>' +
         '<div class="panel"><h2>Check manually <span class="es-meta" id="esCheckCount"></span></h2><small class="hint">Not packed — the two Easy Ship rules (no mobile number + no Self-Fulfilled tag) did not agree, or the order already has an invoice.</small><div id="esCheck" style="margin-top:10px"></div></div>' +
       '</div><div>' +
-        '<div class="panel"><h2>Picklist <span class="es-meta" id="esPickCount"></span></h2><div id="esPick"></div></div>' +
+        '<div class="panel"><h2>Picklist <span class="es-meta" id="esPickCount"></span><button type="button" class="secondary" id="esPickPdfBtn" style="margin-left:auto;display:none;"><i class="ti ti-file-type-pdf"></i> Picklist PDF (A4)</button></h2><div id="esPick"></div></div>' +
         '<div class="panel"><h2>Coming up (Easy Ship in New)</h2><div id="esUpcoming"></div></div>' +
         '<div class="panel"><h2>How it works</h2><div class="es-rule">' +
           "<b>When:</b> every day at 11:30 AM (or Run now).<br>" +
@@ -141,6 +141,8 @@
     // labels
     var lf = last && last.labelFiles ? last.labelFiles : {};
     var accs = Object.keys(lf);
+    $("esAllBtn").style.display = accs.length > 1 ? "" : "none";
+    $("esPickPdfBtn").style.display = (!showDry && cur && (cur.picklist || []).length) ? "" : "none";
     $("esLabelsFor").textContent = last ? "· SLA " + nice(last.target) + " · " + when(last.finishedAt) : "";
     $("esLabels").innerHTML = accs.length ? accs.map(function (a) {
       var f = lf[a];
@@ -204,6 +206,115 @@
       a.download = f.fileName || ("EasyShip_" + acc + ".pdf"); document.body.appendChild(a); a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
     } catch (err) { toast("Download failed: " + err.message, true); }
+    btn.disabled = false; btn.innerHTML = old;
+  });
+
+  /* ---------- 3b. one PDF with every account's labels ---------- */
+  var libs = {};
+  function loadLib(url, test) {
+    if (test()) return Promise.resolve();
+    if (libs[url]) return libs[url];
+    libs[url] = new Promise(function (res, rej) { var sc = document.createElement("script"); sc.src = url; sc.onload = function () { res(); }; sc.onerror = function () { delete libs[url]; rej(new Error("could not load " + url)); }; document.head.appendChild(sc); });
+    return libs[url];
+  }
+  async function labelBytes(f) {
+    var parts = await Promise.all(f.docIds.map(function (id) { return db().collection("aikm_admin").doc("easyShip").collection("labels").doc(id).get(); }));
+    var arrs = parts.map(function (d) { var b = d.get("data"); return b && b.toUint8Array ? b.toUint8Array() : new Uint8Array(0); });
+    var n = arrs.reduce(function (a, x) { return a + x.length; }, 0), out = new Uint8Array(n), o = 0;
+    arrs.forEach(function (x) { out.set(x, o); o += x.length; });
+    return out;
+  }
+  function saveBlob(blob, name) {
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  }
+  document.addEventListener("click", async function (e) {
+    var btn = e.target.closest("#esAllBtn"); if (!btn || !db() || !data.last) return;
+    var lf = data.last.labelFiles || {}, accs = Object.keys(lf); if (!accs.length) return;
+    var old = btn.innerHTML; btn.disabled = true;
+    try {
+      btn.innerHTML = '<i class="ti ti-loader"></i> Loading…';
+      await loadLib("https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js", function () { return window.PDFLib; });
+      var out = await PDFLib.PDFDocument.create(), pages = 0;
+      for (var i = 0; i < accs.length; i++) {
+        btn.innerHTML = '<i class="ti ti-loader"></i> ' + esc(accs[i]) + " (" + (i + 1) + "/" + accs.length + ")…";
+        var src = await PDFLib.PDFDocument.load(await labelBytes(lf[accs[i]]), { ignoreEncryption: true });
+        var cp = await out.copyPages(src, src.getPageIndices());
+        cp.forEach(function (pg) { out.addPage(pg); }); pages += cp.length;
+      }
+      btn.innerHTML = '<i class="ti ti-loader"></i> Saving ' + pages + " labels…";
+      var bytes = await out.save({ useObjectStreams: true });
+      saveBlob(new Blob([bytes], { type: "application/pdf" }), "EasyShip_ALL_SLA-" + (data.last.target || today()) + ".pdf");
+      toast(pages + " labels in one PDF (" + accs.join(", ") + ").");
+    } catch (err) { toast("Download failed: " + err.message, true); }
+    btn.disabled = false; btn.innerHTML = old;
+  });
+
+  /* ---------- 3c. premium compact A4 picklist PDF ---------- */
+  document.addEventListener("click", async function (e) {
+    var btn = e.target.closest("#esPickPdfBtn"); if (!btn || !data.last) return;
+    var L = data.last, pk = (L.picklist || []).slice(); if (!pk.length) return;
+    var old = btn.innerHTML; btn.disabled = true; btn.innerHTML = '<i class="ti ti-loader"></i> Building…';
+    try {
+      await loadLib("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js", function () { return window.jspdf; });
+      await loadLib("https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js", function () { return window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.API && window.jspdf.jsPDF.API.autoTable; });
+      var NAVY = [14, 26, 46], GOLD = [201, 162, 74], CREAM = [250, 246, 236], INK = [20, 33, 58], MUTE = [107, 115, 133];
+      var doc = new jspdf.jsPDF({ unit: "mm", format: "a4", compress: true }), W = 210, M = 10;
+      var units = pk.reduce(function (a, x) { return a + x.qty; }, 0);
+      var lf = L.labelFiles || {};
+      var gen = new Date().toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" });
+      // sort by product name so pickers walk the shelf in order
+      pk.sort(function (a, b) { return a.sku.localeCompare(b.sku); });
+      var rows = pk.map(function (x, i) {
+        var k = x.sku.indexOf(" - "), code = k > 0 ? x.sku.slice(0, k) : x.sku, name = k > 0 ? x.sku.slice(k + 3) : "";
+        return [i + 1, name || code, name ? code : "", x.qty, ""];
+      });
+      function header() {
+        doc.setFillColor.apply(doc, NAVY); doc.rect(0, 0, W, 22, "F");
+        doc.setFillColor.apply(doc, GOLD); doc.rect(0, 22, W, 0.8, "F");
+        doc.setTextColor.apply(doc, GOLD); doc.setFont("helvetica", "bold"); doc.setFontSize(12.5);
+        doc.text("AIKM PHARMA PRIVATE LIMITED", M, 10);
+        doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
+        doc.text("Amazon Easy Ship  ·  Picklist", M, 16);
+        doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor.apply(doc, GOLD);
+        doc.text("SLA " + nice(L.target), W - M, 10, { align: "right" });
+        doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor(220, 224, 232);
+        doc.text("Pickup 2:00–4:00 PM  ·  Generated " + gen, W - M, 16, { align: "right" });
+      }
+      header();
+      // summary strip
+      var y = 27, boxes = [["PRODUCTS", String(pk.length)], ["UNITS", String(units)], ["ORDERS", String(L.packed || 0)]], bw = 30;
+      boxes.forEach(function (b, i) {
+        var x = M + i * (bw + 3);
+        doc.setFillColor.apply(doc, CREAM); doc.setDrawColor.apply(doc, GOLD); doc.setLineWidth(0.25); doc.roundedRect(x, y, bw, 12, 1.5, 1.5, "FD");
+        doc.setFontSize(6.5); doc.setTextColor.apply(doc, MUTE); doc.setFont("helvetica", "bold"); doc.text(b[0], x + 3, y + 4.2);
+        doc.setFontSize(12); doc.setTextColor.apply(doc, INK); doc.text(b[1], x + 3, y + 10);
+      });
+      doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); doc.setTextColor.apply(doc, MUTE);
+      var lx = M + 3 * (bw + 3) + 4;
+      doc.setFont("helvetica", "bold"); doc.text("LABELS BY ACCOUNT", lx, y + 3.4);
+      doc.setFont("helvetica", "normal"); doc.setTextColor.apply(doc, INK);
+      Object.keys(lf).forEach(function (a, i) { doc.text(a + "  " + lf[a].pages, lx + (i % 2) * 52, y + 7.6 + Math.floor(i / 2) * 3.6); });
+      doc.autoTable({
+        startY: y + 16, margin: { left: M, right: M, top: 26, bottom: 12 },
+        head: [["#", "Product", "SKU code", "Qty", "Picked"]], body: rows,
+        theme: "plain", styles: { font: "helvetica", fontSize: 7.6, cellPadding: { top: 0.85, bottom: 0.85, left: 1.6, right: 1.6 }, textColor: INK, lineColor: [230, 224, 210], lineWidth: { bottom: 0.15 }, overflow: "ellipsize" },
+        headStyles: { fillColor: NAVY, textColor: GOLD, fontStyle: "bold", fontSize: 7, cellPadding: { top: 2, bottom: 2, left: 1.6, right: 1.6 } },
+        alternateRowStyles: { fillColor: [252, 250, 245] },
+        columnStyles: { 0: { cellWidth: 8, halign: "right", textColor: MUTE }, 1: { cellWidth: 104 }, 2: { cellWidth: 52, textColor: MUTE, fontSize: 6.6 }, 3: { cellWidth: 14, halign: "right", fontStyle: "bold", fontSize: 8.6 }, 4: { cellWidth: 12, halign: "center" } },
+        didDrawCell: function (d) { if (d.section === "body" && d.column.index === 4) { doc.setDrawColor.apply(doc, MUTE); doc.setLineWidth(0.25); doc.rect(d.cell.x + d.cell.width / 2 - 1.6, d.cell.y + d.cell.height / 2 - 1.6, 3.2, 3.2); } },
+        didDrawPage: function (d) { if (d.pageNumber > 1) header(); }
+      });
+      var fy = doc.lastAutoTable.finalY + 4;
+      if (fy < 285) { doc.setFont("helvetica", "bold"); doc.setFontSize(8.5); doc.setTextColor.apply(doc, INK); doc.text("Total units: " + units, W - M, fy, { align: "right" }); }
+      var n = doc.getNumberOfPages();
+      for (var i = 1; i <= n; i++) {
+        doc.setPage(i); doc.setFontSize(6.8); doc.setTextColor.apply(doc, MUTE); doc.setFont("helvetica", "normal");
+        doc.text("Picked by ____________________     Checked by ____________________", M, 292);
+        doc.text("Page " + i + " of " + n, W - M, 292, { align: "right" });
+      }
+      doc.save("Picklist_EasyShip_SLA-" + (L.target || today()) + ".pdf");
+    } catch (err) { toast("Picklist PDF failed: " + err.message, true); }
     btn.disabled = false; btn.innerHTML = old;
   });
 
