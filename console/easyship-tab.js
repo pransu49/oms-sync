@@ -343,6 +343,14 @@
   }
 })();
 
-/* Bulk Refund tab lives in its own file — loaded from here so no Shopify edit is needed */
-(function () { try { if (document.getElementById("aikmRefundJs")) return; var s = document.createElement("script"); s.id = "aikmRefundJs"; s.defer = true;
-  s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@main/console/refund-tab.js"; document.head.appendChild(s); } catch (e) {} })();
+/* Bulk Refund tab lives in its own file — loaded from here so no Shopify edit is needed.
+   Loads the exact latest version (by commit) so updates show at once; falls back to @main. */
+(function () { try { if (document.getElementById("aikmRefundJs")) return;
+  function add(ref) { if (document.getElementById("aikmRefundJs")) return; var s = document.createElement("script"); s.id = "aikmRefundJs"; s.defer = true;
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-tab.js"; document.head.appendChild(s); }
+  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
+  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/refund-tab.js&per_page=1")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
+} catch (e) {} })();
