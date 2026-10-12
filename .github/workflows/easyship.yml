@@ -19,6 +19,9 @@ on:
       trigger:
         description: 'who started it (schedule / console / manual)'
         default: 'manual'
+      collect:
+        description: 'true = only collect labels of already-packed orders (no packing)'
+        default: 'false'
       probe_vids:
         description: 'debug only: OMS order ids to open the pack step for (nothing is packed)'
         default: ''
@@ -31,7 +34,7 @@ concurrency:
 jobs:
   easyship:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -47,6 +50,7 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           LIMIT: ${{ inputs.limit || '0' }}
           SLA_DATE: ${{ inputs.sla_date || '' }}
+          COLLECT: ${{ inputs.collect || 'false' }}
           PROBE: ${{ inputs.probe_vids != '' && 'true' || 'false' }}
           PROBE_VIDS: ${{ inputs.probe_vids || '' }}
           TRIGGER: ${{ github.event_name == 'schedule' && 'schedule' || inputs.trigger || 'manual' }}

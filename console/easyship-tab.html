@@ -48,6 +48,7 @@ html#aikm body #tab-easyship td.num{text-align:right;font-variant-numeric:tabula
       '<span style="flex:1"></span>' +
       '<label class="es-meta" for="esDate" style="display:flex;align-items:center;gap:6px;">SLA date <input type="date" id="esDate" style="min-height:34px;width:150px;"></label>' +
       '<button type="button" class="subbtn" id="esDryBtn" title="Shows what would be packed — packs nothing"><i class="ti ti-eye"></i> Preview</button>' +
+      '<button type="button" class="subbtn" id="esLabelsBtn" title="Builds the label PDFs again for orders already packed — packs nothing"><i class="ti ti-file-download"></i> Get labels</button>' +
       '<button type="button" class="subbtn" id="esTestBtn" title="Packs just 1 order — for testing"><i class="ti ti-flask"></i> Test 1 order</button>' +
       '<button type="button" class="subbtn es-btn-main" id="esRunBtn"><i class="ti ti-player-play"></i> Run now</button>';
     content.insertBefore(sub, content.firstChild);
@@ -82,6 +83,7 @@ html#aikm body #tab-easyship td.num{text-align:right;font-variant-numeric:tabula
     function pick() { return di.value || today(); }
     document.getElementById("esRunBtn").addEventListener("click", function () { var d = pick(); runNow({ dry_run: "false", limit: "0", sla_date: d }, "Pack ALL Easy Ship orders with SLA " + nice(d) + (d === today() ? " (plus overdue)" : "") + "?\nPickup: " + nice(d < today() ? today() : d) + ", 2:00–4:00 PM."); });
     document.getElementById("esTestBtn").addEventListener("click", function () { var d = pick(); runNow({ dry_run: "false", limit: "1", sla_date: d }, "Pack just 1 Easy Ship order with SLA " + nice(d) + " as a test?"); });
+    document.getElementById("esLabelsBtn").addEventListener("click", function () { runNow({ dry_run: "false", limit: "0", sla_date: pick(), collect: "true" }); });
     document.getElementById("esDryBtn").addEventListener("click", function () { runNow({ dry_run: "true", limit: "0", sla_date: pick() }); });
   }
   function kpi(id, label, subId) {
@@ -138,9 +140,9 @@ html#aikm body #tab-easyship td.num{text-align:right;font-variant-numeric:tabula
   function render() {
     if (!$("tab-easyship")) return;
     var live = data.live || {}, last = data.last || null, dry = data.lastDry || null;
-    var running = live.state === "running" && Date.now() - new Date(live.updatedAt).getTime() < 20 * 60000;
+    var running = live.state === "running" && Date.now() - new Date(live.updatedAt).getTime() < 12 * 60000;
     setState(running ? "run" : live.state === "failed" ? "bad" : last ? "ok" : "", running ? live.step : live.state === "failed" ? live.step : last ? "Last run " + when(last.finishedAt) : "Not run yet");
-    ["esRunBtn", "esTestBtn", "esDryBtn"].forEach(function (id) { if ($(id)) $(id).disabled = running; });
+    ["esRunBtn", "esTestBtn", "esDryBtn", "esLabelsBtn"].forEach(function (id) { if ($(id)) $(id).disabled = running; });
 
     // dry-run preview is shown when it is newer than the last real run
     var showDry = dry && (!last || dry.finishedAt > last.finishedAt);
@@ -250,7 +252,7 @@ html#aikm body #tab-easyship td.num{text-align:right;font-variant-numeric:tabula
         method: "POST", headers: { Accept: "application/vnd.github+json", Authorization: "Bearer " + tok, "Content-Type": "application/json" },
         body: JSON.stringify({ ref: "main", inputs: inputs }) });
       if (r.status !== 204) throw new Error("GitHub said " + r.status);
-      toast(inputs.dry_run === "true" ? "Preview started — results in about 2–4 minutes." : "Easy Ship run started — labels appear here when done (5–20 minutes).");
+      toast(inputs.collect === "true" ? "Collecting labels — about 3–10 minutes." : inputs.dry_run === "true" ? "Preview started — results in about 2–4 minutes." : "Easy Ship run started — labels appear here when done (5–20 minutes).");
       listen();
     } catch (err) { setState("bad", "Could not start: " + err.message); toast("Could not start: " + err.message, true); }
   }

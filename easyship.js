@@ -23,6 +23,7 @@ const EMAIL = process.env.OMS_EMAIL, PASSWORD = process.env.OMS_PASSWORD;
 const DRY = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
 const LIMIT = parseInt(process.env.LIMIT || '0', 10) || 0;
 const TRIGGER = process.env.TRIGGER || 'manual';
+const COLLECT = String(process.env.COLLECT || '').toLowerCase() === 'true';   // labels only: no packing
 const BASE = 'https://client.omsguru.com';
 const H = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -34,7 +35,7 @@ const SLOT_TIME = '2:00 PM';
 const MAX_QTY = 4;                  // skip orders with more than 4 units in total
 const MAX_WEIGHT_G = 3000;          // skip orders heavier than 3 kg (OMS weight)        // pickup slot start — always the 2 PM slot
 const BATCH = 25;                   // orders per Pack request
-const CONC = 2;                     // parallel page reads (gentle on OMS Guru)
+const CONC = 3;                     // parallel page reads (OMS 'busy' replies are retried)
 const KEEP_RUNS = 3;                // label PDFs kept in Firestore for the last N runs
 const CHUNK = 900 * 1024;           // Firestore doc limit is 1 MB
 
@@ -106,11 +107,11 @@ async function pool(items, fn, n = CONC) {
 }
 
 // ---------- 1. read New orders ----------
-async function listNewOrders() {
+async function listNewOrders(page = 'newOrders') {
   const filter = encodeURIComponent(JSON.stringify({ channel_company_id: Object.fromEntries(Object.keys(ACCOUNTS).map((id, i) => [String(i), id])) }));
   const rows = [];
   for (let p = 1; p <= 40; p++) {
-    const r = await req(`/orders/newOrders/page:${p}?filter=${filter}`);
+    const r = await req(`/orders/${page}/page:${p}?filter=${filter}`);
     if (r.status === 302) throw new Error('OMS Guru session expired while reading orders');
     if (/Please select a warehouse to continue/i.test(r.text)) throw new Error('OMS Guru asked to choose a warehouse — could not read orders');
     const $ = cheerio.load(r.text);
@@ -318,6 +319,18 @@ async function main() {
   await status({ state: 'running', step: 'Logging into OMS Guru', target: TARGET, dryRun: DRY, limit: LIMIT, trigger: TRIGGER, startedAt: new Date().toISOString() });
   await login(); await getToken();
 
+  if (COLLECT) {
+    // labels only — orders already packed (Ready To Ship) for this SLA date
+    await status({ state: 'running', step: `Collecting labels for SLA ${TARGET}` });
+    const rts = (await listNewOrders('dispatchOrders')).filter((r) => !r.selfShip && r.sla === TARGET);
+    const det = await pool(rts, (r) => readOrder(r.vid));
+    const got = [];
+    rts.forEach((r, i) => { const d = det[i]; if (d && !d.error && d.labelId && /^NA$/i.test(d.phone)) got.push({ ...r, ...d, final: 'packed' }); });
+    console.log(`Ready To Ship (SLA ${TARGET}, Easy Ship): ${got.length} with labels`);
+    const summary = { runId: RUN_ID, target: TARGET, dryRun: false, limit: 0, trigger: TRIGGER, collect: true, startedAt: new Date(t0).toISOString(), found: got.length, check: [], skipped: [] };
+    return finish(summary, got, [], [], t0);
+  }
+
   await status({ state: 'running', step: 'Reading New orders' });
   const rows = await listNewOrders();
   const notSelf = rows.filter((r) => !r.selfShip);
@@ -410,6 +423,10 @@ async function main() {
   const failed = toPack.filter((o) => o.final !== 'packed');
   console.log(`Packed with label: ${packed.length} · failed: ${failed.length}`);
 
+  await finish(summary, packed, failed, batchNotes, t0);
+}
+
+async function finish(summary, packed, failed, batchNotes, t0) {
   // ---- labels: one PDF per account, sorted by product ----
   await status({ state: 'running', step: `Downloading ${packed.length} labels` });
   const byAcc = {};
