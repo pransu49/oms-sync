@@ -242,7 +242,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
 
     var on = sel.filter(function (o) { return !o.off; });
     $("rfCount").textContent = sel.length ? "· " + on.length + " of " + sel.length + " ticked" : "";
-    if (!sel.length) { $("rfTable").innerHTML = '<div class="rf-empty">Paste order IDs above, or click Returned / Cancelled / All.</div>'; }
+    if (!sel.length) { $("rfTable").innerHTML = '<div class="rf-empty">Paste order IDs above, or pick RTO delivered / RTO in transit / Lost / All.</div>'; }
     else {
       var rows = sel.map(function (o) {
         var c = calc(o);
