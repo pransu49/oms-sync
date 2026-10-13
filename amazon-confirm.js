@@ -56,6 +56,20 @@ async function confirm(sp, orderId, awb, courier, items) {
     },
   });
 }
+// Amazon's own status for up to 50 orders per call -> { orderId: 'Unshipped' | 'Shipped' | 'Canceled' | ... }
+async function amazonStatus(sp, ids) {
+  const out = {};
+  for (let i = 0; i < ids.length; i += 50) {
+    const chunk = ids.slice(i, i + 50);
+    try {
+      const r = await sp.callAPI({ operation: 'getOrders', endpoint: 'orders', query: { MarketplaceIds: [MARKETPLACE_ID], AmazonOrderIds: chunk, MaxResultsPerPage: 100 } });
+      ((r && r.Orders) || []).forEach((o) => { out[o.AmazonOrderId] = o.OrderStatus; });
+    } catch (e) { console.log(`  status check failed for ${chunk.length} orders: ${String(e && e.message || e).slice(0, 120)}`); }
+    await sleep(1500);
+  }
+  return out;
+}
+const MAX_PER_RUN = 120;       // ~2.5 min of Amazon calls — the rest go in the next run (every 10 min)
 const errText = (e) => String((e && (e.message || e.code)) || e).replace(/\s+/g, ' ').slice(0, 200);
 
 async function main() {
@@ -102,11 +116,27 @@ async function main() {
     }
     console.log(`${a.key}: ${Object.keys(byOrder).length} orders in OMS · to confirm on Amazon: ${picks.length}`);
     picks.slice(0, 10).forEach((p) => console.log(`  ${p.id} -> ${p.awb} (${carrier(p.courier).carrierCode}) items ${p.items.map((i) => i.id + 'x' + i.qty).join(',')}`));
-    if (DRY || !picks.length) { update['last_' + a.key] = { at: admin.firestore.FieldValue.serverTimestamp(), count: 0, failed: 0, dry: DRY, message: picks.length ? `Dry run: ${picks.length} ready` : 'Nothing new to confirm.' }; continue; }
+    // ask Amazon first: skip orders it already shows as shipped / cancelled (no wasted calls, no time-out)
+    let skipped = 0;
+    if (picks.length) {
+      const st = await amazonStatus(client(a.token), picks.map((p) => p.id));
+      const keep = [];
+      picks.forEach((p) => {
+        const s = st[p.id];
+        if (s === 'Shipped' || s === 'Canceled' || s === 'InvoiceUnconfirmed') { done[p.id] = { ok: true, a: p.awb, t: now, acct: a.key, note: 'Amazon status: ' + s }; skipped++; }
+        else keep.push(p);
+      });
+      if (skipped) console.log(`${a.key}: ${skipped} already ${'shipped/cancelled'} on Amazon — marked done, not sent again`);
+      picks.length = 0; keep.forEach((p) => picks.push(p));
+    }
+    const later = Math.max(0, picks.length - MAX_PER_RUN);
+    if (later) { console.log(`${a.key}: ${picks.length} to confirm — doing ${MAX_PER_RUN} now, ${later} in the next runs`); picks.length = MAX_PER_RUN; }
+    if (DRY || !picks.length) { update['last_' + a.key] = { at: admin.firestore.FieldValue.serverTimestamp(), count: skipped, failed: 0, dry: DRY, message: picks.length ? `Dry run: ${picks.length} ready` : skipped ? `${skipped} were already shipped on Amazon — nothing left to confirm.` : 'Nothing new to confirm.' }; continue; }
 
     const sp = client(a.token);
-    let ok = 0, bad = 0; const reasons = {};
+    let ok = 0, bad = 0, n = 0; const reasons = {};
     for (const p of picks) {
+      if (++n % 25 === 0 && !DRY) await logRef.set({ ids: done }, { merge: true });   // save progress as we go
       try {
         await confirm(sp, p.id, p.awb, p.courier, p.items);
         done[p.id] = { ok: true, a: p.awb, t: now, acct: a.key };
@@ -119,9 +149,10 @@ async function main() {
       }
       await sleep(600); // stay under 2 requests/second
     }
-    const message = `${ok} confirmed on Amazon` + (bad ? `, ${bad} failed: ` + Object.entries(reasons).map(([m, c]) => `${c} × ${m}`).join('; ') : '');
+    const message = `${ok} confirmed on Amazon` + (later ? ` (${later} more queued for the next run)` : '') + (bad ? `, ${bad} failed: ` + Object.entries(reasons).map(([m, c]) => `${c} × ${m}`).join('; ') : '');
     console.log(`${a.key}: ${message}`);
     update['last_' + a.key] = { at: admin.firestore.FieldValue.serverTimestamp(), count: ok, failed: bad, message };
+    if (skipped) update['last_' + a.key].alreadyShipped = skipped;
   }
 
   Object.keys(done).forEach((k) => { if (now - done[k].t > 30 * 864e5) delete done[k]; });
