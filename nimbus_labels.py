@@ -98,8 +98,6 @@ def nimbus_shipments(wanted, sla):
     found = {}
     for page in range(1, 200):
         rows = (nb_get(f'{NB}/orders?limit=100&page={page}') or {}).get('data') or []
-        if page == 1:
-            print('NimbusPost page 1:', len(rows), 'rows, e.g.', [nid(o.get('order_number')) for o in rows[:3]])
         for o in rows:
             on = nid(o.get('order_number'))
             sh = o.get('shipment') or {}
@@ -288,7 +286,7 @@ def main():
         note('done', step='No orders for this SLA date.', count=0, url='', missing=[]); return
     note('running', step=f'{len(orders)} orders · finding their NimbusPost shipments…')
     ship = nimbus_shipments(set(orders), sla)
-    print('sample OMS ids:', list(orders)[:3], '| matched in NimbusPost:', len(ship))
+    print(f'{len(orders)} OMS orders, {len(ship)} shipped in NimbusPost')
     missing = sorted(set(orders) - set(ship))
 
     printed_ref = db.collection('aikm_admin').document('labelPrinted')
@@ -344,7 +342,8 @@ def main():
     keep = {k: v for k, v in printed.items() if now - int(v) < 20 * 864e5}
     for k in final:
         keep[k] = now
-    printed_ref.set({'ids': keep})
+    if JOB_ID:  # manual test runs don't count as printed
+        printed_ref.set({'ids': keep})
     note('done', step=f'{len(final)} labels ready.', count=len(final), url=url, missing=missing[:300], missingCount=len(missing),
          noLabel=no_label[:300], skippedPrinted=skipped_old, sizeKb=round(len(data) / 1024))
 

@@ -1,0 +1,22 @@
+name: tmp fix
+on: workflow_dispatch
+jobs:
+  c:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pip install --quiet firebase-admin==6.5.0
+      - shell: python
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          import json, os, base64, firebase_admin
+          from firebase_admin import credentials, firestore
+          app = firebase_admin.initialize_app(credentials.Certificate(json.loads(os.environ['FIREBASE_SERVICE_ACCOUNT'])))
+          db = firestore.client()
+          db.collection('aikm_admin').document('labelPrinted').delete()
+          jobs = sorted([d for d in db.collection('labelJobs').stream()], key=lambda d: d.id)
+          for d in jobs:
+              x = d.to_dict(); print('JOB', d.id, x.get('status'), x.get('count'))
+          u = jobs[-1].to_dict().get('url', '')
+          print('U64', base64.b64encode(u.encode()).decode())
+          for d in jobs: d.reference.delete()
