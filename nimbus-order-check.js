@@ -7,7 +7,7 @@ const H = { 'x-api-key': KEY, 'x-api-secret': SECRET, Accept: 'application/json'
   if (all[0]) console.log('KEYS', Object.keys(all[0]).join(','), '| SHIP', Object.keys(all[0].shipment || {}).join(','));
   if (all[0]) console.log('SAMPLE', JSON.stringify(all[0]).slice(0, 1500));
   all.slice(0, 250).forEach((o) => {
-    const prods = (o.products || o.order_items || []).map((x) => x.name || x.product_name).join(' | ');
+    const prods = (o.items || []).map((x) => x.name || x.product_name).join(' | ');
     console.log([o.created_at, o.id, o.order_number, (o.shipment || {}).awb || '', (o.shipment || {}).created_at || '', prods.slice(0, 60)].join(' ; '));
   });
 })();
