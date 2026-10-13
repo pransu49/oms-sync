@@ -1,23 +1,12 @@
 const H = { 'x-api-key': process.env.NIMBUS_API_KEY.trim(), 'x-api-secret': process.env.NIMBUS_API_SECRET.trim(), Accept: 'application/json', 'Content-Type': 'application/json' };
 (async () => {
+  const o1 = await fetch('https://api-v2.nimbuspost.com/v2/shipments/labels', { method: 'OPTIONS', headers: { Origin: 'https://dalbhaat.in', 'Access-Control-Request-Method': 'POST', 'Access-Control-Request-Headers': 'x-api-key,x-api-secret,content-type' } });
+  console.log('CORS', o1.status, o1.headers.get('access-control-allow-origin'), o1.headers.get('access-control-allow-headers'));
   const r = await (await fetch('https://api-v2.nimbuspost.com/v2/orders?limit=100&page=1', { headers: H })).json();
-  const o = r.data.find((x) => x.shipment && x.shipment.awb && !x.shipment.label_url && /XB/.test(x.shipment.courier_name));
-  console.log('ORDER', o.order_id, o.order_number, o.shipment.awb, o.shipment.courier_name);
-  const tries = [
-    ['POST', '/shipments/labels', {}],
-    ['POST', '/shipments/labels', { awb: [o.shipment.awb] }],
-    ['POST', '/shipments/labels', { awb_numbers: [o.shipment.awb] }],
-    ['POST', '/shipments/labels', { order_ids: [o.order_id] }],
-    ['POST', '/shipments/labels', { ids: [o.order_id] }],
-    ['POST', '/shipments/labels', { awbs: o.shipment.awb }],
-    ['GET', '/shipments/labels?awb=' + o.shipment.awb],
-    ['GET', '/shipments/' + o.shipment.awb + '/label'],
-    ['GET', '/orders/' + o.order_id + '/label'],
-    ['POST', '/orders/labels', { order_ids: [o.order_id] }],
-    ['GET', '/shipments/' + o.shipment.awb],
-  ];
-  for (const [m, p, b] of tries) {
-    try { const x = await fetch('https://api-v2.nimbuspost.com/v2' + p, { method: m, headers: H, body: b ? JSON.stringify(b) : undefined });
-      console.log('TRY', m, p, JSON.stringify(b || ''), x.status, x.headers.get('content-type'), (await x.text()).slice(0, 400)); } catch (e) { console.log('TRY', p, e.message); }
-  }
+  const ids = r.data.filter((x) => x.shipment && x.shipment.awb && /pickup/.test(x.order_status)).slice(0, 60).map((x) => x.order_id);
+  const t = Date.now();
+  const x = await (await fetch('https://api-v2.nimbuspost.com/v2/shipments/labels', { method: 'POST', headers: H, body: JSON.stringify({ order_ids: ids }) })).json();
+  console.log('BATCH', ids.length, 'ms', Date.now() - t, JSON.stringify(x).replace(/X-Amz-Signature=[^&"]+/, 'SIG').slice(0, 900));
+  if (x.data && x.data.url) { const p = await fetch(x.data.url, { headers: { Origin: 'https://dalbhaat.in' } }); const b = await p.arrayBuffer(); console.log('PDF', p.status, b.byteLength, 'ACAO', p.headers.get('access-control-allow-origin'));
+    const s = Buffer.from(b).toString('latin1'); console.log('PAGES', (s.match(/\/Type\s*\/Page[^s]/g) || []).length); }
 })();
