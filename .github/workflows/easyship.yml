@@ -47,6 +47,7 @@ jobs:
           OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}   # aikm-oms-sync project (own free quota)
+          FIREBASE_SERVICE_ACCOUNT_MAIN: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}   # console project — off days list
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           LIMIT: ${{ inputs.limit || '0' }}
           SLA_DATE: ${{ inputs.sla_date || '' }}

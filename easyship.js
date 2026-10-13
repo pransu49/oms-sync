@@ -43,7 +43,16 @@ const MONTHS = { january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, j
 const pad = (n) => String(n).padStart(2, '0');
 const istNow = () => new Date(Date.now() + 5.5 * 3600e3);
 const istToday = () => istNow().toISOString().slice(0, 10);
-const TARGET = /^\d{4}-\d{2}-\d{2}$/.test(process.env.SLA_DATE || '') ? process.env.SLA_DATE : istToday();
+let TARGET = /^\d{4}-\d{2}-\d{2}$/.test(process.env.SLA_DATE || '') ? process.env.SLA_DATE : istToday();
+// Daily auto-run: prepare the NEXT WORKING DAY (tomorrow; Sundays and off days are skipped)
+const AUTO = TRIGGER === 'schedule' && !process.env.SLA_DATE;
+let OFF_DAYS = new Set();               // filled from the console's "Off days" list
+let FROM = '';                          // auto-run: first SLA date included
+const addDays = (iso, n) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const isWorking = (iso) => new Date(iso + 'T00:00:00Z').getUTCDay() !== 0 && !OFF_DAYS.has(iso);
+const nextWorking = (iso) => { let d = addDays(iso, 1); for (let i = 0; i < 30 && !isWorking(d); i++) d = addDays(d, 1); return d; };
+// pickup day: the SLA date itself; if that is a Sunday/off day, the last working day before it (never before today)
+const slotFor = (sla) => { const t = istToday(); if (sla < t) return t; let d = sla; for (let i = 0; i < 30 && !isWorking(d) && d > t; i++) d = addDays(d, -1); return d; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const clean = (s) => String(s || '').replace(/\s+/g, ' ').trim();
 function slaToIso(text) {
@@ -315,6 +324,20 @@ async function pruneOldLabels(keepRunIds) {
 // ---------- main ----------
 async function main() {
   const t0 = Date.now();
+  try {
+    // off days are saved by the console in its main Firebase project (aikm--order-file)
+    const svc = process.env.FIREBASE_SERVICE_ACCOUNT_MAIN;
+    if (svc) {
+      const mainApp = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(svc)) }, 'consoleMain');
+      const st = await mainApp.firestore().collection('aikm_admin').doc('easyShipSettings').get();
+      ((st.exists && st.get('offDays')) || []).forEach((d) => OFF_DAYS.add(d));
+    }
+  } catch (e) { console.log('Could not read off days:', e.message); }
+  if (AUTO) {
+    if (!isWorking(istToday())) { console.log(`Today ${istToday()} is a Sunday/off day — nothing to do.`); await status({ state: 'done', step: `Skipped — ${istToday()} is an off day` }); return; }
+    FROM = addDays(istToday(), 1); TARGET = nextWorking(istToday());
+    console.log(`Auto-run: next working day ${TARGET} (SLA ${FROM} → ${TARGET})${OFF_DAYS.size ? ' · off days: ' + [...OFF_DAYS].join(', ') : ''}`);
+  }
   console.log(`Easy Ship run ${RUN_ID} · SLA date ${TARGET} · ${DRY ? 'DRY RUN (nothing will be packed)' : 'LIVE'}${LIMIT ? ` · limit ${LIMIT}` : ''}`);
   await status({ state: 'running', step: 'Logging into OMS Guru', target: TARGET, dryRun: DRY, limit: LIMIT, trigger: TRIGGER, startedAt: new Date().toISOString() });
   await login(); await getToken();
@@ -340,7 +363,7 @@ async function main() {
   // upcoming Easy Ship workload by SLA date (from the list — quick view)
   const upcoming = {};
   notSelf.forEach((r) => { const k = r.sla || 'unknown'; upcoming[k] = upcoming[k] || { total: 0, byAccount: {} }; upcoming[k].total++; upcoming[k].byAccount[r.account] = (upcoming[k].byAccount[r.account] || 0) + 1; });
-  const due = notSelf.filter((r) => r.sla && (TARGET === istToday() ? r.sla <= TARGET : r.sla === TARGET));
+  const due = notSelf.filter((r) => r.sla && (FROM ? r.sla >= FROM && r.sla <= TARGET : TARGET === istToday() ? r.sla <= TARGET : r.sla === TARGET));
   console.log(`New Amazon orders: ${rows.length} · without Self-Fulfilled tag: ${notSelf.length} · due by ${TARGET}: ${due.length}`);
 
   // confirm each due order on its detail page (phone must be NA)
@@ -387,7 +410,7 @@ async function main() {
 
   // ---- pack, grouped by account + slot date ----
   const groups = {};
-  toPack.forEach((o) => { const slotDate = o.sla < istToday() ? istToday() : o.sla; const k = o.cc + '|' + slotDate; (groups[k] = groups[k] || { cc: o.cc, slotDate, list: [] }).list.push(o); });
+  toPack.forEach((o) => { const slotDate = slotFor(o.sla); const k = o.cc + '|' + slotDate; (groups[k] = groups[k] || { cc: o.cc, slotDate, list: [] }).list.push(o); });
   const batchNotes = [];
   let done = 0;
   for (const g of Object.values(groups)) {

@@ -18,7 +18,7 @@
     var sub = document.createElement("div");
     sub.className = "subtabbar no-print"; sub.id = "subtab-easyship"; sub.style.display = "none";
     sub.innerHTML = '<span class="subtab-label">Amazon Easy Ship</span>' +
-      '<span class="es-meta">Auto-packs daily 11:30 AM · 2 PM pickup on SLA date · skips &gt;4 units or &gt;3 kg</span>' +
+      '<span class="es-meta">Auto 11:30 AM for next working day · 2 PM pickup · skips &gt;4 units or &gt;3 kg</span>' +
       '<span style="flex:1"></span>' +
       '<label class="es-meta" for="esDate" style="display:flex;align-items:center;gap:6px;">SLA date <input type="date" id="esDate" style="min-height:34px;width:150px;"></label>' +
       '<button type="button" class="subbtn" id="esDryBtn" title="Shows what would be packed — packs nothing"><i class="ti ti-eye"></i> Preview</button>' +
@@ -42,9 +42,11 @@
         '<div class="panel"><h2>Check manually <span class="es-meta" id="esCheckCount"></span></h2><small class="hint">Not packed — the two Easy Ship rules (no mobile number + no Self-Fulfilled tag) did not agree, or the order already has an invoice.</small><div id="esCheck" style="margin-top:10px"></div></div>' +
       '</div><div>' +
         '<div class="panel"><h2>Picklist <span class="es-meta" id="esPickCount"></span><button type="button" class="secondary" id="esPickPdfBtn" style="margin-left:auto;display:none;"><i class="ti ti-file-type-pdf"></i> Picklist PDF (A4)</button></h2><div id="esPick"></div></div>' +
+        '<div class="panel"><h2>Off days <span class="es-meta">· Sundays are always off</span></h2><small class="hint">No auto-run and no pickup on these dates. The 11:30 AM run prepares the next working day.</small>' +
+          '<div style="display:flex;gap:8px;margin:10px 0;"><input type="date" id="esOffInput" style="width:160px;"><button type="button" class="secondary" id="esOffAdd"><i class="ti ti-plus"></i> Add off day</button></div><div id="esOffList" class="mh-chips"></div><div class="es-meta" id="esNextWork" style="margin-top:8px;"></div></div>' +
         '<div class="panel"><h2>Coming up (Easy Ship in New)</h2><div id="esUpcoming"></div></div>' +
         '<div class="panel"><h2>How it works</h2><div class="es-rule">' +
-          "<b>When:</b> every day at 11:30 AM (or Run now).<br>" +
+          "<b>When:</b> every working day at 11:30 AM it packs orders for the <b>next working day</b> (Sundays and off days skipped). Run now = the date you pick.<br>" +
           "<b>Which orders:</b> Amazon New orders with <b>no buyer mobile</b> and <b>no Self-Fulfilled tag</b>, SLA date today (or overdue).<br>" +
           "<b>Skipped:</b> orders with <b>more than 4 units</b> or <b>over 3 kg</b> (OMS weight) — listed separately, never packed.<br>" +
           "<b>Pickup slot:</b> always <b>2:00–4:00 PM on the SLA date</b>, never earlier.<br>" +
@@ -54,6 +56,7 @@
     content.appendChild(p);
 
     var di = document.getElementById("esDate"); di.value = today(); di.min = today();
+    di.addEventListener("change", function () { di.dataset.touched = "1"; });
     function pick() { return di.value || today(); }
     document.getElementById("esRunBtn").addEventListener("click", function () { var d = pick(); runNow({ dry_run: "false", limit: "0", sla_date: d }, "Pack ALL Easy Ship orders with SLA " + nice(d) + (d === today() ? " (plus overdue)" : "") + "?\nPickup: " + nice(d < today() ? today() : d) + ", 2:00–4:00 PM."); });
     document.getElementById("esTestBtn").addEventListener("click", function () { var d = pick(); runNow({ dry_run: "false", limit: "1", sla_date: d }, "Pack just 1 Easy Ship order with SLA " + nice(d) + " as a test?"); });
@@ -70,6 +73,34 @@
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function today() { return new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10); }
   function addDays(iso, n) { var d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+  var offList = [], offUnsub = null;
+  function offDays() { return offList.slice().sort(); }
+  function listenOff() {
+    if (offUnsub || !mainDb()) return;
+    offUnsub = mainDb().collection("aikm_admin").doc("easyShipSettings").onSnapshot(function (d) { offList = (d.exists && d.data().offDays) || []; if (data) render(); }, function () {});
+  }
+  function isWorking(iso) { return new Date(iso + "T00:00:00Z").getUTCDay() !== 0 && offDays().indexOf(iso) < 0; }
+  function nextWorking(iso) { var d = addDays(iso, 1); for (var i = 0; i < 30 && !isWorking(d); i++) d = addDays(d, 1); return d; }
+  function renderOff() {
+    var el = $("esOffList"); if (!el) return;
+    var od = offDays().filter(function (d) { return d >= today(); });
+    el.innerHTML = od.length ? od.map(function (d) { return '<span class="mh-chip">' + nice(d) + ' <a href="#" data-es-off-del="' + d + '" title="Remove" style="color:var(--x-red);text-decoration:none;">×</a></span>'; }).join("") : '<span class="es-meta">No extra off days.</span>';
+    $("esNextWork").innerHTML = "Next auto-run prepares: <b>SLA " + nice(nextWorking(today())) + "</b>" + (isWorking(today()) ? "" : " (today is off — no run today)");
+  }
+  async function saveOff(list) {
+    if (!db()) return;
+    if (!mainDb()) return toast("Still connecting — try again.", true);
+    try { await mainDb().collection("aikm_admin").doc("easyShipSettings").set({ offDays: list, updatedAt: new Date().toISOString() }, { merge: true }); toast("Off days saved."); } catch (e) { toast("Could not save: " + e.message, true); }
+  }
+  document.addEventListener("click", function (e) {
+    if (e.target.closest("#esOffAdd")) {
+      var v = $("esOffInput").value; if (!v) return toast("Pick a date first.", true);
+      var l = offDays(); if (l.indexOf(v) < 0) l.push(v);
+      saveOff(l.filter(function (d) { return d >= addDays(today(), -30); })); $("esOffInput").value = "";
+    }
+    var del = e.target.closest("[data-es-off-del]");
+    if (del) { e.preventDefault(); saveOff(offDays().filter(function (d) { return d !== del.dataset.esOffDel; })); }
+  });
   function nice(iso) { if (!iso) return "–"; var d = new Date(iso + "T00:00:00Z"); return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" }); }
   function when(ts) { if (!ts) return ""; var d = new Date(ts); return d.toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata" }); }
   function toast(msg, warn) {
@@ -98,7 +129,7 @@
     if (unsub || !db()) return;
     unsub = db().collection("aikm_admin").doc("easyShip").onSnapshot(function (d) { data = d.exists ? d.data() : {}; render(); }, function () { setState("bad", "Could not read Easy Ship data"); });
   }
-  function stop() { if (unsub) { unsub(); unsub = null; } }
+  function stop() { if (unsub) { unsub(); unsub = null; } if (offUnsub) { offUnsub(); offUnsub = null; } }
   document.addEventListener("click", function (e) {
     var t = e.target.closest(".tabbtn[data-tab]"); if (!t) return;
     if (t.dataset.tab === "easyship") { var w = setInterval(function () { if (db()) { clearInterval(w); listen(); } }, 500); listen(); }
@@ -114,6 +145,8 @@
   function render() {
     if (!$("tab-easyship")) return;
     var live = data.live || {}, last = data.last || null, dry = data.lastDry || null;
+    listenOff(); renderOff();
+    var di = $("esDate"); if (di && !di.dataset.touched) di.value = nextWorking(today());
     var running = live.state === "running" && Date.now() - new Date(live.updatedAt).getTime() < 12 * 60000;
     setState(running ? "run" : live.state === "failed" ? "bad" : last ? "ok" : "", running ? live.step : live.state === "failed" ? live.step : last ? "Last run " + when(last.finishedAt) : "Not run yet");
     ["esRunBtn", "esTestBtn", "esDryBtn", "esLabelsBtn"].forEach(function (id) { if ($(id)) $(id).disabled = running; });
@@ -342,15 +375,3 @@
     } catch (err) { setState("bad", "Could not start: " + err.message); toast("Could not start: " + err.message, true); }
   }
 })();
-
-/* Bulk Refund tab lives in its own file — loaded from here so no Shopify edit is needed.
-   Loads the exact latest version (by commit) so updates show at once; falls back to @main. */
-(function () { try { if (document.getElementById("aikmRefundJs")) return;
-  function add(ref) { if (document.getElementById("aikmRefundJs")) return; var s = document.createElement("script"); s.id = "aikmRefundJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-tab.js"; document.head.appendChild(s); }
-  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
-  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/refund-tab.js&per_page=1")
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
-    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
-} catch (e) {} })();
