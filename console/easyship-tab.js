@@ -375,3 +375,16 @@
     } catch (err) { setState("bad", "Could not start: " + err.message); toast("Could not start: " + err.message, true); }
   }
 })();
+
+/* ===== DO NOT REMOVE — loads the Bulk Refund tab (console/refund-tab.js). =====
+   Keep this block at the end of this file when editing the Easy Ship tab.
+   Loads the exact latest version (by commit) so updates show at once; falls back to @main. */
+(function () { try { if (document.getElementById("aikmRefundJs")) return;
+  function add(ref) { if (document.getElementById("aikmRefundJs")) return; var s = document.createElement("script"); s.id = "aikmRefundJs"; s.defer = true;
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-tab.js"; document.head.appendChild(s); }
+  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
+  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/refund-tab.js&per_page=1")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
+} catch (e) {} })();
