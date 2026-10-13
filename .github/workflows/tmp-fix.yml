@@ -1,0 +1,37 @@
+name: tmp fix
+on: workflow_dispatch
+jobs:
+  c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install --quiet firebase-admin==6.5.0 pymupdf==1.24.10 requests
+      - shell: python
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          import json, os, firebase_admin
+          from firebase_admin import credentials, firestore
+          firebase_admin.initialize_app(credentials.Certificate(json.loads(os.environ['FIREBASE_SERVICE_ACCOUNT'])))
+          firestore.client().collection('labelJobs').document('test1').set({'sla': '2026-10-13', 'acct': 'PRASO ENTERPRISES', 'onlyNew': True, 'status': 'queued'})
+      - run: python nimbus_labels.py
+        env:
+          JOB_ID: test1
+          NIMBUS_API_KEY: ${{ secrets.NIMBUS_API_KEY }}
+          NIMBUS_API_SECRET: ${{ secrets.NIMBUS_API_SECRET }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+      - shell: python
+        if: always()
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          import json, os, firebase_admin
+          from firebase_admin import credentials, firestore
+          firebase_admin.initialize_app(credentials.Certificate(json.loads(os.environ['FIREBASE_SERVICE_ACCOUNT'])))
+          db = firestore.client(); d = db.collection('labelJobs').document('test1').get().to_dict() or {}
+          print('FINAL', d.get('status'), d.get('count'), d.get('step'), 'url?', bool(d.get('url')))
+          print('PRINTED', len((db.collection('aikm_admin').document('labelPrinted').get().to_dict() or {}).get('ids') or {}))
+          db.collection('labelJobs').document('test1').delete(); db.collection('aikm_admin').document('labelPrinted').delete()
