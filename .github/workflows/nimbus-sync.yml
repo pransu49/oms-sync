@@ -7,7 +7,11 @@ on:
         required: false
         default: ''
   schedule:
-    - cron: '*/30 * * * *'   # every 30 min (cron-job.org can also trigger it, like the OMS sync)
+    - cron: '*/30 * * * *'   # backup only — GitHub's own timer often skips hours
+  # main trigger: piggy-back on the OMS sync (reliably started every 10 min by cron-job.org)
+  workflow_run:
+    workflows: ['Sync OMS Guru Orders']
+    types: [completed]
 
 # never two runs at once
 concurrency:
@@ -15,7 +19,21 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # after an OMS run, only go ahead every ~30 min (runs starting at :00-:09 or :30-:39)
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - id: g
+        shell: bash
+        run: |
+          m=$(date -u +%M); m=$((10#$m))
+          if [ "${{ github.event_name }}" != "workflow_run" ] || [ $((m % 30)) -lt 10 ]; then echo "go=1" >> $GITHUB_OUTPUT; else echo "go=0" >> $GITHUB_OUTPUT; echo "skip: not a 30-min slot"; fi
+
   sync:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == '1' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
