@@ -1,0 +1,13 @@
+name: tmp nimbus check
+on: workflow_dispatch
+jobs:
+  c:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: node nimbus-label-check.js
+        env:
+          NIMBUS_API_KEY: ${{ secrets.NIMBUS_API_KEY }}
+          NIMBUS_API_SECRET: ${{ secrets.NIMBUS_API_SECRET }}
