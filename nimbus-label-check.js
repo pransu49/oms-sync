@@ -1,18 +1,16 @@
 const H = { 'x-api-key': process.env.NIMBUS_API_KEY.trim(), 'x-api-secret': process.env.NIMBUS_API_SECRET.trim(), Accept: 'application/json' };
 (async () => {
-  const r = await (await fetch('https://api-v2.nimbuspost.com/v2/orders?limit=20&page=1', { headers: H })).json();
-  const o = (r.data || []).find((x) => x.shipment && x.shipment.awb);
-  console.log('SHIP', JSON.stringify(o.shipment).slice(0, 1800));
-  console.log('LABELOPT', JSON.stringify(o.label_options));
-  const u = o.shipment.label_url;
-  if (u) {
-    const res = await fetch(u, { headers: { Origin: 'https://dalbhaat.in' } });
-    console.log('LABEL GET', res.status, res.headers.get('content-type'), 'ACAO=', res.headers.get('access-control-allow-origin'), 'len', (await res.arrayBuffer()).byteLength);
-    const res2 = await fetch(u, { method: 'OPTIONS', headers: { Origin: 'https://dalbhaat.in', 'Access-Control-Request-Method': 'GET' } });
-    console.log('OPTIONS', res2.status, res2.headers.get('access-control-allow-origin'));
+  const seen = {}; let n = 0, withL = 0, pend = 0;
+  for (let p = 1; p <= 15; p++) {
+    const r = await (await fetch(`https://api-v2.nimbuspost.com/v2/orders?limit=100&page=${p}`, { headers: H })).json();
+    for (const o of r.data || []) {
+      const s = o.shipment || {}; n++;
+      if (o.order_status === 'pickup_pending' || o.order_status === 'pickup_scheduled') pend++;
+      if (s.label_url) withL++;
+      const host = String(s.label_url || '').replace(/[^/]*$/, '');
+      const k = (s.courier_name || '-') + ' | ' + host + ' | ' + o.order_status;
+      if (!seen[k]) { seen[k] = 1; console.log('URL', k, '|', s.label_url, '|', o.items.map((i) => i.name).join('+').slice(0, 40)); }
+    }
   }
-  // label API by awb?
-  for (const path of ['/shipments/label', '/shipments/labels', '/orders/label']) {
-    try { const x = await fetch('https://api-v2.nimbuspost.com/v2' + path, { method: 'POST', headers: { ...H, 'Content-Type': 'application/json' }, body: JSON.stringify({ awbs: [o.shipment.awb] }) }); console.log(path, x.status, (await x.text()).slice(0, 300)); } catch (e) { console.log(path, e.message); }
-  }
+  console.log('TOTAL', n, 'with label', withL, 'pending', pend);
 })();
