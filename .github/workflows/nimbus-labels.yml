@@ -1,0 +1,41 @@
+name: NimbusPost labels
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Console label job (labelJobs/<id>) — set by the console'
+        required: false
+        default: ''
+      sla:
+        description: 'Manual run: SLA date YYYY-MM-DD'
+        required: false
+        default: ''
+      acct:
+        description: 'Manual run: account name (blank = all)'
+        required: false
+        default: ''
+
+concurrency:
+  group: nimbus-labels
+  cancel-in-progress: false
+
+jobs:
+  labels:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install --quiet firebase-admin==6.5.0 pymupdf==1.24.10 requests
+      - run: python nimbus_labels.py
+        env:
+          JOB_ID: ${{ inputs.job_id }}
+          SLA: ${{ inputs.sla }}
+          ACCT: ${{ inputs.acct }}
+          NIMBUS_API_KEY: ${{ secrets.NIMBUS_API_KEY }}
+          NIMBUS_API_SECRET: ${{ secrets.NIMBUS_API_SECRET }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
