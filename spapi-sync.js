@@ -614,6 +614,7 @@ async function syncCompetitivePricing(asinList) {
         isMine: mySellerId ? (o.SellerId === mySellerId) : false,
         condition: o.SubCondition || 'New',
       })).sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+      relistFresh.set(asin, offers);
     } catch (e) { console.warn(`getItemOffers failed for ${asin}:`, e.message || e); }
     if (!fromBatch) await new Promise((r) => setTimeout(r, 1200));
 
@@ -663,6 +664,124 @@ async function syncCompetitivePricing(asinList) {
   if (changedCount > 0) await batch.commit();
   console.log(`Competitive pricing synced: ${changedCount} changed, ${skippedCount} unchanged of ${asinList.length} ASINs`);
   console.log(`Buy box summary — Held: ${buyBoxHeld} | Lost: ${buyBoxLost} | No offer: ${buyBoxNone} | Duplicates: ${duplicatesFound}`);
+}
+
+// ── RELIST ROBOT: "Not selling" listings are relisted under a new SKU ────────────────────
+// Asked for by the owner: if an in-stock self-ship listing is "Not selling" (Amazon shows other
+// offers on the ASIN but not ours), create a fresh offer on the same ASIN with a new SKU
+// (OLDSKU-R1, -R2 …) at the SAME price, MRP and stock as before, then delete the old SKU.
+// Safety:
+//   • Out-of-stock listings (quantity 0) and FBA listings are never touched.
+//   • Only uses competitor offers fetched in THIS run, and only after "Not selling" was seen in
+//     RELIST_STREAK full syncs in a row.
+//   • Skips when Amazon still says the old listing is BUYABLE and the ASIN has 20+ offers
+//     (Amazon only returns the top 20 offers, so ours may simply be hidden).
+//   • The new SKU is checked with Amazon's VALIDATION_PREVIEW first; the old SKU is deleted only
+//     after the new one is ACCEPTED.
+//   • Circuit breaker: if 30%+ of checked listings look "Not selling" (account / API problem),
+//     nothing is changed. Max RELIST_MAX_PER_RUN per run; each ASIN rests 3 days after a relist.
+//   • Turn off any time with the repo variable/secret RELIST_ROBOT=off.
+const RELIST_MAX_PER_RUN = 10, RELIST_STREAK = 2, RELIST_BREAKER = 0.3;
+const RELIST_COOLDOWN_OK = 72 * 3600e3, RELIST_COOLDOWN_FAIL = 24 * 3600e3;
+const relistFresh = new Map();   // asin -> offers fetched this run
+const RELIST_OFFER_ATTRS = ['condition_type', 'condition_note', 'list_price', 'merchant_shipping_group', 'product_tax_code',
+  'max_order_quantity', 'gift_options', 'country_of_origin', 'item_package_quantity', 'batteries_required',
+  'supplier_declared_dg_hz_regulation', 'externally_assigned_product_identifier', 'manufacturer', 'packer_contact_information',
+  'importer_contact_information', 'manufacturer_contact_information', 'item_weight', 'unit_count', 'item_package_weight'];
+function relistNewSku(sku) {
+  const m = /^(.*)-R(\d{1,3})$/.exec(sku), base = (m ? m[1] : sku), n0 = m ? +m[2] : 0;
+  for (let n = n0 + 1; n < n0 + 50; n++) {
+    const suf = `-R${n}`, cand = base.slice(0, 40 - suf.length) + suf;
+    if (!reportSkus.has(cand)) return cand;
+  }
+  return null;
+}
+async function runRelistRobot(sellerId) {
+  if (String(process.env.RELIST_ROBOT || '').toLowerCase() === 'off') { console.log('Relist robot: switched off (RELIST_ROBOT=off).'); return; }
+  if (!sellerId) { console.log('Relist robot skipped: SPAPI_SELLER_ID not set.'); return; }
+  if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
+  const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
+  const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
+  const now = Date.now();
+  const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
+  const eligible = inv.filter((i) => (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (i.quantity || 0) > 0 && i.price > 0);
+  const checked = eligible.filter((i) => relistFresh.has(i.asin));
+  const isNot = (i) => { const o = relistFresh.get(i.asin) || []; return o.length > 0 && !o.some((x) => x.isMine); };
+  const notSelling = checked.filter(isNot);
+  console.log(`Relist robot: ${eligible.length} in-stock self-ship listings, ${checked.length} with fresh offers, ${notSelling.length} not selling.`);
+  if (checked.length >= 10 && notSelling.length / checked.length >= RELIST_BREAKER) {
+    console.warn(`Relist robot STOPPED: ${notSelling.length} of ${checked.length} look "Not selling" - looks like an account or Amazon problem, nothing changed.`);
+    await stRef.set({ streak: {}, cool: st.cool, lastRun: now, stopped: `${notSelling.length}/${checked.length} not selling` });
+    return;
+  }
+  const streak = {};
+  notSelling.forEach((i) => { streak[i.sku] = (st.streak[i.sku] || 0) + 1; });
+  const ready = notSelling.filter((i) => streak[i.sku] >= RELIST_STREAK && !(st.cool[i.asin] && now < st.cool[i.asin]))
+    .slice(0, RELIST_MAX_PER_RUN);
+  console.log(`Relist robot: ${ready.length} ready (seen ${RELIST_STREAK}+ syncs in a row, not resting).`);
+  const log = (i, rec) => {
+    const doc = { account: ACCOUNT_LABEL, asin: i.asin, name: i.name || '', oldSku: i.sku, price: i.price, mrp: i.mrp || null, qty: i.quantity, at: Date.now(), ...rec };
+    snapPatch('pricing', `${ACCOUNT_LABEL}_${i.asin}`, { relist: doc });
+    return dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${i.asin}_${doc.at}`).set(doc).catch((e) => console.warn('relist log', e.message || e));
+  };
+  for (const i of ready) {
+    const oldSku = i.sku, asin = i.asin;
+    try {
+      const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: oldSku },
+        query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries', 'issues'] } });
+      const sum = (old.summaries || [])[0] || {}, status = (sum.status || []).map(String);
+      if (status.includes('BUYABLE') && (relistFresh.get(asin) || []).length >= 20) {
+        console.log(`Relist ${oldSku}: Amazon says BUYABLE and ASIN has 20+ offers (ours may be hidden) - skipped.`);
+        st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku]; continue;
+      }
+      const productType = sum.productType || getProductTypeForSku(oldSku);
+      if (!productType) throw new Error('Product type unknown for the old SKU.');
+      const newSku = relistNewSku(oldSku);
+      if (!newSku) throw new Error('Could not make a free new SKU name.');
+      const oa = old.attributes || {}, attributes = {};
+      RELIST_OFFER_ATTRS.forEach((k) => { if (oa[k]) attributes[k] = oa[k]; });
+      attributes.merchant_suggested_asin = [{ value: asin, marketplace_id: MARKETPLACE_ID }];
+      if (!attributes.condition_type) attributes.condition_type = [{ value: 'new_new', marketplace_id: MARKETPLACE_ID }];
+      attributes.purchasable_offer = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', our_price: [{ schedule: [{ value_with_tax: i.price }] }] }];
+      if (!attributes.list_price && i.mrp) attributes.list_price = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value_with_tax: i.mrp }];
+      if (!attributes.product_tax_code && i.taxCode) attributes.product_tax_code = [{ value: i.taxCode, marketplace_id: MARKETPLACE_ID }];
+      attributes.fulfillment_availability = [{ fulfillment_channel_code: 'DEFAULT', quantity: i.quantity }];
+      const put = (mode) => spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: newSku },
+        query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, mode ? { mode } : {}),
+        body: { productType, requirements: 'LISTING_OFFER_ONLY', attributes } });
+      // 1) dry run: Amazon checks everything, nothing is created
+      let pre = await put('VALIDATION_PREVIEW');
+      const missing = ((pre.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').flatMap((x) => x.attributeNames || []))
+        .filter((k) => oa[k] && !attributes[k]);
+      if (missing.length) { missing.forEach((k) => { attributes[k] = oa[k]; }); pre = await put('VALIDATION_PREVIEW'); }
+      assertListingsOk(pre);
+      // 2) real listing
+      assertListingsOk(await put(null));
+      console.log(`Relist ${oldSku} -> ${newSku} (ASIN ${asin}) at Rs ${i.price}, MRP ${i.mrp || '-'}, qty ${i.quantity}: ACCEPTED`);
+      // 3) delete the old SKU only now
+      let delErr = null;
+      try {
+        await spClient.callAPI({ operation: 'deleteListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: oldSku }, query: { marketplaceIds: [MARKETPLACE_ID] } });
+        await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${oldSku}_${Date.now()}`).set({ account: ACCOUNT_LABEL, sku: oldSku, name: i.name || null, asin,
+          price: i.price, quantity: i.quantity, reason: 'relist', newSku, deletedAt: admin.firestore.FieldValue.serverTimestamp() });
+      } catch (e) { delErr = e.message || String(e); console.warn(`Relist: old SKU ${oldSku} NOT deleted:`, delErr); }
+      // 4) keep a hand-entered cost on the new SKU
+      try {
+        const mc = await dbMain.collection('aikm_admin').doc('spapiManualCosts').get(), c = mc.exists && (mc.data().costs || {})[oldSku];
+        if (c != null) await dbMain.collection('aikm_admin').doc('spapiManualCosts').set({ costs: { [newSku]: c } }, { merge: true });
+      } catch (e) { console.warn('relist manual cost copy', e.message || e); }
+      st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
+      await log(i, { status: delErr ? 'relisted_old_not_deleted' : 'relisted', newSku, error: delErr });
+    } catch (e) {
+      const error = e.message || String(e);
+      console.warn(`Relist FAILED for ${oldSku} (ASIN ${asin}):`, error);
+      st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
+      await log(i, { status: 'failed', error });
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
+  await stRef.set({ streak, cool: st.cool, lastRun: now, stopped: null });
 }
 
 // ── Write-back functions ──────────────────────────────────────────────────────────
@@ -1261,6 +1380,9 @@ async function run() {
 
   console.log('Step 3a: stock guard (LOTS stock below 10 -> out of stock on Amazon)...');
   if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
+
+  console.log('Step 3a1: relist robot ("Not selling" -> new SKU, old SKU deleted)...');
+  if (SYNC_MODE === 'full') await runRelistRobot(sellerId).catch((e) => console.warn('Relist robot skipped (sync continues):', e.message || e));
 
   console.log('Step 3a2: removing listings that no longer exist on Amazon...');
   await pruneRemovedListings(asinsFromInventory).catch((e) => console.warn('Prune skipped (sync continues):', e.message || e));
