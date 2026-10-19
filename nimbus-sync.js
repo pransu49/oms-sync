@@ -75,6 +75,7 @@ function bucket(s) {
   if (s.startsWith('cancel')) return 'cancelled';
   if (s === 'out_for_delivery') return 'ofd';
   if (s === 'ndr' || /exception|lost|damage|undeliver/.test(s)) return 'exception';
+  if (s === 'pickup_completed' || s === 'picked_up' || s === 'picked') return 'transit'; // picked up = on its way
   if (s === 'created' || s.startsWith('pickup') || s === 'booked' || s === 'manifested' || s === 'new') return 'pickup';
   if (/transit|shipped|picked|reached|destination|dispatch/.test(s)) return 'transit';
   return 'other';
