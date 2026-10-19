@@ -1,10 +1,16 @@
 name: Easy Ship - pack and labels
 
 on:
-  # every day ~11:30 AM IST (05:55 UTC; GitHub may start it a few minutes late),
-  # plus the "Run now" buttons in the console's Easy Ship tab
+  # Daily auto-run: the OMS Guru sync runs every 10 min (cron-job.org, reliable).
+  # After each sync the "gate" job checks: Mon-Sat, after 11:30 AM IST, not yet started today
+  # -> then it starts the robot ONCE (it prepares the next working day).
+  workflow_run:
+    workflows: ['Sync OMS Guru Orders']
+    types: [completed]
+  # GitHub's own timer as a backup (it often fires hours late, the gate stops duplicates)
   schedule:
     - cron: '55 5 * * *'
+  # "Run now" / "Preview" / "Get labels" buttons in the console's Easy Ship tab
   workflow_dispatch:
     inputs:
       dry_run:
@@ -26,13 +32,60 @@ on:
         description: 'debug only: OMS order ids to open the pack step for (nothing is packed)'
         default: ''
 
-# never two runs at once
-concurrency:
-  group: easyship
-  cancel-in-progress: false
-
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.decide.outputs.go }}
+      auto: ${{ steps.when.outputs.auto }}
+    steps:
+      - name: When
+        id: when
+        shell: bash
+        run: |
+          EV="${{ github.event_name }}"
+          IST_DATE=$(TZ=Asia/Kolkata date +%F); HM=$(TZ=Asia/Kolkata date +%H%M); DOW=$(TZ=Asia/Kolkata date +%u)
+          echo "day=$IST_DATE" >> $GITHUB_OUTPUT
+          if [ "$EV" = "workflow_dispatch" ] && [ "${{ inputs.trigger }}" != "schedule" ]; then
+            echo "auto=false" >> $GITHUB_OUTPUT; echo "go=true" >> $GITHUB_OUTPUT; exit 0; fi
+          echo "auto=true" >> $GITHUB_OUTPUT
+          if [ "$DOW" = "7" ]; then echo "Sunday - no auto-run"; echo "go=false" >> $GITHUB_OUTPUT; exit 0; fi
+          if [ "$EV" != "workflow_dispatch" ] && { [ "$((10#$HM))" -lt 1130 ] || [ "$((10#$HM))" -gt 1900 ]; }; then
+            echo "Outside 11:30 AM - 7:00 PM IST ($HM)"; echo "go=false" >> $GITHUB_OUTPUT; exit 0; fi
+          echo "go=check" >> $GITHUB_OUTPUT
+      - name: Already started today?
+        id: done
+        if: steps.when.outputs.go == 'check'
+        uses: actions/cache/restore@v4
+        with:
+          path: .easyship-auto
+          key: easyship-auto-${{ steps.when.outputs.day }}
+          lookup-only: true
+      - name: Decide
+        id: decide
+        shell: bash
+        run: |
+          if [ "${{ steps.when.outputs.go }}" = "true" ]; then echo "go=true" >> $GITHUB_OUTPUT
+          elif [ "${{ steps.when.outputs.go }}" = "check" ] && [ "${{ steps.done.outputs.cache-hit }}" != "true" ]; then echo "go=true" >> $GITHUB_OUTPUT
+          else echo "Nothing to do now."; echo "go=false" >> $GITHUB_OUTPUT; fi
+      - name: Mark today's auto-run as started
+        if: steps.decide.outputs.go == 'true' && steps.when.outputs.auto == 'true'
+        shell: bash
+        run: mkdir -p .easyship-auto && date > .easyship-auto/started
+      - uses: actions/cache/save@v4
+        if: steps.decide.outputs.go == 'true' && steps.when.outputs.auto == 'true'
+        with:
+          path: .easyship-auto
+          key: easyship-auto-${{ steps.when.outputs.day }}
+
   easyship:
+    needs: gate
+    if: needs.gate.outputs.go == 'true'
+    # never two runs at once
+    concurrency:
+      group: easyship
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
@@ -47,14 +100,14 @@ jobs:
           OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}   # aikm-oms-sync project (own free quota)
-          FIREBASE_SERVICE_ACCOUNT_MAIN: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}   # console project — off days list
+          FIREBASE_SERVICE_ACCOUNT_MAIN: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}   # console project - off days list
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           LIMIT: ${{ inputs.limit || '0' }}
           SLA_DATE: ${{ inputs.sla_date || '' }}
           COLLECT: ${{ inputs.collect || 'false' }}
-          PROBE: ${{ inputs.probe_vids != '' && 'true' || 'false' }}
+          PROBE: ${{ inputs.probe_vids != '' && inputs.probe_vids != null && 'true' || 'false' }}
           PROBE_VIDS: ${{ inputs.probe_vids || '' }}
-          TRIGGER: ${{ github.event_name == 'schedule' && 'schedule' || inputs.trigger || 'manual' }}
+          TRIGGER: ${{ needs.gate.outputs.auto == 'true' && 'schedule' || inputs.trigger || 'manual' }}
 
       - name: Report sync health to console
         if: always()
