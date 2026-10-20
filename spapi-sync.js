@@ -899,6 +899,13 @@ async function runRelistRobot(sellerId) {
       await log(i, { status: delErr ? 'relisted_old_not_deleted' : 'relisted', newSku, error: delErr, why });
     } catch (e) {
       const error = e.message || String(e);
+      if (/not found/i.test(error) && !oldWhy) {
+        // The SKU was removed on Amazon (Seller Central / another tool); the listings report can lag a few hours.
+        console.log(`Relist ${oldSku}: SKU no longer exists on Amazon - nothing to relist.`);
+        st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
+        await log(i, { status: 'gone', error });
+        continue;
+      }
       console.warn(`Relist FAILED for ${oldSku} (ASIN ${asin}):`, error);
       st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
       await log(i, { status: 'failed', error, why: oldWhy });
