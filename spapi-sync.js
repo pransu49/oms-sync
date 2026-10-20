@@ -987,7 +987,9 @@ function closingFee(p) { return p <= 300 ? 2 : p <= 500 ? 23 : p <= 1000 ? 48 : 
 //   Sasta Store ships itself via NimbusPost (real cost ~Rs 33, Rs 40 used, +Rs 30 per extra kg);
 //   Praso ships mostly Easy Ship -> Amazon's Easy Ship weight fee. Rs 3 per order kept aside for returns (RTO ~3%).
 const SELF_SHIP_ACCOUNTS = new Set(['sastastore']);
-const MIN_PROFIT = 5;   // never price below Rs 5 profit per order
+// Owner, 21 Oct 2026: reseller of branded goods - margin comes mostly from the shipping charge.
+// Never go below Rs 15 profit per order; Rs 20 is the target (flagged in the log when a change lands between 15 and 20).
+const MIN_PROFIT = 15, TARGET_PROFIT = 20;
 function courierCost(kg) { const n = Math.max(Number(kg) || 0.5, 0.5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
 function shipCostFor(i) { return SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? courierCost(i.weightKg) : Math.max(easyShipFee(i.weightKg), 45); }
 function myShipCharge(i) { const m = (relistFresh.get(i.asin) || []).find((o) => o.isMine); return m && m.shipping != null ? Number(m.shipping) : (SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? 74 : 80); }
@@ -1044,11 +1046,11 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
       const kc = await knownCost(i), ship = Number(mine.shipping) || 0;
       if (!kc) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no cost known. Map it on the Amazon page so the robot can price it.` }); continue; }
       const target = Math.floor(L(win) - 1 - ship), profit = orderProfit(i, kc.cost, target, ship), floor = noLossFloor(i, kc.cost, target, ship);
-      if (profit < MIN_PROFIT) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns ₹${profit} per order (lowest allowed ₹${floor}). Price kept.` }); continue; }
+      if (profit < MIN_PROFIT) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ₹${MIN_PROFIT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
       if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
       await patch(i, target); lowered++;
-      console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${i.price} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order)`);
-      await log(i, { status: 'bb_price', change: 'lower', oldPrice: i.price, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order` });
+      console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${i.price} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order${profit < TARGET_PROFIT ? ', below Rs 20 target' : ''})`);
+      await log(i, { status: 'bb_price', change: 'lower', oldPrice: i.price, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, above ₹${MIN_PROFIT} minimum)` : ''}` });
     } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await log(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
     await new Promise((r) => setTimeout(r, 800));
   }
