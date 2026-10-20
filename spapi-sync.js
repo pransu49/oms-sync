@@ -708,6 +708,43 @@ const RELIST_OFFER_ATTRS = ['condition_type', 'condition_note', 'list_price', 'm
   'max_order_quantity', 'gift_options', 'country_of_origin', 'item_package_quantity', 'batteries_required',
   'supplier_declared_dg_hz_regulation', 'externally_assigned_product_identifier', 'manufacturer', 'packer_contact_information',
   'importer_contact_information', 'manufacturer_contact_information', 'item_weight', 'unit_count', 'item_package_weight'];
+// New offer = the old listing's own offer block (Amazon India keeps MRP inside purchasable_offer as
+// maximum_retail_price), with the same selling price, stock and GST code as before.
+function relistAttributes(oa, i) {
+  const attributes = {};
+  RELIST_OFFER_ATTRS.forEach((k) => { if (oa[k]) attributes[k] = oa[k]; });
+  ['skip_offer', 'external_product_information'].forEach((k) => { if (oa[k]) attributes[k] = oa[k]; });
+  attributes.merchant_suggested_asin = [{ value: i.asin, marketplace_id: MARKETPLACE_ID }];
+  if (!attributes.condition_type) attributes.condition_type = [{ value: 'new_new', marketplace_id: MARKETPLACE_ID }];
+  const po = JSON.parse(JSON.stringify((oa.purchasable_offer || [])[0] || {}));
+  delete po.start_at; delete po.end_at;
+  Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL',
+    our_price: [{ schedule: [{ value_with_tax: i.price }] }] });
+  if (!po.maximum_retail_price && i.mrp) po.maximum_retail_price = [{ schedule: [{ value_with_tax: i.mrp }] }];
+  ['maximum_seller_allowed_price', 'minimum_seller_allowed_price', 'discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
+  attributes.purchasable_offer = [po];
+  if (!attributes.product_tax_code && i.taxCode) attributes.product_tax_code = [{ value: i.taxCode, marketplace_id: MARKETPLACE_ID }];
+  attributes.skip_offer = [{ value: false, marketplace_id: MARKETPLACE_ID }];
+  attributes.fulfillment_availability = [{ fulfillment_channel_code: 'DEFAULT', quantity: i.quantity }];
+  return attributes;
+}
+// Dry run for one SKU (mode "relistpreview:<SKU>"): builds the relist exactly like the robot and asks
+// Amazon to VALIDATE it. Nothing is created or deleted. Result in spapiSnapshots/<account>_debug.
+async function relistPreview(sku) {
+  const sellerId = process.env.SPAPI_SELLER_ID;
+  await loadSnapshot();
+  const i = SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`];
+  if (!i) throw new Error('SKU not in the snapshot: ' + sku);
+  const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku },
+    query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries', 'issues'] } });
+  const sum = (old.summaries || [])[0] || {}, newSku = relistNewSku(sku) || sku + '-R1';
+  const attributes = relistAttributes(old.attributes || {}, i);
+  const pre = await spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: newSku },
+    query: { marketplaceIds: [MARKETPLACE_ID], mode: 'VALIDATION_PREVIEW' }, body: { productType: sum.productType, requirements: 'LISTING_OFFER_ONLY', attributes } });
+  console.log('Relist preview', sku, '->', newSku, JSON.stringify(pre).slice(0, 2000));
+  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku, at: Date.now(), preview: JSON.stringify(pre).slice(0, 5000), sent: JSON.stringify(attributes).slice(0, 5000),
+    oldStatus: JSON.stringify(sum.status || []), oldIssues: JSON.stringify(old.issues || []).slice(0, 3000) });
+}
 function relistNewSku(sku) {
   const m = /^(.*)-R(\d{1,3})$/.exec(sku), base = (m ? m[1] : sku), n0 = m ? +m[2] : 0;
   for (let n = n0 + 1; n < n0 + 50; n++) {
@@ -722,6 +759,7 @@ async function runRelistRobot(sellerId) {
   if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
   const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
   const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
+  if (st.ver !== 2) { st.cool = {}; st.ver = 2; }   // v2 offer format (20 Oct 2026): retry earlier format failures
   const now = Date.now();
   const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
   const eligible = inv.filter((i) => (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (i.quantity || 0) > 0 && i.price > 0);
@@ -731,7 +769,7 @@ async function runRelistRobot(sellerId) {
   console.log(`Relist robot: ${eligible.length} in-stock self-ship listings, ${checked.length} with fresh offers, ${notSelling.length} not selling.`);
   if (checked.length >= 10 && notSelling.length / checked.length >= RELIST_BREAKER) {
     console.warn(`Relist robot STOPPED: ${notSelling.length} of ${checked.length} look "Not selling" - looks like an account or Amazon problem, nothing changed.`);
-    await stRef.set({ streak: {}, cool: st.cool, lastRun: now, stopped: `${notSelling.length}/${checked.length} not selling` });
+    await stRef.set({ streak: {}, cool: st.cool, ver: 2, lastRun: now, stopped: `${notSelling.length}/${checked.length} not selling` });
     return;
   }
   const streak = {};
@@ -746,10 +784,19 @@ async function runRelistRobot(sellerId) {
   };
   for (const i of ready) {
     const oldSku = i.sku, asin = i.asin;
+    let oldWhy = null;
     try {
       const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: oldSku },
         query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries', 'issues'] } });
       const sum = (old.summaries || [])[0] || {}, status = (sum.status || []).map(String);
+      oldWhy = (old.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').map((x) => x.message).filter(Boolean).join(' | ').slice(0, 400) || null;
+      // Suppressed by Amazon for its price: a relist at the same price is suppressed again - show the reason instead.
+      if ((old.issues || []).some((x) => (x.severity || '').toUpperCase() === 'ERROR' && (x.categories || []).includes('INVALID_PRICE'))) {
+        console.log(`Relist ${oldSku}: Amazon suppressed it for its price (${oldWhy}) - not relisted at the same price.`);
+        st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
+        await log(i, { status: 'price_issue', why: oldWhy });
+        continue;
+      }
       if (status.includes('BUYABLE') && (relistFresh.get(asin) || []).length >= 20) {
         console.log(`Relist ${oldSku}: Amazon says BUYABLE and ASIN has 20+ offers (ours may be hidden) - skipped.`);
         st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku]; continue;
@@ -758,14 +805,8 @@ async function runRelistRobot(sellerId) {
       if (!productType) throw new Error('Product type unknown for the old SKU.');
       const newSku = relistNewSku(oldSku);
       if (!newSku) throw new Error('Could not make a free new SKU name.');
-      const oa = old.attributes || {}, attributes = {};
-      RELIST_OFFER_ATTRS.forEach((k) => { if (oa[k]) attributes[k] = oa[k]; });
-      attributes.merchant_suggested_asin = [{ value: asin, marketplace_id: MARKETPLACE_ID }];
-      if (!attributes.condition_type) attributes.condition_type = [{ value: 'new_new', marketplace_id: MARKETPLACE_ID }];
-      attributes.purchasable_offer = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', our_price: [{ schedule: [{ value_with_tax: i.price }] }] }];
-      if (!attributes.list_price && i.mrp) attributes.list_price = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value_with_tax: i.mrp }];
-      if (!attributes.product_tax_code && i.taxCode) attributes.product_tax_code = [{ value: i.taxCode, marketplace_id: MARKETPLACE_ID }];
-      attributes.fulfillment_availability = [{ fulfillment_channel_code: 'DEFAULT', quantity: i.quantity }];
+      const oa = old.attributes || {}, attributes = relistAttributes(oa, i);
+      const why = (old.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').map((x) => x.message).filter(Boolean).join(' | ').slice(0, 400);
       const put = (mode) => spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: newSku },
         query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, mode ? { mode } : {}),
         body: { productType, requirements: 'LISTING_OFFER_ONLY', attributes } });
@@ -791,17 +832,17 @@ async function runRelistRobot(sellerId) {
         if (c != null) await dbMain.collection('aikm_admin').doc('spapiManualCosts').set({ costs: { [newSku]: c } }, { merge: true });
       } catch (e) { console.warn('relist manual cost copy', e.message || e); }
       st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
-      await log(i, { status: delErr ? 'relisted_old_not_deleted' : 'relisted', newSku, error: delErr });
+      await log(i, { status: delErr ? 'relisted_old_not_deleted' : 'relisted', newSku, error: delErr, why });
     } catch (e) {
       const error = e.message || String(e);
       console.warn(`Relist FAILED for ${oldSku} (ASIN ${asin}):`, error);
       st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
-      await log(i, { status: 'failed', error });
+      await log(i, { status: 'failed', error, why: oldWhy });
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
-  await stRef.set({ streak, cool: st.cool, lastRun: now, stopped: null });
+  await stRef.set({ streak, cool: st.cool, ver: 2, lastRun: now, stopped: null });
 }
 
 // ── Write-back functions ──────────────────────────────────────────────────────────
@@ -1463,7 +1504,8 @@ async function debugSku(sku) {
   console.log('price attrs:', JSON.stringify(pick));
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku, at: Date.now(), keys: Object.keys(a), price: JSON.stringify(pick), summaries: JSON.stringify(res.summaries || []).slice(0, 2000), offers: JSON.stringify(res.offers || []).slice(0, 2000), issues: JSON.stringify(res.issues || []).slice(0, 4000) });
 }
-if (/^debugsku:/i.test(process.env.SYNC_MODE || '')) { debugSku(process.env.SYNC_MODE.slice(9).trim()).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); }); }
+if (/^relistpreview:/i.test(process.env.SYNC_MODE || '')) { relistPreview(process.env.SYNC_MODE.slice(14).trim()).then(() => process.exit(0)).catch((e) => { console.error('relist preview failed:', e.message || e); process.exit(1); }); }
+else if (/^debugsku:/i.test(process.env.SYNC_MODE || '')) { debugSku(process.env.SYNC_MODE.slice(9).trim()).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); }); }
 else {
 const DEBUG_ID = /^debug:/i.test(process.env.SYNC_MODE || '') ? process.env.SYNC_MODE.slice(6).trim() : null;
 if (DEBUG_ID) debugOrder(DEBUG_ID).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); });
