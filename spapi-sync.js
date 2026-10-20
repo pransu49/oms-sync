@@ -1456,12 +1456,12 @@ async function debugOrder(id) {
 }
 async function debugSku(sku) {
   const res = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId: process.env.SPAPI_SELLER_ID, sku },
-    query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries', 'offers'] } });
+    query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries', 'offers', 'issues'] } });
   const a = res.attributes || {};
-  const pick = Object.fromEntries(Object.entries(a).filter(([k]) => /price|mrp|retail|list/i.test(k)));
+  const pick = Object.fromEntries(Object.entries(a).filter(([k]) => /price|mrp|retail|list|offer|skip|tax|fulfil|shipping|condition/i.test(k)));
   console.log('attribute keys:', Object.keys(a).join(', '));
   console.log('price attrs:', JSON.stringify(pick));
-  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku, at: Date.now(), keys: Object.keys(a), price: JSON.stringify(pick), summaries: JSON.stringify(res.summaries || []).slice(0, 2000), offers: JSON.stringify(res.offers || []).slice(0, 2000) });
+  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku, at: Date.now(), keys: Object.keys(a), price: JSON.stringify(pick), summaries: JSON.stringify(res.summaries || []).slice(0, 2000), offers: JSON.stringify(res.offers || []).slice(0, 2000), issues: JSON.stringify(res.issues || []).slice(0, 4000) });
 }
 if (/^debugsku:/i.test(process.env.SYNC_MODE || '')) { debugSku(process.env.SYNC_MODE.slice(9).trim()).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); }); }
 else {
