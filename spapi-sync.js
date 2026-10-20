@@ -1597,7 +1597,21 @@ async function listingCheck(list) {
   console.log('Listing check:', JSON.stringify(out));
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku: 'check', at: Date.now(), check: JSON.stringify(out).slice(0, 9000) });
 }
-if (/^listingcheck:/i.test(process.env.SYNC_MODE || '')) { listingCheck(process.env.SYNC_MODE.slice(13)).then(() => process.exit(0)).catch((e) => { console.error('check failed:', e.message || e); process.exit(1); }); }
+async function restrictionCheck(list) {
+  const out = {};
+  for (const asin of list.split(',').map((x) => x.trim()).filter(Boolean)) {
+    try {
+      const r = await spClient.callAPI({ operation: 'getListingsRestrictions', endpoint: 'listingsRestrictions',
+        query: { asin, sellerId: process.env.SPAPI_SELLER_ID, marketplaceIds: [MARKETPLACE_ID], conditionType: 'new_new' } });
+      out[asin] = (r.restrictions || []).map((x) => (x.reasons || []).map((y) => y.reasonCode + ': ' + (y.message || '')).join(' / ') || 'restricted');
+    } catch (e) { out[asin] = 'error: ' + (e.message || e); }
+    await new Promise((r) => setTimeout(r, 1200));
+  }
+  console.log('Restriction check:', JSON.stringify(out));
+  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku: 'restrictions', at: Date.now(), check: JSON.stringify(out).slice(0, 9000) });
+}
+if (/^restrictions:/i.test(process.env.SYNC_MODE || '')) { restrictionCheck(process.env.SYNC_MODE.slice(13)).then(() => process.exit(0)).catch((e) => { console.error('check failed:', e.message || e); process.exit(1); }); }
+else if (/^listingcheck:/i.test(process.env.SYNC_MODE || '')) { listingCheck(process.env.SYNC_MODE.slice(13)).then(() => process.exit(0)).catch((e) => { console.error('check failed:', e.message || e); process.exit(1); }); }
 else if (/^relistpreview:/i.test(process.env.SYNC_MODE || '')) { relistPreview(process.env.SYNC_MODE.slice(14).trim()).then(() => process.exit(0)).catch((e) => { console.error('relist preview failed:', e.message || e); process.exit(1); }); }
 else if (/^debugsku:/i.test(process.env.SYNC_MODE || '')) { debugSku(process.env.SYNC_MODE.slice(9).trim()).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); }); }
 else {
