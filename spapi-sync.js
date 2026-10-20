@@ -954,11 +954,12 @@ async function runRelistRobot(sellerId) {
     await new Promise((r) => setTimeout(r, 1500));
   }
   // Buy Box pricer: lower to win (any gap, Rs 5+ profit) and raise when we hold the Buy Box
-  st.bbCool = st.bbCool || {};
+  st.bbCool = st.bbCool || {}; st.learn = st.learn || {};
   await runBuyBoxPricer(sellerId, eligible, st, log).catch((e) => console.warn('Buy Box pricer skipped:', e.message || e));
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
   Object.keys(st.bbCool).forEach((a) => { if (st.bbCool[a] < now) delete st.bbCool[a]; });
-  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, ver: 6, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
+  pruneLearn(st.learn);
+  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, ver: 6, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
 }
 
 // Orders per ASIN for this account (snapshot, last 90 days): days since the last order, and orders in days 7-37.
@@ -1056,15 +1057,23 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
       if (gap > 0) lower.push({ i, mine, win, gap });
     }
   }
+  const mem = (sku) => st.learn[sku] || {};
+  const units30 = unitsByAsin(30);
+  // most-selling products first (runs are capped)
+  lower.sort((a, b) => (units30[b.i.asin] || 0) - (units30[a.i.asin] || 0));
+  raise.sort((a, b) => (units30[b.i.asin] || 0) - (units30[a.i.asin] || 0));
   console.log(`Buy Box pricer: ${lower.length} lost on price, ${raise.length} held (raise check).`);
   let lowered = 0, raised = 0, skipped = 0, guarded = 0;
   const manual = await loadManualPrices().catch(() => new Map());
-  const patch = async (i, target) => {
+  const patchPrice = async (i, target) => {
     const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
       query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries'] } });
     const productType = ((old.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, i.sku);
     await setOfferPrice(sellerId, i, old, productType, target);
   };
+  // ── LEARNING: judge earlier price changes on real sales before making new ones ──
+  await learnFromChanges(sellerId, eligible, st, log, patchPrice).catch((e) => console.warn('Robot learning skipped:', e.message || e));
+
   // LOSS GUARD (owner, 21 Oct 2026: "make the business profitable"): a listing whose current price earns under
   // MIN_PROFIT per order is moved up to the TARGET_PROFIT price - never above MRP, never more than +30% in one step.
   const guardDone = new Set();
@@ -1079,10 +1088,10 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     if (target > mrp) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. Making ₹${TARGET_PROFIT} needs ₹${target}, above MRP ₹${mrp}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
     if (target > i.price * 1.3) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. Making ₹${TARGET_PROFIT} needs ₹${target} (+${Math.round((target / i.price - 1) * 100)}%). Too big a jump for the robot - check the cost (${kc.src} ₹${kc.cost}).` }); continue; }
     try {
-      await patch(i, target); guarded++;
+      const was = i.price; await patchPrice(i, target); guarded++; noteChange(st, i, 'raise', target, was);
       const np = orderProfit(i, kc.cost, target, ship);
-      console.log(`Loss guard RAISE ${i.sku}: Rs ${i.price} -> Rs ${target} (was Rs ${profit}/order, now Rs ${np})`);
-      await log(i, { status: 'bb_raise', change: 'loss_guard', oldPrice: i.price, newPrice: target, profit: np, basis: `Was earning ₹${profit}/order (under ₹${MIN_PROFIT} minimum) · cost ₹${kc.cost} (${kc.src}) · now ₹${np}/order` });
+      console.log(`Loss guard RAISE ${i.sku}: Rs ${was} -> Rs ${target} (was Rs ${profit}/order, now Rs ${np})`);
+      await log(i, { status: 'bb_raise', change: 'loss_guard', oldPrice: was, newPrice: target, profit: np, basis: `Was earning ₹${profit}/order (under ₹${MIN_PROFIT} minimum) · cost ₹${kc.cost} (${kc.src}) · now ₹${np}/order` });
     } catch (e) { console.warn(`Loss guard FAILED for ${i.sku}:`, e.message || e); }
     await new Promise((r) => setTimeout(r, 800));
   }
@@ -1090,14 +1099,17 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     if (manual.has(i.sku)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. You set ₹${manual.get(i.sku).price} yourself - the robot leaves it for 7 days.` }); continue; }
     st.bbCool[i.sku] = now + BB_COOL_MS;
     try {
+      const m = mem(i.sku);
+      if (m.noLowerUntil > now) { skipped++; continue; }   // learned: cutting this one did not pay - resting
+      if (m.warUntil > now) { skipped++; continue; }       // learned: price war - resting
       const kc = await knownCost(i), ship = Number(mine.shipping) || 0;
       if (!kc) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no cost known. Map it on the Amazon page so the robot can price it.` }); continue; }
       const target = Math.floor(L(win) - 1 - ship), profit = orderProfit(i, kc.cost, target, ship), floor = noLossFloor(i, kc.cost, target, ship);
       if (profit < MIN_PROFIT) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ₹${MIN_PROFIT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
       if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
-      await patch(i, target); lowered++;
-      console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${i.price} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order${profit < TARGET_PROFIT ? ', below Rs 20 target' : ''})`);
-      await log(i, { status: 'bb_price', change: 'lower', oldPrice: i.price, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, above ₹${MIN_PROFIT} minimum)` : ''}` });
+      const was = i.price; await patchPrice(i, target); lowered++; noteChange(st, i, 'lower', target, was);
+      console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${was} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order${profit < TARGET_PROFIT ? ', below Rs 20 target' : ''})`);
+      await log(i, { status: 'bb_price', change: 'lower', oldPrice: was, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, above ₹${MIN_PROFIT} minimum)` : ''}` });
     } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await log(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
     await new Promise((r) => setTimeout(r, 800));
   }
@@ -1107,19 +1119,100 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     const ship = Number(mine.shipping) || 0, mrp = Number(i.mrp) || Infinity;
     let target = Math.floor(L(next) - 1 - ship);
     target = Math.min(target, Math.floor(mrp), Math.floor(i.price * (1 + BB_MAX_RAISE)));
+    const m = mem(i.sku);
+    if (m.ceilUntil > now && m.ceil) target = Math.min(target, Math.floor(m.ceil));   // learned: above this price sales dropped
     if (!(target - i.price >= 3)) continue;
+    const tr = trend(i.asin);
+    if (tr.prev >= 3 && tr.last < tr.prev * 0.6) continue;   // sales falling fast - protect volume, don't raise now
     st.bbCool[i.sku] = now + BB_COOL_MS;
     try {
       const kc = await knownCost(i);
       if (!kc) continue;   // unknown cost: leave alone
-      await patch(i, target); raised++;
+      const was = i.price; await patchPrice(i, target); raised++; noteChange(st, i, 'raise', target, was);
       const profit = orderProfit(i, kc.cost, target, ship);
-      console.log(`Buy Box pricer RAISE ${i.sku}: Rs ${i.price} -> Rs ${target} (next seller Rs ${L(next)} incl. shipping, profit Rs ${profit}/order)`);
-      await log(i, { status: 'bb_raise', change: 'raise', oldPrice: i.price, newPrice: target, profit, basis: `You held the Buy Box · next seller ₹${Math.round(L(next))} incl. shipping · now ₹1 below them · profit ₹${profit}/order` });
+      console.log(`Buy Box pricer RAISE ${i.sku}: Rs ${was} -> Rs ${target} (next seller Rs ${L(next)} incl. shipping, profit Rs ${profit}/order)`);
+      await log(i, { status: 'bb_raise', change: 'raise', oldPrice: was, newPrice: target, profit, basis: `You held the Buy Box · next seller ₹${Math.round(L(next))} incl. shipping · now ₹1 below them · profit ₹${profit}/order` });
     } catch (e) { console.warn(`Buy Box pricer RAISE failed for ${i.sku}:`, e.message || e); }
     await new Promise((r) => setTimeout(r, 800));
   }
   console.log(`Buy Box pricer: ${guarded} loss-guard raises, ${lowered} lowered, ${raised} raised, ${skipped} kept (loss / no cost / big cut / your own price).`);
+}
+
+
+// ── ROBOT LEARNING (owner, 21 Oct 2026: "check trends and learn") ─────────────────────────
+// Every price change is remembered per SKU. 3 days later the robot compares real sales and profit
+// per day before vs after the change, then:
+//   lowered & profit/day went up (or held)      -> keep            (learn_keep)
+//   lowered & profit/day went down              -> back to old price, no more cuts for 14 days (learn_revert)
+//   raised  & profit/day held or went up        -> keep            (learn_keep)
+//   raised  & sales fell >30% and profit/day down-> back to old price, that price becomes a ceiling for 14 days
+//   lowered 3+ times in 3 days (competitor keeps undercutting) -> price war: stop cutting for 3 days (learn_war)
+// Raises are skipped while a product's sales are falling fast (last 7 days < 60% of the 7 days before).
+const LEARN_AFTER_MS = 72 * 3600e3, LEARN_REST_MS = 14 * 864e5, WAR_REST_MS = 72 * 3600e3;
+function myOrders() { return Object.values(SNAP.orders).filter((o) => o && (!o.account || o.account === ACCOUNT_LABEL) && !o.isCanceled && !/^(pending|cancel)/i.test(o.status || '') && o.purchaseDate); }
+function unitsBetween(asin, from, to) {
+  let n = 0;
+  myOrders().forEach((o) => { const t = Date.parse(o.purchaseDate); if (t < from || t >= to) return;
+    (o.items || []).forEach((it) => { if (it && it.asin === asin) n += Number(it.qty) || 1; }); });
+  return n;
+}
+function unitsByAsin(days) {
+  const out = {}, from = Date.now() - days * 864e5;
+  myOrders().forEach((o) => { if (Date.parse(o.purchaseDate) < from) return; (o.items || []).forEach((it) => { if (it && it.asin) out[it.asin] = (out[it.asin] || 0) + (Number(it.qty) || 1); }); });
+  return out;
+}
+function trend(asin) { const now = Date.now(); return { last: unitsBetween(asin, now - 7 * 864e5, now), prev: unitsBetween(asin, now - 14 * 864e5, now - 7 * 864e5) }; }
+function noteChange(st, i, kind, to, from) {
+  const m = st.learn[i.sku] || (st.learn[i.sku] = {}), now = Date.now();
+  m.ch = (m.ch || []).concat([{ at: now, kind, from, to }]).slice(-6);
+  if (kind === 'lower' && m.ch.filter((c) => c.kind === 'lower' && now - c.at < 72 * 3600e3).length >= 3) m.warPending = true;
+}
+function pruneLearn(L) {
+  const now = Date.now();
+  Object.keys(L).forEach((k) => { const m = L[k];
+    m.ch = (m.ch || []).filter((c) => now - c.at < 30 * 864e5);
+    ['noLowerUntil', 'warUntil', 'ceilUntil'].forEach((f) => { if (m[f] && m[f] < now) delete m[f]; });
+    if (!m.ceilUntil) delete m.ceil;
+    if (!m.ch.length && !m.noLowerUntil && !m.warUntil && !m.ceilUntil) delete L[k]; });
+}
+async function learnFromChanges(sellerId, eligible, st, log, patchPrice) {
+  const now = Date.now(), bySku = new Map(eligible.map((i) => [i.sku, i]));
+  let judged = 0, kept = 0, reverted = 0, wars = 0;
+  for (const [sku, m] of Object.entries(st.learn)) {
+    const i = bySku.get(sku); if (!i) continue;
+    if (m.warPending) {
+      delete m.warPending; m.warUntil = now + WAR_REST_MS; wars++;
+      await log(i, { status: 'learn_war', basis: `Price cut 3 times in 3 days - a competitor keeps undercutting. Robot stops cutting this one for 3 days to protect your margin.` });
+    }
+    const c = (m.ch || []).slice().reverse().find((x) => !x.judged && now - x.at >= LEARN_AFTER_MS);
+    if (!c) continue;
+    const latest = m.ch[m.ch.length - 1];
+    if (latest !== c) { c.judged = 'superseded'; continue; }   // a newer change happened - judge that one later
+    c.judged = 'yes'; judged++;
+    const kc = await knownCost(i); if (!kc) continue;
+    const span = Math.min(7 * 864e5, now - c.at), days = span / 864e5;
+    const before = unitsBetween(i.asin, c.at - 7 * 864e5, c.at) / 7, after = unitsBetween(i.asin, c.at, c.at + span) / days;
+    const pB = orderProfit(i, kc.cost, c.from), pA = orderProfit(i, kc.cost, c.to);
+    const dayB = Math.round(before * pB), dayA = Math.round(after * pA);
+    const r1 = (x) => Math.round(x * 10) / 10;
+    const facts = `Sales ${r1(before)}/day → ${r1(after)}/day · profit ₹${dayB}/day → ₹${dayA}/day (₹${Math.round(pB)} → ₹${Math.round(pA)} per order)`;
+    const worse = c.kind === 'lower' ? dayA < dayB : (after < before * 0.7 && dayA < dayB);
+    if (Math.abs(i.price - c.to) >= 1) continue;   // price changed since (by hand) - leave it
+    if (!worse) {
+      kept++;
+      await log(i, { status: 'learn_keep', oldPrice: c.from, newPrice: c.to, profit: pA, basis: `${c.kind === 'lower' ? 'Price cut' : 'Price rise'} worked - keeping ₹${c.to}. ${facts}` });
+      continue;
+    }
+    try {
+      await patchPrice(i, c.from); reverted++;
+      if (c.kind === 'lower') m.noLowerUntil = now + LEARN_REST_MS; else { m.ceil = c.from; m.ceilUntil = now + LEARN_REST_MS; }
+      m.ch.push({ at: now, kind: 'revert', from: c.to, to: c.from, judged: 'revert' });
+      console.log(`Robot learning REVERT ${sku}: Rs ${c.to} -> Rs ${c.from} (${facts})`);
+      await log(i, { status: 'learn_revert', oldPrice: c.to, newPrice: c.from, profit: pB, basis: `${c.kind === 'lower' ? 'Price cut did not pay' : 'Price rise lost sales'} - back to ₹${c.from}${c.kind === 'lower' ? ', no more cuts for 14 days' : `, robot won't go above ₹${c.from} for 14 days`}. ${facts}` });
+    } catch (e) { console.warn(`Robot learning revert failed for ${sku}:`, e.message || e); }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  console.log(`Robot learning: ${judged} change(s) judged - ${kept} kept, ${reverted} reverted, ${wars} price war(s) paused.`);
 }
 
 // ── Write-back functions ──────────────────────────────────────────────────────────
