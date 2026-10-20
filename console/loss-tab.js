@@ -10,7 +10,7 @@
   if (window.__aikmLossTab) return; window.__aikmLossTab = 1;
 
   var FEE_SHARE = 0.75;                 // of every ₹1 price rise, about ₹0.75 reaches profit (GST + Amazon fee)
-  var S = { view: "fix", days: 7, target: 50, q: "", lix: {}, req: {}, reqUnsub: null, lixUnsub: null, lastSig: "" };
+  var S = { view: "fix", days: 7, target: 20, q: "", lix: {}, req: {}, reqUnsub: null, lixUnsub: null, lastSig: "" };
   function db() { return typeof fbDb !== "undefined" && fbDb ? fbDb : null; }
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
@@ -33,7 +33,7 @@
     var skus = ix.skus || {}, sku = o.sku;
     if (!skus[sku]) { var ol = (ix.orders || {})[o.channelOrderId] || []; if (ol.length === 1) sku = ol[0].s; }
     var x = skus[sku]; if (!x) return null;
-    return { acct: ak, sku: sku, asin: x.a || "", price: x.p, mrp: x.m, img: x.i || "" };
+    return { acct: ak, sku: sku, asin: x.a || "", price: x.p, mrp: x.m, img: x.i || "", f: x.f, t: x.t, e: x.e };
   }
   function isLoss(o) { return typeof isOmsOrderLoss === "function" ? isOmsOrderLoss(o) : (!/cancel/i.test(o.status || "") && num(o.profit) < 20); }
   function toast(msg, bad) {
@@ -104,7 +104,7 @@
       '<div class="lx-chips" id="lxDays"><span class="lx-chip" data-d="1">Today</span><span class="lx-chip on" data-d="7">7 days</span><span class="lx-chip" data-d="30">30 days</span><span class="lx-chip" data-d="0">All</span></div></div>' +
       '<div class="lx-kpis" id="lxKpis"></div>' +
       '<div class="lx-bar"><span class="lx-chips" id="lxView"><span class="lx-chip on" data-v="fix">Ready to fix</span><span class="lx-chip" data-v="all">All products</span></span><input id="lxQ" placeholder="Search product, SKU or ASIN…">' +
-      '<span style="font-size:12px;color:var(--x-muted)">Target profit / order ₹</span><input id="lxTarget" type="number" min="0" step="5" value="' + S.target + '">' +
+      '<span style="font-size:12px;color:var(--x-muted)">Target ₹20 / order · never below ₹15 — same rule as the price robot</span>' +
       '<button type="button" id="lxPushAll">Push all suggested prices</button></div>' +
       '<div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>Account</th><th class="num">Loss orders</th><th class="num">Profit / order</th><th class="num">Total profit</th>' +
       '<th class="num">Amazon price</th><th class="num">MRP</th><th class="num">Suggested</th><th class="num">New price</th><th>Status</th></tr></thead><tbody id="lxBody"></tbody></table></div>' +
@@ -119,7 +119,6 @@
     $("lxView").addEventListener("click", function (e) { var c = e.target.closest(".lx-chip"); if (!c) return; S.view = c.dataset.v;
       [].forEach.call($("lxView").children, function (x) { x.classList.toggle("on", x === c); }); render(true); });
     $("lxQ").addEventListener("input", function () { S.q = this.value.trim().toLowerCase(); render(true); });
-    $("lxTarget").addEventListener("change", function () { var v = num(this.value); S.target = v >= 0 ? v : 50; render(true); });
     $("lxPushAll").addEventListener("click", pushAll);
     $("lxBody").addEventListener("click", function (e) { var b = e.target.closest(".lx-go"); if (b) pushOne(b.dataset.k); });
     $("lxBody").addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.classList.contains("lx-np")) pushOne(e.target.dataset.k); });
@@ -148,6 +147,12 @@
       if (!r.amazon) r.note = "Change on " + (/flipkart/i.test(r.key) ? "Flipkart" : /meesho/i.test(r.key) ? "Meesho" : "that channel") + " by hand";
       else if (!L) r.note = acctKey(r.key.split("|")[0]) ? "SKU not found on Amazon" : "Account not linked — change by hand";
       else if (/^unmapped/i.test(r.name || "")) r.note = "Not mapped in OMS Guru — profit may be wrong, map it first";
+      else if (L.price && L.t != null) {
+        // same maths as the price robot: cost + shipping charge paid by the buyer - courier - Amazon fees
+        if (L.e >= S.target) r.note = "Earns ₹" + L.e + "/order at today's price — no change needed";
+        else if (L.mrp && L.t > L.mrp) r.note = "Needs " + inr(L.t) + " — above MRP " + inr(L.mrp) + ". Check cost / mapping";
+        else r.sug = L.t;
+      }
       else if (L.price) {
         var need = S.target - r.avg;
         if (need <= 0) r.note = "Profit already at target";
@@ -196,11 +201,11 @@
       return "<tr><td><div class=\"lx-prod\">" + (L && L.img ? '<img src="' + esc(L.img) + '" alt="" loading="lazy">' : "") +
         '<div><div class="lx-name">' + esc(r.name) + '</div><div class="lx-ids">' + ids + "</div></div></div></td>" +
         "<td>" + esc(r.acct) + "</td><td class=\"num\">" + r.n + '</td><td class="num ' + cls + '">' + inr(r.avg) + '</td><td class="num ' + cls + '">' + inr(r.profit) + "</td>" +
-        '<td class="num">' + (L ? inr(L.price) : "—") + '</td><td class="num">' + (L ? inr(L.mrp) : "—") + '</td><td class="num sug">' + (r.sug ? inr(r.sug) : "—") + "</td>" +
+        '<td class="num">' + (L ? inr(L.price) + (L.e != null ? '<div class="lx-ids">earns ' + inr(L.e) + "/order</div>" : "") : "—") + '</td><td class="num">' + (L ? inr(L.mrp) : "—") + '</td><td class="num sug">' + (r.sug ? inr(r.sug) : "—") + "</td>" +
         '<td class="num">' + push + "</td><td>" + statusFor(r) + "</td></tr>";
     }).join("");
     $("lxMore").textContent = (rows.length > MAX ? "Showing the worst " + MAX + " of " + rows.length + " products. Search to find others. " : "") +
-      "Suggested price = the price that gives about ₹" + S.target + " profit per order (estimate: GST and Amazon fee take ~25% of any price rise). Never above MRP.";
+      "Suggested price = the price that earns ₹" + S.target + " per order after product cost, courier and Amazon fees (the buyer's shipping charge counted as income). Never above MRP. Prices you push here are left alone by the robot for 7 days.";
   }
   function kpi(v, l, c) { return '<div class="lx-kpi ' + (c || "") + '"><b>' + v + "</b><span>" + l + "</span></div>"; }
 

@@ -1006,7 +1006,8 @@ const BB_MAX_PER_RUN = 40, BB_MAX_RAISE_PER_RUN = 30, BB_MAX_CUT = 0.3, BB_MAX_R
 async function setOfferPrice(sellerId, i, old, productType, price) {
   const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
   delete po.start_at; delete po.end_at;
-  ['maximum_seller_allowed_price', 'minimum_seller_allowed_price', 'discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
+  ['discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
+  fitPriceLimits(po, price, Number(i.mrp) || null);
   Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL', our_price: [{ schedule: [{ value_with_tax: price }] }] });
   if (!po.maximum_retail_price && i.mrp) po.maximum_retail_price = [{ schedule: [{ value_with_tax: Number(i.mrp) }] }];
   const call = (mode) => spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku: i.sku },
@@ -1015,9 +1016,32 @@ async function setOfferPrice(sellerId, i, old, productType, price) {
   assertListingsOk(await call('VALIDATION_PREVIEW'));
   assertListingsOk(await call(null));
   snapPatch('inventory', `${ACCOUNT_LABEL}_${i.sku}`, { price });
+  // Amazon decides later - record it so verifyPricePushes confirms it went live (or shows Amazon's reason).
+  await dbMain.collection('spapiPriceUpdates').doc(`robot_${ACCOUNT_LABEL}_${i.sku}`).set({ account: ACCOUNT_LABEL, sku: i.sku, asin: i.asin || null,
+    oldPrice: i.price ?? null, newPrice: price, status: 'applied', verified: false, checks: 0, source: 'robot',
+    appliedAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
+}
+// Amazon refuses a selling price outside the listing's own min / max price setting (error 19038) and keeps the
+// old price. Widen the limits so the new price fits: max -> MRP (or the new price), min -> the new price.
+function fitPriceLimits(po, price, mrp) {
+  const sv = (k) => Number((((po[k] || [])[0] || {}).schedule || [])[0]?.value_with_tax) || null;
+  const curMax = sv('maximum_seller_allowed_price'), curMin = sv('minimum_seller_allowed_price');
+  if (curMax && price > curMax) po.maximum_seller_allowed_price = [{ schedule: [{ value_with_tax: mrp && mrp >= price ? mrp : price }] }];
+  if (curMin && price < curMin) po.minimum_seller_allowed_price = [{ schedule: [{ value_with_tax: price }] }];
+}
+// Prices you set yourself (Loss Orders / Self-Ship / Amazon page) in the last 7 days - the robot never lowers these.
+const MANUAL_HOLD_MS = 7 * 864e5;
+async function loadManualPrices() {
+  const out = new Map();
+  const snaps = await Promise.all([db, dbMain].map((d) => d.collection('spapiPriceUpdates').where('account', '==', ACCOUNT_LABEL).get().catch(() => null)));
+  snaps.forEach((sn) => sn && sn.docs.forEach((d) => { const x = d.data(); if (x.source === 'robot' || !x.sku) return;
+    const t = ['appliedAt', 'requestedAt'].map((k) => (x[k] && x[k].toMillis ? x[k].toMillis() : 0)).reduce((a, b) => Math.max(a, b), 0);
+    if ((x.status === 'applied' || x.status === 'pending') && Date.now() - t < MANUAL_HOLD_MS) out.set(x.sku, { price: x.newPrice, at: t }); }));
+  return out;
 }
 async function runBuyBoxPricer(sellerId, eligible, st, log) {
-  // Owner, 21 Oct 2026: win the Buy Box at ANY gap as long as each order still earns Rs 5+,
+  // Owner, 21 Oct 2026: win the Buy Box at ANY gap as long as each order still earns MIN_PROFIT,
+  // never lower a price the owner set himself in the last 7 days, and lift loss-making prices to TARGET_PROFIT.
   // and raise the price when we hold the Buy Box and the next seller is Rs 3+ above us.
   const now = Date.now(), L = (o) => (o.price || 0) + (o.shipping || 0), lower = [], raise = [];
   for (const i of eligible) {
@@ -1033,14 +1057,37 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     }
   }
   console.log(`Buy Box pricer: ${lower.length} lost on price, ${raise.length} held (raise check).`);
-  let lowered = 0, raised = 0, skipped = 0;
+  let lowered = 0, raised = 0, skipped = 0, guarded = 0;
+  const manual = await loadManualPrices().catch(() => new Map());
   const patch = async (i, target) => {
     const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
       query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries'] } });
     const productType = ((old.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, i.sku);
     await setOfferPrice(sellerId, i, old, productType, target);
   };
-  for (const { i, mine, win, gap } of lower.slice(0, BB_MAX_PER_RUN)) {
+  // LOSS GUARD (owner, 21 Oct 2026: "make the business profitable"): a listing whose current price earns under
+  // MIN_PROFIT per order is moved up to the TARGET_PROFIT price - never above MRP, never more than +30% in one step.
+  const guardDone = new Set();
+  for (const i of eligible) {
+    if (guarded >= BB_MAX_RAISE_PER_RUN) break;
+    if (st.bbCool[i.sku] > now || manual.has(i.sku)) continue;
+    const kc = await knownCost(i).catch(() => null); if (!kc) continue;
+    const ship = myShipCharge(i), profit = orderProfit(i, kc.cost, i.price, ship);
+    if (profit >= MIN_PROFIT) continue;
+    guardDone.add(i.sku); st.bbCool[i.sku] = now + BB_COOL_MS;
+    let target = Math.ceil(i.price - profit + TARGET_PROFIT); const mrp = Number(i.mrp) || Infinity;
+    if (target > mrp) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. Making ₹${TARGET_PROFIT} needs ₹${target}, above MRP ₹${mrp}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
+    if (target > i.price * 1.3) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. Making ₹${TARGET_PROFIT} needs ₹${target} (+${Math.round((target / i.price - 1) * 100)}%). Too big a jump for the robot - check the cost (${kc.src} ₹${kc.cost}).` }); continue; }
+    try {
+      await patch(i, target); guarded++;
+      const np = orderProfit(i, kc.cost, target, ship);
+      console.log(`Loss guard RAISE ${i.sku}: Rs ${i.price} -> Rs ${target} (was Rs ${profit}/order, now Rs ${np})`);
+      await log(i, { status: 'bb_raise', change: 'loss_guard', oldPrice: i.price, newPrice: target, profit: np, basis: `Was earning ₹${profit}/order (under ₹${MIN_PROFIT} minimum) · cost ₹${kc.cost} (${kc.src}) · now ₹${np}/order` });
+    } catch (e) { console.warn(`Loss guard FAILED for ${i.sku}:`, e.message || e); }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  for (const { i, mine, win, gap } of lower.filter((x) => !guardDone.has(x.i.sku)).slice(0, BB_MAX_PER_RUN)) {
+    if (manual.has(i.sku)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. You set ₹${manual.get(i.sku).price} yourself - the robot leaves it for 7 days.` }); continue; }
     st.bbCool[i.sku] = now + BB_COOL_MS;
     try {
       const kc = await knownCost(i), ship = Number(mine.shipping) || 0;
@@ -1056,6 +1103,7 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   }
   for (const { i, mine, next } of raise) {
     if (raised >= BB_MAX_RAISE_PER_RUN) break;
+    if (guardDone.has(i.sku)) continue;
     const ship = Number(mine.shipping) || 0, mrp = Number(i.mrp) || Infinity;
     let target = Math.floor(L(next) - 1 - ship);
     target = Math.min(target, Math.floor(mrp), Math.floor(i.price * (1 + BB_MAX_RAISE)));
@@ -1071,7 +1119,7 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     } catch (e) { console.warn(`Buy Box pricer RAISE failed for ${i.sku}:`, e.message || e); }
     await new Promise((r) => setTimeout(r, 800));
   }
-  console.log(`Buy Box pricer: ${lowered} lowered, ${raised} raised, ${skipped} kept (loss / no cost / big cut).`);
+  console.log(`Buy Box pricer: ${guarded} loss-guard raises, ${lowered} lowered, ${raised} raised, ${skipped} kept (loss / no cost / big cut / your own price).`);
 }
 
 // ── Write-back functions ──────────────────────────────────────────────────────────
@@ -1098,12 +1146,7 @@ async function applyPendingPriceUpdates(sellerId) {
       if (mrpVal && newPrice > mrpVal) throw new Error(`New price ₹${newPrice} is above MRP ₹${mrpVal}.`);
       delete po.start_at; delete po.end_at;
       ['discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
-      // Amazon refuses a selling price outside the listing's own min / max price setting (error 19038) and keeps
-      // the old price. Widen the limits so the new price fits: max -> MRP (or the new price), min -> the new price.
-      const sv = (k) => Number((((po[k] || [])[0] || {}).schedule || [])[0]?.value_with_tax) || null;
-      const curMax = sv('maximum_seller_allowed_price'), curMin = sv('minimum_seller_allowed_price');
-      if (curMax && newPrice > curMax) po.maximum_seller_allowed_price = [{ schedule: [{ value_with_tax: mrpVal && mrpVal >= newPrice ? mrpVal : newPrice }] }];
-      if (curMin && newPrice < curMin) po.minimum_seller_allowed_price = [{ schedule: [{ value_with_tax: newPrice }] }];
+      fitPriceLimits(po, newPrice, mrpVal);
       Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL', our_price: [{ schedule: [{ value_with_tax: newPrice }] }] });
       if (!po.maximum_retail_price && mrpVal) po.maximum_retail_price = [{ schedule: [{ value_with_tax: mrpVal }] }];
       const call = (mode) => spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' },
@@ -1594,6 +1637,16 @@ async function publishListingIndex() {
     if (!i || i.account !== ACCOUNT_LABEL || !i.sku) return;
     skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null, i: i.img || '' };
   });
+  // f = lowest price that still earns MIN_PROFIT, t = price that earns TARGET_PROFIT (same maths as the robot)
+  try {
+    await loadCostData();
+    for (const i of Object.values(SNAP.inventory)) {
+      if (!i || i.account !== ACCOUNT_LABEL || !skus[i.sku] || !(i.price > 0)) continue;
+      const kc = await knownCost(i).catch(() => null); if (!kc) continue;
+      const pr = orderProfit(i, kc.cost, i.price);
+      skus[i.sku].f = Math.ceil(i.price - pr + MIN_PROFIT); skus[i.sku].t = Math.ceil(i.price - pr + TARGET_PROFIT); skus[i.sku].e = Math.round(pr);
+    }
+  } catch (e) { console.warn('Listing index safe prices skipped:', e.message || e); }
   Object.values(SNAP.orders).forEach((o) => {
     if (!o || o.account !== ACCOUNT_LABEL || !o.orderId || !/unshipped|partially|pending/i.test(o.status || '')) return;
     orders[o.orderId] = (o.items || []).map((it) => ({ s: it.sku || '', a: it.asin || '', t: String(it.title || '').slice(0, 70) })); // Firestore allows no nested arrays
