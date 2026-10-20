@@ -164,6 +164,26 @@ function getProductTypeForSku(sku) {
   return productTypeCache[sku] || null;
 }
 
+// Amazon needs the listing's product type for every update. The category lookup is per ASIN, so a
+// second SKU on the same ASIN (or a failed lookup) could stay without one forever and every push
+// failed with "No known product type". Ask Amazon for this SKU's own product type when missing.
+async function productTypeFor(sellerId, sku) {
+  const known = productTypeCache[sku];
+  if (known && !/_display_on_website$/i.test(known)) return known;
+  try {
+    const res = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku },
+      query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['summaries'] } });
+    const pt = ((res.summaries || [])[0] || {}).productType || null;
+    if (pt) {
+      productTypeCache[sku] = pt;
+      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { amazonProductType: pt });
+      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).set({ amazonProductType: pt }, { merge: true }).catch(() => {});
+      console.log(`Product type for ${sku}: ${pt} (read from the listing)`);
+    }
+    return pt || known || null;
+  } catch (e) { console.warn(`Product type lookup failed for ${sku}:`, e.message || e); return known || null; }
+}
+
 // Amazon's Listings API often answers "INVALID" with a list of issues instead of throwing an
 // error, so a "successful" call can still mean nothing changed. Treat that as a failure and keep
 // Amazon's own reason, so the page can show exactly why.
@@ -734,7 +754,7 @@ async function runRelistRobot(sellerId) {
         console.log(`Relist ${oldSku}: Amazon says BUYABLE and ASIN has 20+ offers (ours may be hidden) - skipped.`);
         st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku]; continue;
       }
-      const productType = sum.productType || getProductTypeForSku(oldSku);
+      const productType = sum.productType || await productTypeFor(sellerId, oldSku);
       if (!productType) throw new Error('Product type unknown for the old SKU.');
       const newSku = relistNewSku(oldSku);
       if (!newSku) throw new Error('Could not make a free new SKU name.');
@@ -797,7 +817,7 @@ async function applyPendingPriceUpdates(sellerId) {
   for (const doc of docs) {
     const { sku, newPrice } = doc.data();
     try {
-      const productType = getProductTypeForSku(sku);
+      const productType = await productTypeFor(sellerId, sku);
       if (!productType) throw new Error('No known product type for this SKU yet.');
       assertListingsOk(await spClient.callAPI({
         operation: 'patchListingsItem', endpoint: 'listingsItems',
@@ -824,14 +844,15 @@ async function applyPendingMrpUpdates(sellerId) {
   // (old failed requests are only re-checked on full syncs - saves ~20 reads on every quick sync)
   // Retry requests that only failed because of the old MRP field format (fixed 7 Oct 2026)
   const docs = pendingSnap.docs.filter((d) => d.data().status === 'pending'
-    || (/value_with_tax|does not belong/.test(d.data().error || '') && !d.data().retriedFormat));
+    || (/value_with_tax|does not belong/.test(d.data().error || '') && !d.data().retriedFormat)
+    || (/No known product type/.test(d.data().error || '') && !d.data().retriedType));  // fixed 20 Oct 2026
   if (!docs.length) { console.log('No pending MRP updates.'); return; }
   console.log(`Applying ${docs.length} pending MRP update(s)...`);
 
   for (const doc of docs) {
     const { sku, newMrp } = doc.data();
     try {
-      const productType = getProductTypeForSku(sku);
+      const productType = await productTypeFor(sellerId, sku);
       if (!productType) throw new Error('No known product type for this SKU yet.');
       // Where Amazon keeps the MRP depends on the product type: most use "List Price with Tax",
       // some only "Maximum Retail Price". Try them in order; move on only when Amazon says the
@@ -864,7 +885,7 @@ async function applyPendingMrpUpdates(sellerId) {
       snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { mrp: newMrp });
       console.log(`MRP updated for SKU ${sku}: now ${newMrp}`);
     } catch (e) {
-      await doc.ref.update({ status: 'failed', retriedFormat: true, error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
+      await doc.ref.update({ status: 'failed', retriedFormat: true, retriedType: true, error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`MRP update FAILED for SKU ${sku}:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
@@ -903,8 +924,11 @@ async function applyPendingHsnUpdates(sellerId) {
   // a new HSN code, or both:  { newTaxCode: 'A_GEN_SUPERREDUCED', newHsnCode: '21069099' }.
   // Older requests only had "newHsn" - those are read as a tax code if they start with A_GEN,
   // otherwise as an HSN code (the old code wrongly sent HSN numbers into the tax-code field).
-  const pendingSnap = await dbMain.collection('spapiHsnUpdates')
-    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
+  const pendingSnap0 = await dbMain.collection('spapiHsnUpdates')
+    .where('account', '==', ACCOUNT_LABEL).where('status', 'in', SYNC_MODE === 'full' ? ['pending', 'failed'] : ['pending']).get();
+  // also retry, once, requests that only failed because the product type was missing (fixed 20 Oct 2026)
+  const hsnDocs = pendingSnap0.docs.filter((d) => d.data().status === 'pending' || (/No known product type/.test(d.data().error || '') && !d.data().retriedType));
+  const pendingSnap = { empty: !hsnDocs.length, size: hsnDocs.length, docs: hsnDocs };
   if (pendingSnap.empty) { console.log('No pending GST/HSN updates.'); return; }
   console.log(`Applying ${pendingSnap.size} pending GST/HSN update(s)...`);
 
@@ -919,7 +943,7 @@ async function applyPendingHsnUpdates(sellerId) {
       if (!taxCode && !hsn) throw new Error('Nothing to update - no valid GST tax code or HSN code in the request.');
       if (taxCode && !(taxCode in TAX_CODE_RATE)) throw new Error(`Unknown GST tax code "${taxCode}".`);
       if (hsn && !/^\d{4,8}$/.test(hsn)) throw new Error(`HSN "${hsn}" must be 4 to 8 digits.`);
-      const productType = getProductTypeForSku(sku);
+      const productType = await productTypeFor(sellerId, sku);
       if (!productType) throw new Error('No known product type for this SKU yet - wait for the next sync.');
 
       const patches = [];
@@ -946,7 +970,7 @@ async function applyPendingHsnUpdates(sellerId) {
       console.log(`GST/HSN updated for SKU ${sku}:${taxCode ? ' tax ' + taxCode : ''}${hsn ? ' HSN ' + hsn : ''}`);
     } catch (e) {
       const error = e.message || String(e);
-      await doc.ref.update({ status: 'failed', error, failedAt: admin.firestore.FieldValue.serverTimestamp() });
+      await doc.ref.update({ status: 'failed', retriedType: true, error, failedAt: admin.firestore.FieldValue.serverTimestamp() });
       snapPatch('inventory', invId, { lastTaxPush: { status: 'failed', at: Date.now(), error, taxCode: taxCode || null, hsnCode: hsn || null } });
       console.warn(`GST/HSN update FAILED for SKU ${sku}:`, error);
     }
@@ -1080,7 +1104,7 @@ function confirmedLotsFor(item, L) {
 }
 
 async function setAmazonQuantity(sellerId, sku, qty) {
-  const productType = getProductTypeForSku(sku);
+  const productType = await productTypeFor(sellerId, sku);
   if (!productType) throw new Error('No known product type for this SKU yet.');
   assertListingsOk(await spClient.callAPI({
     operation: 'patchListingsItem', endpoint: 'listingsItems',
@@ -1299,7 +1323,8 @@ async function run() {
   console.log('Step 2b: fetching real product categories for referral fee calc...');
   // Speed-up: category rarely changes - only ask Amazon for ASINs we don't know yet
   // (saves ~0.8 sec per product on every run).
-  const knownAsins = new Set(Object.entries(skuToAsinMap).filter(([sku]) => productTypeCache[sku]).map(([, asin]) => asin));
+  const knownAsins = new Set(Object.values(skuToAsinMap));
+  Object.entries(skuToAsinMap).forEach(([sku, asin]) => { if (!productTypeCache[sku]) knownAsins.delete(asin); });
   const asinsNeedingCategory = asinsFromInventory.filter((a) => !knownAsins.has(a));
   console.log(`Category lookup needed for ${asinsNeedingCategory.length} of ${asinsFromInventory.length} ASINs (rest already known).`);
   const categoriesByAsin = await fetchProductCategories(asinsNeedingCategory);
@@ -1310,13 +1335,13 @@ async function run() {
   const catBatch = db.batch();
   let catWrites = 0, catSkipped = 0;
   for (const [asin, category] of Object.entries(categoriesByAsin)) {
-    const sku = asinToSku[asin];
-    if (!sku) continue;
-    if (productTypeCache[sku] === category) { catSkipped++; continue; }
-    catBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`), { amazonProductType: category });
-    snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { amazonProductType: category });
-    productTypeCache[sku] = category;
-    catWrites++;
+    for (const sku of Object.keys(skuToAsinMap).filter((k) => skuToAsinMap[k] === asin)) {
+      if (productTypeCache[sku] === category) { catSkipped++; continue; }
+      catBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`), { amazonProductType: category });
+      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { amazonProductType: category });
+      productTypeCache[sku] = category;
+      catWrites++;
+    }
   }
   if (catWrites > 0) await catBatch.commit();
   console.log(`Step 2b done: ${catWrites} category update(s) written, ${catSkipped} unchanged (skipped).`);
