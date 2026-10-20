@@ -702,6 +702,8 @@ async function syncCompetitivePricing(asinList) {
 //   • Circuit breaker: if 30%+ of checked listings look "Not selling" (account / API problem),
 //     nothing is changed. Max RELIST_MAX_PER_RUN per run; each ASIN rests 3 days after a relist.
 //   • Turn off any time with the repo variable/secret RELIST_ROBOT=off.
+// RELIST_SALES_RULES: 7-day / 30-day no-sale relists - switched OFF 21 Oct 2026 (same-price relists did not win sales; price does).
+const RELIST_SALES_RULES = false;
 const RELIST_MAX_PER_RUN = 10, RELIST_SALES_MAX_PER_RUN = 20, RELIST_STREAK = 2, RELIST_BREAKER = 0.3;
 const RELIST_COOLDOWN_OK = 72 * 3600e3, RELIST_COOLDOWN_FAIL = 24 * 3600e3;
 const relistFresh = new Map();   // asin -> offers fetched this run
@@ -844,7 +846,7 @@ async function runRelistRobot(sellerId) {
   //   Rule 3: no order in the last 30 days -> relist with the same price (listing must be 30+ days old)
   const sales = salesByAsin(), taken = new Set(ready.map((x) => x.i.asin));
   const rule1 = [], rule3 = [];
-  eligible.forEach((i) => {
+  if (RELIST_SALES_RULES) eligible.forEach((i) => {
     if (taken.has(i.asin) || resting(i)) return;
     const s2 = sales[i.asin] || { last: Infinity, mid: 0 };
     if (s2.last >= 7 && s2.mid >= 4) rule1.push({ i, reason: 'sales_stopped_7d', minAge: 7, last: s2.last });
@@ -951,7 +953,7 @@ async function runRelistRobot(sellerId) {
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
-  // Rule 2: Buy Box lost by Rs 1-5 -> beat it by Rs 1, never at a loss
+  // Buy Box pricer: lower to win (any gap, Rs 5+ profit) and raise when we hold the Buy Box
   st.bbCool = st.bbCool || {};
   await runBuyBoxPricer(sellerId, eligible, st, log).catch((e) => console.warn('Buy Box pricer skipped:', e.message || e));
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
@@ -980,12 +982,25 @@ const REF_FEE = { LAUNDRY_DETERGENT: 8, CLEANING_AGENT: 8, TOOTH_CLEANING_AGENT:
   HAIR_CONDITIONER: 8, AIR_FRESHENER: 8, CONDOM: 2, SQUEEGEE: 12, DEFAULT: 8 };   // % above Rs 1000, 0% below
 function easyShipFee(kg) { const n = Math.max(Number(kg) || 0.5, 0.5); return n <= 0.5 ? 55 : n <= 1 ? 75 : n <= 2 ? 112 : n <= 5 ? 112 + 34 * Math.ceil(n - 2) : 214 + 18 * Math.ceil(n - 5); }
 function closingFee(p) { return p <= 300 ? 2 : p <= 500 ? 23 : p <= 1000 ? 48 : 79; }
-function noLossFloor(i, cost, price) {
+// TRUE profit per order (21 Oct 2026, from live data):
+//   customer pays a shipping charge (~Rs 74-80) on top of the price -> we count 85% of it as income;
+//   Sasta Store ships itself via NimbusPost (real cost ~Rs 33, Rs 40 used, +Rs 30 per extra kg);
+//   Praso ships mostly Easy Ship -> Amazon's Easy Ship weight fee. Rs 3 per order kept aside for returns (RTO ~3%).
+const SELF_SHIP_ACCOUNTS = new Set(['sastastore']);
+const MIN_PROFIT = 5;   // never price below Rs 5 profit per order
+function courierCost(kg) { const n = Math.max(Number(kg) || 0.5, 0.5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
+function shipCostFor(i) { return SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? courierCost(i.weightKg) : Math.max(easyShipFee(i.weightKg), 45); }
+function myShipCharge(i) { const m = (relistFresh.get(i.asin) || []).find((o) => o.isMine); return m && m.shipping != null ? Number(m.shipping) : (SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? 74 : 80); }
+function orderProfit(i, cost, price, ship = myShipCharge(i)) {
   const ref = price > 1000 ? price * (REF_FEE[i.amazonProductType] || REF_FEE.DEFAULT) / 100 : 0;
-  return Math.ceil(cost + Math.max(easyShipFee(i.weightKg), 45) + closingFee(price) + ref + 1);
+  return Math.round((price + 0.85 * (ship || 0) - cost - shipCostFor(i) - closingFee(price) - ref - 3) * 100) / 100;
+}
+// lowest price that still earns MIN_PROFIT per order
+function noLossFloor(i, cost, price, ship = myShipCharge(i)) {
+  return Math.ceil(price - orderProfit(i, cost, price, ship) + MIN_PROFIT);
 }
 const OUR_SELLER_IDS = new Set(['AI66SST976WPS', 'A1KF1CBHR5UA1W', process.env.SPAPI_SELLER_ID].filter(Boolean));
-const BB_GAP_MAX = 5, BB_MAX_PER_RUN = 30, BB_COOL_MS = 6 * 3600e3;
+const BB_MAX_PER_RUN = 40, BB_MAX_RAISE_PER_RUN = 30, BB_MAX_CUT = 0.3, BB_MAX_RAISE = 0.2, BB_COOL_MS = 6 * 3600e3;
 async function setOfferPrice(sellerId, i, old, productType, price) {
   const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
   delete po.start_at; delete po.end_at;
@@ -1000,33 +1015,61 @@ async function setOfferPrice(sellerId, i, old, productType, price) {
   snapPatch('inventory', `${ACCOUNT_LABEL}_${i.sku}`, { price });
 }
 async function runBuyBoxPricer(sellerId, eligible, st, log) {
-  const now = Date.now(), L = (o) => (o.price || 0) + (o.shipping || 0), jobs = [];
+  // Owner, 21 Oct 2026: win the Buy Box at ANY gap as long as each order still earns Rs 5+,
+  // and raise the price when we hold the Buy Box and the next seller is Rs 3+ above us.
+  const now = Date.now(), L = (o) => (o.price || 0) + (o.shipping || 0), lower = [], raise = [];
   for (const i of eligible) {
+    if (st.bbCool[i.sku] > now) continue;
     const offers = relistFresh.get(i.asin) || [], mine = offers.find((o) => o.isMine), win = offers.find((o) => o.isBuyBoxWinner);
-    if (!mine || !win || win.isMine || OUR_SELLER_IDS.has(win.sellerId)) continue;
-    const gap = Math.round((L(mine) - L(win)) * 100) / 100;
-    if (gap > 0 && gap <= BB_GAP_MAX && !(st.bbCool[i.sku] > now)) jobs.push({ i, gap, win });
+    if (!mine || !win) continue;
+    if (win.isMine) {
+      const next = offers.filter((o) => !o.isMine && !OUR_SELLER_IDS.has(o.sellerId) && o.price > 0).sort((x, y) => L(x) - L(y))[0];
+      if (next) raise.push({ i, mine, next });
+    } else if (!OUR_SELLER_IDS.has(win.sellerId)) {
+      const gap = Math.round((L(mine) - L(win)) * 100) / 100;
+      if (gap > 0) lower.push({ i, mine, win, gap });
+    }
   }
-  console.log(`Buy Box pricer: ${jobs.length} listing(s) lost the Buy Box by Rs 1-${BB_GAP_MAX}.`);
-  let changed = 0, skipped = 0;
-  for (const { i, gap, win } of jobs.slice(0, BB_MAX_PER_RUN)) {
+  console.log(`Buy Box pricer: ${lower.length} lost on price, ${raise.length} held (raise check).`);
+  let lowered = 0, raised = 0, skipped = 0;
+  const patch = async (i, target) => {
+    const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
+      query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries'] } });
+    const productType = ((old.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, i.sku);
+    await setOfferPrice(sellerId, i, old, productType, target);
+  };
+  for (const { i, mine, win, gap } of lower.slice(0, BB_MAX_PER_RUN)) {
     st.bbCool[i.sku] = now + BB_COOL_MS;
     try {
-      const kc = await knownCost(i);
-      if (!kc) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no confirmed cost, price not changed (map it on the Amazon page).` }); continue; }
-      const target = Math.floor((i.price - gap - 1) * 100) / 100, floor = noLossFloor(i, kc.cost, target);
-      if (target < floor) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}; beating it needs ₹${target}, below your no-loss price ₹${floor} (cost ₹${kc.cost} + fees + shipping) - not changed.` }); continue; }
-      const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
-        query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries'] } });
-      const productType = ((old.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, i.sku);
-      await setOfferPrice(sellerId, i, old, productType, target);
-      changed++;
-      console.log(`Buy Box pricer ${i.sku}: Rs ${i.price} -> Rs ${target} (lost by Rs ${gap}, no-loss floor Rs ${floor})`);
-      await log(i, { status: 'bb_price', newPrice: target, floor, basis: `Buy Box ₹${L(win)} · lost by ₹${gap} · beat by ₹1 · no-loss ₹${floor}` });
+      const kc = await knownCost(i), ship = Number(mine.shipping) || 0;
+      if (!kc) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no cost known. Map it on the Amazon page so the robot can price it.` }); continue; }
+      const target = Math.floor(L(win) - 1 - ship), profit = orderProfit(i, kc.cost, target, ship), floor = noLossFloor(i, kc.cost, target, ship);
+      if (profit < MIN_PROFIT) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns ₹${profit} per order (lowest allowed ₹${floor}). Price kept.` }); continue; }
+      if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
+      await patch(i, target); lowered++;
+      console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${i.price} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order)`);
+      await log(i, { status: 'bb_price', change: 'lower', oldPrice: i.price, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order` });
     } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await log(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
     await new Promise((r) => setTimeout(r, 800));
   }
-  console.log(`Buy Box pricer: ${changed} price(s) lowered, ${skipped} skipped (loss / no cost).`);
+  for (const { i, mine, next } of raise) {
+    if (raised >= BB_MAX_RAISE_PER_RUN) break;
+    const ship = Number(mine.shipping) || 0, mrp = Number(i.mrp) || Infinity;
+    let target = Math.floor(L(next) - 1 - ship);
+    target = Math.min(target, Math.floor(mrp), Math.floor(i.price * (1 + BB_MAX_RAISE)));
+    if (!(target - i.price >= 3)) continue;
+    st.bbCool[i.sku] = now + BB_COOL_MS;
+    try {
+      const kc = await knownCost(i);
+      if (!kc) continue;   // unknown cost: leave alone
+      await patch(i, target); raised++;
+      const profit = orderProfit(i, kc.cost, target, ship);
+      console.log(`Buy Box pricer RAISE ${i.sku}: Rs ${i.price} -> Rs ${target} (next seller Rs ${L(next)} incl. shipping, profit Rs ${profit}/order)`);
+      await log(i, { status: 'bb_raise', change: 'raise', oldPrice: i.price, newPrice: target, profit, basis: `You held the Buy Box · next seller ₹${Math.round(L(next))} incl. shipping · now ₹1 below them · profit ₹${profit}/order` });
+    } catch (e) { console.warn(`Buy Box pricer RAISE failed for ${i.sku}:`, e.message || e); }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  console.log(`Buy Box pricer: ${lowered} lowered, ${raised} raised, ${skipped} kept (loss / no cost / big cut).`);
 }
 
 // ── Write-back functions ──────────────────────────────────────────────────────────
