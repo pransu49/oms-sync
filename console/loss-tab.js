@@ -33,7 +33,18 @@
     var skus = ix.skus || {}, sku = o.sku;
     if (!skus[sku]) { var ol = (ix.orders || {})[o.channelOrderId] || []; if (ol.length === 1) sku = ol[0].s; }
     var x = skus[sku]; if (!x) return null;
-    return { acct: ak, sku: sku, asin: x.a || "", price: x.p, mrp: x.m, img: x.i || "", f: x.f, t: x.t, e: x.e };
+    return { acct: ak, sku: sku, asin: x.a || "", price: x.p, mrp: x.m, img: x.i || "", f: x.f, t: x.t, e: x.e, c: x.c, k: x.k, g: x.g, fp: x.fp };
+  }
+  var MIN_PROFIT = 15;
+  // Same maths as the price robot, per order: price + 85% of the buyer's shipping charge - product cost - courier
+  // - Amazon fees (Amazon's own estimate) - GST on the margin - Rs 3 kept for returns. null = not enough data.
+  function ourProfit(o, L) {
+    if (!L || L.c == null || L.k == null) return null;
+    var price = num(o.price), q = Math.max(1, num(o.qty) || 1); if (!(price > 0)) return null;
+    var g = (L.g != null ? L.g : 5) / 100, fee = L.fp != null ? L.fp : 2;
+    var courier = L.k * (1 + 0.25 * (q - 1));
+    var gst = g > 0 ? (price - L.c) * g / (1 + g) * q : 0;
+    return Math.round(price * q + 0.85 * num(o.shippingCharge) - L.c * q - courier - fee * q - gst - 3);
   }
   function isLoss(o) { return typeof isOmsOrderLoss === "function" ? isOmsOrderLoss(o) : (!/cancel/i.test(o.status || "") && num(o.profit) < 20); }
   function toast(msg, bad) {
@@ -100,7 +111,7 @@
     p.innerHTML =
       '<div class="lx-head"><div><h2>Fix loss-making products</h2>' +
       '<div class="lx-sub">Each row is one product that sold with low or negative profit. Set a new price and press <strong>Push</strong> — Amazon updates within about 15 minutes. ' +
-      'A loss order means profit at or below ₹45 (Amazon self-ship), ₹10 (Amazon Easy Ship) or under ₹20 (other channels).</div></div>' +
+      'Profit = price + buyer\'s shipping charge − product cost − courier − Amazon fees − GST (same maths as the price robot). A loss order earns under ₹15. Where an account isn\'t linked or a cost isn\'t mapped, OMS Guru\'s profit is used and marked <b>OMS</b>.</div></div>' +
       '<div class="lx-chips" id="lxDays"><span class="lx-chip" data-d="1">Today</span><span class="lx-chip on" data-d="7">7 days</span><span class="lx-chip" data-d="30">30 days</span><span class="lx-chip" data-d="0">All</span></div></div>' +
       '<div class="lx-kpis" id="lxKpis"></div>' +
       '<div class="lx-bar"><span class="lx-chips" id="lxView"><span class="lx-chip on" data-v="fix">Ready to fix</span><span class="lx-chip" data-v="all">All products</span></span><input id="lxQ" placeholder="Search product, SKU or ASIN…">' +
@@ -130,14 +141,17 @@
   function build() {
     var raw = window.omsOrdersRaw || [], cut = S.days ? (S.days === 1 ? new Date().setHours(0, 0, 0, 0) : Date.now() - S.days * 864e5) : 0;
     var g = {}, totals = { n: 0, real: 0, lost: 0 };
+    totals.ours = 0;
     raw.forEach(function (o) {
-      if (!isLoss(o)) return;
+      if (/cancel/i.test(o.status || "")) return;
       var t = when(o); if (cut && (!t || t < cut)) return;
-      var pr = num(o.profit), qty = Math.max(1, num(o.qty) || 1);
-      totals.n++; if (pr < 0) { totals.real++; totals.lost += -pr; }
-      var L = isAmazon(o.channel) ? listing(o) : null;
+      var L = isAmazon(o.channel) ? listing(o) : null, mine = ourProfit(o, L);
+      // our own maths (cost mapping + Amazon fees + courier + GST) where we have it, else OMS Guru's profit
+      if (mine != null ? mine >= MIN_PROFIT : !isLoss(o)) return;
+      var pr = mine != null ? mine : num(o.profit), qty = Math.max(1, num(o.qty) || 1);
+      totals.n++; if (mine != null) totals.ours++; if (pr < 0) { totals.real++; totals.lost += -pr; }
       var key = (L ? L.acct + "|" + L.sku : acctName(o.channel) + "|" + (o.sku || o.productName));
-      var r = g[key] || (g[key] = { key: key, name: o.productName || o.sku, sku: (L && L.sku) || o.sku || "", acct: acctName(o.channel), amazon: isAmazon(o.channel), L: L, n: 0, profit: 0, units: 0, total: 0 });
+      var r = g[key] || (g[key] = { key: key, name: o.productName || o.sku, sku: (L && L.sku) || o.sku || "", acct: acctName(o.channel), amazon: isAmazon(o.channel), L: L, n: 0, profit: 0, units: 0, total: 0, src: mine != null ? "ours" : "OMS" });
       r.n++; r.profit += pr; r.units += qty; r.total += num(o.total);
       if (!r.L && L) r.L = L;
     });
@@ -186,7 +200,7 @@
     if (!force && sig === S.lastSig) return; S.lastSig = sig;
     var t = build(), fix = LIST.filter(function (r) { return r.sug; }).length;
     $("lxKpis").innerHTML =
-      kpi(t.n, "Loss orders", "red") + kpi(t.real, "Sold below cost (profit under ₹0)", t.real ? "red" : "") +
+      kpi(t.n, "Loss orders (under ₹15 profit)", "red") + kpi(t.real, "Sold below cost (profit under ₹0)", t.real ? "red" : "") +
       kpi(inr(t.lost), "Money lost on those orders", t.lost ? "red" : "") + kpi(fix, "Amazon prices ready to fix", "gold");
     var rows = LIST.filter(function (r) { return (S.view === "all" || r.sug || isQueued(r)) && (!S.q || (r.name + " " + r.sku + " " + (r.L ? r.L.asin : "") + " " + r.acct).toLowerCase().indexOf(S.q) > -1); });
     $("lxView").children[0].textContent = "Ready to fix (" + LIST.filter(function (r) { return r.sug || isQueued(r); }).length + ")";
@@ -200,7 +214,7 @@
       var push = L ? '<div class="lx-push"><input type="number" min="1" step="1" class="lx-np" data-k="' + k + '" value="' + (r.sug || "") + '" placeholder="₹"><button type="button" class="lx-go" data-k="' + k + '">Push</button></div>' : '<span style="color:var(--x-muted)">—</span>';
       return "<tr><td><div class=\"lx-prod\">" + (L && L.img ? '<img src="' + esc(L.img) + '" alt="" loading="lazy">' : "") +
         '<div><div class="lx-name">' + esc(r.name) + '</div><div class="lx-ids">' + ids + "</div></div></div></td>" +
-        "<td>" + esc(r.acct) + "</td><td class=\"num\">" + r.n + '</td><td class="num ' + cls + '">' + inr(r.avg) + '</td><td class="num ' + cls + '">' + inr(r.profit) + "</td>" +
+        "<td>" + esc(r.acct) + "</td><td class=\"num\">" + r.n + '</td><td class="num ' + cls + '">' + inr(r.avg) + (r.src === "OMS" ? ' <span class="lx-tag t-mute" title="Profit from OMS Guru - our own maths needs a linked account and a cost mapping">OMS</span>' : "") + '</td><td class="num ' + cls + '">' + inr(r.profit) + "</td>" +
         '<td class="num">' + (L ? inr(L.price) + (L.e != null ? '<div class="lx-ids">earns ' + inr(L.e) + "/order</div>" : "") : "—") + '</td><td class="num">' + (L ? inr(L.mrp) : "—") + '</td><td class="num sug">' + (r.sug ? inr(r.sug) : "—") + "</td>" +
         '<td class="num">' + push + "</td><td>" + statusFor(r) + "</td></tr>";
     }).join("");

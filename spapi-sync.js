@@ -994,9 +994,59 @@ const MIN_PROFIT = 15, TARGET_PROFIT = 20;
 function courierCost(kg) { const n = Math.max(Number(kg) || 0.5, 0.5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
 function shipCostFor(i) { return SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? courierCost(i.weightKg) : Math.max(easyShipFee(i.weightKg), 45); }
 function myShipCharge(i) { const m = (relistFresh.get(i.asin) || []).find((o) => o.isMine); return m && m.shipping != null ? Number(m.shipping) : (SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? 74 : 80); }
+// Amazon's OWN fee estimate per SKU (Product Fees API, refreshed weekly) beats our fee tables: the 0% referral
+// fee under Rs 1000 covers most categories but not all, and closing fees changed on 7 Sep 2026.
+// FEES[sku] = { p: price estimated at, r: referral %, c: closing fee, at }
+let FEES = {};
+function feeFor(i, price) {
+  const f = FEES[i.sku];
+  const slab = (x) => (x <= 300 ? 0 : x <= 500 ? 1 : x <= 1000 ? 2 : 3);
+  const ref = f && f.r != null ? price * f.r / 100 : (price > 1000 ? price * (REF_FEE[i.amazonProductType] || REF_FEE.DEFAULT) / 100 : 0);
+  const close = f && f.c != null && slab(f.p) === slab(price) ? f.c : closingFee(price);
+  return ref + close;
+}
+// GST (owner, 21 Oct 2026): the selling price includes GST; with input credit on the purchase, the GST we pay
+// is on the margin only = rate/(1+rate) x (price - cost). The 85% on the shipping charge already leaves out its GST.
+function gstRate(i) { const r = TAX_CODE_RATE[i.taxCode]; return r != null ? r : (Number(i.taxPercent) > 0 ? Number(i.taxPercent) : 5); }
+function gstOnMargin(i, cost, price) { const r = gstRate(i) / 100; return r > 0 ? (price - cost) * r / (1 + r) : 0; }
 function orderProfit(i, cost, price, ship = myShipCharge(i)) {
-  const ref = price > 1000 ? price * (REF_FEE[i.amazonProductType] || REF_FEE.DEFAULT) / 100 : 0;
-  return Math.round((price + 0.85 * (ship || 0) - cost - shipCostFor(i) - closingFee(price) - ref - 3) * 100) / 100;
+  return Math.round((price + 0.85 * (ship || 0) - cost - shipCostFor(i) - feeFor(i, price) - gstOnMargin(i, cost, price) - 3) * 100) / 100;
+}
+async function loadFees() {
+  try { const d = await dbMain.collection('aikm_admin').doc(`spapiFees_${ACCOUNT_LABEL}`).get(); FEES = (d.exists && d.data().fees) || {}; }
+  catch (e) { FEES = {}; console.warn('Fee estimates not loaded:', e.message || e); }
+  console.log(`Amazon fee estimates loaded for ${Object.keys(FEES).length} SKUs.`);
+}
+// Ask Amazon for its fee estimate (20 SKUs per call, ~200 per full sync); refresh after 7 days or a 15%+ price move.
+async function refreshFeeEstimates() {
+  const now = Date.now();
+  const todo = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.price > 0 && (i.quantity || 0) > 0
+    && (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT')
+    .filter((i) => { const f = FEES[i.sku]; return !f || now - (f.at || 0) > 7 * 864e5 || Math.abs(i.price - f.p) / f.p > 0.15; })
+    .slice(0, 200);
+  if (!todo.length) { console.log('Fee estimates: all fresh.'); return; }
+  let got = 0;
+  for (let k = 0; k < todo.length; k += 20) {
+    const part = todo.slice(k, k + 20);
+    try {
+      const res = await spClient.callAPI({ operation: 'getMyFeesEstimates', endpoint: 'productFees',
+        body: part.map((i) => ({ IdType: 'SellerSKU', IdValue: i.sku, FeesEstimateRequest: { MarketplaceId: MARKETPLACE_ID, IsAmazonFulfilled: false,
+          Identifier: i.sku, PriceToEstimateFees: { ListingPrice: { CurrencyCode: 'INR', Amount: i.price } } } })) });
+      (Array.isArray(res) ? res : (res.payload || [])).forEach((r) => {
+        const sku = r.FeesEstimateIdentifier && r.FeesEstimateIdentifier.IdValue, list = r.FeesEstimate && r.FeesEstimate.FeeDetailList;
+        if (!sku || r.Status !== 'Success' || !list) return;
+        const it = part.find((x) => x.sku === sku); if (!it) return;
+        const amt = (t) => list.filter((x) => t.test(x.FeeType || '')).reduce((a, x) => a + (Number(x.FeeAmount && x.FeeAmount.Amount) || 0), 0);
+        FEES[sku] = { p: it.price, r: Math.round(amt(/Referral/i) / it.price * 10000) / 100, c: Math.round(amt(/Closing/i) * 100) / 100, at: now };
+        got++;
+      });
+      if (!k) console.log('Sample fee estimate:', JSON.stringify(res).slice(0, 600));
+    } catch (e) { console.warn('Fee estimate call failed:', e.message || e); }
+    await new Promise((r) => setTimeout(r, 2200));
+  }
+  Object.keys(FEES).forEach((sku) => { if (now - (FEES[sku].at || 0) > 60 * 864e5) delete FEES[sku]; });
+  await dbMain.collection('aikm_admin').doc(`spapiFees_${ACCOUNT_LABEL}`).set({ fees: FEES, updatedAt: now });
+  console.log(`Fee estimates: ${got} of ${todo.length} refreshed from Amazon (${Object.keys(FEES).length} stored).`);
 }
 // lowest price that still earns MIN_PROFIT per order
 function noLossFloor(i, cost, price, ship = myShipCharge(i)) {
@@ -1738,6 +1788,9 @@ async function publishListingIndex() {
       const kc = await knownCost(i).catch(() => null); if (!kc) continue;
       const pr = orderProfit(i, kc.cost, i.price);
       skus[i.sku].f = Math.ceil(i.price - pr + MIN_PROFIT); skus[i.sku].t = Math.ceil(i.price - pr + TARGET_PROFIT); skus[i.sku].e = Math.round(pr);
+      // per-unit numbers so the console can work out each ORDER's profit with the same maths
+      skus[i.sku].c = Math.round(kc.cost * 100) / 100; skus[i.sku].k = shipCostFor(i); skus[i.sku].g = gstRate(i);
+      skus[i.sku].fp = Math.round(feeFor(i, i.price) * 100) / 100;
     }
   } catch (e) { console.warn('Listing index safe prices skipped:', e.message || e); }
   Object.values(SNAP.orders).forEach((o) => {
@@ -1760,6 +1813,7 @@ async function run() {
 
   console.log('Step 0a: loading product-type cache...');
   await loadProductTypeCache();
+  await loadFees();
 
   const sellerId = process.env.SPAPI_SELLER_ID;
   if (sellerId) {
@@ -1876,6 +1930,7 @@ async function run() {
   if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
 
   console.log('Step 3a1: relist robot ("Not selling" -> new SKU, old SKU deleted)...');
+  if (SYNC_MODE === 'full') await refreshFeeEstimates().catch((e) => console.warn('Fee estimates skipped (sync continues):', e.message || e));
   if (SYNC_MODE === 'full') await runRelistRobot(sellerId).catch((e) => console.warn('Relist robot skipped (sync continues):', e.message || e));
 
   console.log('Step 3a2: removing listings that no longer exist on Amazon...');
