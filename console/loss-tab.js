@@ -168,7 +168,8 @@
     if (!r.L) return '<span class="lx-tag t-mute">' + esc(r.note) + "</span>";
     var q = S.req[r.L.acct + "_" + r.L.sku], ms = function (ts) { return ts && ts.toMillis ? ts.toMillis() : 0; };
     if (q && q.status === "pending") return '<span class="lx-tag t-warn">Queued ' + inr(q.newPrice) + " · next sync</span>";
-    if (q && q.status === "applied" && Date.now() - ms(q.appliedAt) < 3 * 864e5) return '<span class="lx-tag t-ok">✓ Amazon now ' + inr(q.newPrice) + "</span>";
+    if (q && q.status === "applied" && q.verified === false) return '<span class="lx-tag t-warn" title="Amazon accepted it. Checking it is live at the next sync.">Sent ' + inr(q.newPrice) + " · Amazon checking</span>";
+    if (q && q.status === "applied" && Date.now() - ms(q.verifiedAt || q.appliedAt) < 3 * 864e5) return '<span class="lx-tag t-ok">✓ Live on Amazon ' + inr(q.newPrice) + "</span>";
     if (q && q.status === "failed" && Date.now() - ms(q.failedAt) < 3 * 864e5) return '<span class="lx-tag t-bad" title="' + esc(q.error || "") + '">Amazon refused · ' + esc(String(q.error || "").replace(/^Amazon rejected the change \([A-Z_]+\):?\s*/, "").slice(0, 70)) + "</span>";
     return r.note ? '<span class="lx-tag t-mute">' + esc(r.note) + "</span>" : '<span class="lx-tag t-mute">Not changed yet</span>';
   }

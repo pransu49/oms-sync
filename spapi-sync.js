@@ -1052,7 +1052,13 @@ async function applyPendingPriceUpdates(sellerId) {
       const mrpVal = Number((((po.maximum_retail_price || [])[0] || {}).schedule || [])[0]?.value_with_tax) || Number(SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`]?.mrp) || null;
       if (mrpVal && newPrice > mrpVal) throw new Error(`New price ₹${newPrice} is above MRP ₹${mrpVal}.`);
       delete po.start_at; delete po.end_at;
-      ['maximum_seller_allowed_price', 'minimum_seller_allowed_price', 'discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
+      ['discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
+      // Amazon refuses a selling price outside the listing's own min / max price setting (error 19038) and keeps
+      // the old price. Widen the limits so the new price fits: max -> MRP (or the new price), min -> the new price.
+      const sv = (k) => Number((((po[k] || [])[0] || {}).schedule || [])[0]?.value_with_tax) || null;
+      const curMax = sv('maximum_seller_allowed_price'), curMin = sv('minimum_seller_allowed_price');
+      if (curMax && newPrice > curMax) po.maximum_seller_allowed_price = [{ schedule: [{ value_with_tax: mrpVal && mrpVal >= newPrice ? mrpVal : newPrice }] }];
+      if (curMin && newPrice < curMin) po.minimum_seller_allowed_price = [{ schedule: [{ value_with_tax: newPrice }] }];
       Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL', our_price: [{ schedule: [{ value_with_tax: newPrice }] }] });
       if (!po.maximum_retail_price && mrpVal) po.maximum_retail_price = [{ schedule: [{ value_with_tax: mrpVal }] }];
       const call = (mode) => spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' },
@@ -1060,7 +1066,7 @@ async function applyPendingPriceUpdates(sellerId) {
         body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer', value: [po] }] } });
       assertListingsOk(await call('VALIDATION_PREVIEW')); // dry run first - nothing changes if Amazon would refuse
       assertListingsOk(await call(null));
-      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp(), error: admin.firestore.FieldValue.delete() });
+      await doc.ref.update({ status: 'applied', verified: false, checks: 0, appliedAt: admin.firestore.FieldValue.serverTimestamp(), error: admin.firestore.FieldValue.delete() });
       // Write new price directly to inventory so UI stays in sync
       await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).set({ price: newPrice }, { merge: true });
       snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { price: newPrice });
@@ -1070,6 +1076,42 @@ async function applyPendingPriceUpdates(sellerId) {
       console.warn(`Price update FAILED for SKU ${sku}:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
+  }
+}
+
+
+// Amazon answers "ACCEPTED" first and decides later. Check each sent price on later syncs:
+// live at the new price -> verified; refused (price error) -> failed with Amazon's own reason.
+async function verifyPricePushes(sellerId) {
+  const snaps = await Promise.all([db, dbMain].map((d) => d.collection('spapiPriceUpdates')
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'applied').get()));
+  const cut = Date.now() - 3 * 864e5;
+  const docs = snaps.flatMap((s) => s.docs).filter((d) => { const x = d.data(); const t = x.appliedAt && x.appliedAt.toMillis ? x.appliedAt.toMillis() : 0;
+    return x.verified === false && t > cut && Date.now() - t > 4 * 60000; });
+  if (!docs.length) { console.log('No sent prices waiting for Amazon.'); return; }
+  console.log(`Checking ${docs.length} sent price(s) on Amazon...`);
+  for (const doc of docs) {
+    const { sku, newPrice } = doc.data(), checks = (doc.data().checks || 0) + 1;
+    try {
+      const r = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku },
+        query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['offers', 'issues'] } });
+      const offer = (r.offers || []).find((o) => (o.audience && o.audience.value) !== 'B2B') || (r.offers || [])[0];
+      const live = offer ? Number(offer.price && offer.price.amount) : null;
+      const priceErr = (r.issues || []).filter((i) => (i.severity || '').toUpperCase() === 'ERROR' && (i.categories || []).includes('INVALID_PRICE'));
+      if (live != null && Math.abs(live - Number(newPrice)) < 0.01) {
+        await doc.ref.update({ verified: true, verifiedAt: admin.firestore.FieldValue.serverTimestamp(), checks });
+        console.log(`Price live on Amazon: ${sku} = ${live}`);
+      } else if (priceErr.length) {
+        const why = priceErr.map((i) => i.message).filter(Boolean).join(' | ').slice(0, 400);
+        await doc.ref.update({ status: 'failed', failedAt: admin.firestore.FieldValue.serverTimestamp(), checks, livePrice: live,
+          error: `Amazon kept ₹${live} - ${why}` });
+        console.warn(`Price NOT live for ${sku} (still ${live}): ${why}`);
+      } else if (checks >= 8) {
+        await doc.ref.update({ status: 'failed', failedAt: admin.firestore.FieldValue.serverTimestamp(), checks, livePrice: live,
+          error: `Amazon still shows ₹${live} after ${checks} checks.` });
+      } else await doc.ref.update({ checks, livePrice: live });
+    } catch (e) { console.warn(`Price check failed for ${sku}:`, e.message || e); }
+    await new Promise((res) => setTimeout(res, 500));
   }
 }
 
@@ -1532,6 +1574,7 @@ async function run() {
   if (sellerId) {
     console.log('Step 0b: applying any pending price updates...');
     await applyPendingPriceUpdates(sellerId).catch((e) => console.warn('Skipped applyPendingPriceUpdates (sync continues):', e.message || e));
+    await verifyPricePushes(sellerId).catch((e) => console.warn('Skipped verifyPricePushes (sync continues):', e.message || e));
     console.log('Step 0c: applying any pending MRP updates...');
     await applyPendingMrpUpdates(sellerId).catch((e) => console.warn('Skipped applyPendingMrpUpdates (sync continues):', e.message || e));
     console.log('Step 0d: applying any pending HSN/tax code updates...');
