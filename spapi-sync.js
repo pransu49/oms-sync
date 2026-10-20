@@ -1134,9 +1134,16 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     const ship = myShipCharge(i), profit = orderProfit(i, kc.cost, i.price, ship);
     if (profit >= MIN_PROFIT) continue;
     guardDone.add(i.sku); st.bbCool[i.sku] = now + BB_COOL_MS;
-    let target = Math.ceil(i.price - profit + TARGET_PROFIT); const mrp = Number(i.mrp) || Infinity;
-    if (target > mrp) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. Making ₹${TARGET_PROFIT} needs ₹${target}, above MRP ₹${mrp}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
-    if (target > i.price * 1.3) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. Making ₹${TARGET_PROFIT} needs ₹${target} (+${Math.round((target / i.price - 1) * 100)}%). Too big a jump for the robot - check the cost (${kc.src} ₹${kc.cost}).` }); continue; }
+    // Search the real price (fees and GST change with price: closing fee jumps at Rs 300 / 500 / 1000).
+    const mrp = Number(i.mrp) || Infinity, cap = Math.floor(Math.min(mrp, i.price * 1.3));
+    let target = null, okMin = null;
+    for (let pz = Math.ceil(i.price) + 1; pz <= cap; pz++) {
+      const pf = orderProfit(i, kc.cost, pz, ship);
+      if (okMin == null && pf >= MIN_PROFIT) okMin = pz;
+      if (pf >= TARGET_PROFIT) { target = pz; break; }
+    }
+    target = target || okMin;
+    if (!target) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. No price up to ₹${cap} (${cap === Math.floor(mrp) ? 'MRP' : '+30%'}) earns ₹${MIN_PROFIT}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
     try {
       const was = i.price; await patchPrice(i, target); guarded++; noteChange(st, i, 'raise', target, was);
       const np = orderProfit(i, kc.cost, target, ship);
@@ -1787,7 +1794,9 @@ async function publishListingIndex() {
       if (!i || i.account !== ACCOUNT_LABEL || !skus[i.sku] || !(i.price > 0)) continue;
       const kc = await knownCost(i).catch(() => null); if (!kc) continue;
       const pr = orderProfit(i, kc.cost, i.price);
-      skus[i.sku].f = Math.ceil(i.price - pr + MIN_PROFIT); skus[i.sku].t = Math.ceil(i.price - pr + TARGET_PROFIT); skus[i.sku].e = Math.round(pr);
+      const lim = Math.floor(Math.max(Number(i.mrp) || 0, i.price * 1.5));
+      const first = (goal) => { for (let pz = 1; pz <= lim; pz++) if (orderProfit(i, kc.cost, pz) >= goal) return pz; return Math.ceil(i.price - pr + goal); };
+      skus[i.sku].f = first(MIN_PROFIT); skus[i.sku].t = first(TARGET_PROFIT); skus[i.sku].e = Math.round(pr);
       // per-unit numbers so the console can work out each ORDER's profit with the same maths
       skus[i.sku].c = Math.round(kc.cost * 100) / 100; skus[i.sku].k = shipCostFor(i); skus[i.sku].g = gstRate(i);
       skus[i.sku].fp = Math.round(feeFor(i, i.price) * 100) / 100;
