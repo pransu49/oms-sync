@@ -1,0 +1,34 @@
+name: SP-API Check (read only)
+
+# Read-only checks (listingcheck / restrictions / debugsku / relistpreview) for one account.
+# Separate from the sync workflows so a check is never cancelled by the regular sync queue.
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: 'praso or sastastore'
+        default: 'praso'
+      mode:
+        description: 'e.g. restrictions:ASIN1,ASIN2  or  listingcheck:SKU1,SKU2'
+        required: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install amazon-sp-api firebase-admin
+      - name: Run check
+        env:
+          SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
+          SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
+          SPAPI_REFRESH_TOKEN: ${{ inputs.account == 'sastastore' && secrets.SPAPI_REFRESH_TOKEN_SASTASTORE || secrets.SPAPI_REFRESH_TOKEN }}
+          SPAPI_SELLER_ID: ${{ inputs.account == 'sastastore' && secrets.SPAPI_SELLER_ID_SASTASTORE || secrets.SPAPI_SELLER_ID }}
+          FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          SYNC_MODE: ${{ inputs.mode }}
+          ACCOUNT_LABEL: ${{ inputs.account }}
+        run: node spapi-sync.js
