@@ -71,15 +71,20 @@ if (require.main === module) (async () => {
   const todo = Object.keys(orders).filter((id) => !known[id]); // already-refunded orders are never re-checked
   console.log(`Checking ${todo.length} order(s) with Amazon (already known refunded: ${Object.keys(known).length}).`);
   const found = {}, errors = {};
+  const denied = {};
   for (const id of todo) {
+    if (denied[orders[id]]) continue;
     try { const r = await refundOf(orders[id], id); if (r) found[id] = { r: r.refunded, at: r.at, a: orders[id] }; }
-    catch (e) { errors[e.code || 'error'] = (errors[e.code || 'error'] || 0) + 1; }
+    catch (e) {
+      if (/unauthori|denied/i.test(String(e.code || '') + ' ' + String(e.message || ''))) { denied[orders[id]] = 1; console.log(`${orders[id]}: Amazon Finances access denied - this account is skipped until the Finance role is authorised.`); }
+      else errors[e.code || 'error'] = (errors[e.code || 'error'] || 0) + 1;
+    }
     await sleep(2100); // Amazon allows about 1 call / 2 s
   }
   const merged = Object.assign({}, known, found);
   const keep = new Set(Object.keys(orders));
   Object.keys(merged).forEach((id) => { if (!keep.has(id) && merged[id].at < new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10)) delete merged[id]; });
-  await ref.set({ orders: merged, at: admin.firestore.FieldValue.serverTimestamp(), lastRun: { checked: todo.length, newlyRefunded: Object.keys(found).length, errors } });
+  await ref.set({ orders: merged, at: admin.firestore.FieldValue.serverTimestamp(), lastRun: { checked: todo.length, newlyRefunded: Object.keys(found).length, errors, financeAccessDenied: Object.keys(denied) } });
   console.log(`Already refunded on Amazon: ${Object.keys(found).length} new, ${Object.keys(merged).length} total. Errors: ${JSON.stringify(errors)}`);
   Object.entries(found).forEach(([id, v]) => console.log(`  ${v.a} ${id} refunded ₹${v.r} on ${v.at}`));
 })().catch((e) => { console.error('REFUND CHECK FAILED:', e.message || e); process.exit(1); });
