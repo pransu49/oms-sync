@@ -862,10 +862,18 @@ async function runRelistRobot(sellerId) {
           : { status: 'price_issue', why: oldWhy, fixNote: fx.note || null });
         continue;
       }
-      // Any other Amazon ERROR on the listing (catalogue / variation / missing attributes) stays on the ASIN,
-      // so a new SKU would be blocked the same way - show Amazon's reason instead of relisting.
-      if (oldWhy) {
-        console.log(`Relist ${oldSku}: Amazon reports an error on the listing (${oldWhy}) - not relisted, needs fixing in Seller Central.`);
+      // Only skip what a new SKU can never fix: brand/category approval needed, or Transparency-protected.
+      // (Catalogue warnings like "Search Terms occurs 5 times" did NOT stop new offers going live - seen 20 Oct 2026.)
+      let restricted = null;
+      try {
+        const rr = await spClient.callAPI({ operation: 'getListingsRestrictions', endpoint: 'listingsRestrictions',
+          query: { asin, sellerId, marketplaceIds: [MARKETPLACE_ID], conditionType: 'new_new' } });
+        restricted = (rr.restrictions || []).flatMap((x) => (x.reasons || []).map((y) => y.message || y.reasonCode)).filter(Boolean).join(' | ') || null;
+      } catch (e) { console.warn(`Restriction check failed for ${asin}:`, e.message || e); }
+      const transparency = (old.issues || []).find((x) => /transparency/i.test(x.message || ''));
+      if (restricted || transparency) {
+        oldWhy = restricted || transparency.message.slice(0, 300);
+        console.log(`Relist ${oldSku}: cannot sell this ASIN (${oldWhy}) - not relisted.`);
         st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
         await log(i, { status: 'blocked', why: oldWhy });
         continue;
