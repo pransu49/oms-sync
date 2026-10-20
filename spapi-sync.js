@@ -816,8 +816,8 @@ function relistNewSku(sku) {
   return null;
 }
 async function runRelistRobot(sellerId) {
-  // PAUSED 20 Oct 2026: new offers came out as "Missing Offer" on Amazon - only runs when RELIST_ROBOT=on.
-  if (String(process.env.RELIST_ROBOT || '').toLowerCase() !== 'on') { console.log('Relist robot: paused (set RELIST_ROBOT=on to run).'); return; }
+  // Note: Amazon takes ~2 hours to make a new offer live (shows "Missing Offer" until then) - the 3-day rest covers it.
+  if (String(process.env.RELIST_ROBOT || '').toLowerCase() === 'off') { console.log('Relist robot: switched off (RELIST_ROBOT=off).'); return; }
   if (!sellerId) { console.log('Relist robot skipped: SPAPI_SELLER_ID not set.'); return; }
   if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
   const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
