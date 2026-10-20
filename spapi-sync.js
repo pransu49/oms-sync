@@ -1610,7 +1610,25 @@ async function restrictionCheck(list) {
   console.log('Restriction check:', JSON.stringify(out));
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku: 'restrictions', at: Date.now(), check: JSON.stringify(out).slice(0, 9000) });
 }
-if (/^restrictions:/i.test(process.env.SYNC_MODE || '')) { restrictionCheck(process.env.SYNC_MODE.slice(13)).then(() => process.exit(0)).catch((e) => { console.error('check failed:', e.message || e); process.exit(1); }); }
+// Test for one SKU: "setprice:SKU=PRICE" - sends the price the same way as the page's price push, waits,
+// then reads the listing back (status / offers / errors) into spapiSnapshots/<account>_debug.
+async function setPriceTest(arg) {
+  const [sku, p] = arg.split('='); const price = Number(p), sellerId = process.env.SPAPI_SELLER_ID;
+  const productType = await productTypeFor(sellerId, sku.trim());
+  const res = await spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku: sku.trim() },
+    query: { marketplaceIds: [MARKETPLACE_ID] },
+    body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer',
+      value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', audience: 'ALL', our_price: [{ schedule: [{ value_with_tax: price }] }] }] }] } });
+  console.log('Price patch:', JSON.stringify(res).slice(0, 800));
+  await new Promise((r) => setTimeout(r, 120000));
+  const r = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: sku.trim() },
+    query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['summaries', 'offers', 'issues'] } });
+  const out = { patch: res, status: ((r.summaries || [])[0] || {}).status, offers: r.offers, issues: r.issues };
+  console.log('After 2 min:', JSON.stringify(out).slice(0, 2000));
+  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku: 'setprice', at: Date.now(), check: JSON.stringify(out).slice(0, 9000) });
+}
+if (/^setprice:/i.test(process.env.SYNC_MODE || '')) { setPriceTest(process.env.SYNC_MODE.slice(9)).then(() => process.exit(0)).catch((e) => { console.error('setprice failed:', e.message || e); process.exit(1); }); }
+else if (/^restrictions:/i.test(process.env.SYNC_MODE || '')) { restrictionCheck(process.env.SYNC_MODE.slice(13)).then(() => process.exit(0)).catch((e) => { console.error('check failed:', e.message || e); process.exit(1); }); }
 else if (/^listingcheck:/i.test(process.env.SYNC_MODE || '')) { listingCheck(process.env.SYNC_MODE.slice(13)).then(() => process.exit(0)).catch((e) => { console.error('check failed:', e.message || e); process.exit(1); }); }
 else if (/^relistpreview:/i.test(process.env.SYNC_MODE || '')) { relistPreview(process.env.SYNC_MODE.slice(14).trim()).then(() => process.exit(0)).catch((e) => { console.error('relist preview failed:', e.message || e); process.exit(1); }); }
 else if (/^debugsku:/i.test(process.env.SYNC_MODE || '')) { debugSku(process.env.SYNC_MODE.slice(9).trim()).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); }); }
