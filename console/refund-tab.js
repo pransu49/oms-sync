@@ -48,7 +48,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     var sub = document.createElement("div");
     sub.className = "subtabbar no-print"; sub.id = "subtab-refund"; sub.style.display = "none";
     sub.innerHTML = '<span class="subtab-label">Amazon Bulk Refund</span>' +
-      '<span class="rf-meta" id="rfSyncLine">Self-ship RTO / lost · NimbusPost · last 60 days</span>' +
+      '<span class="rf-meta" id="rfSyncLine">Self-ship refund pending · NimbusPost · last 60 days</span>' +
       '<span style="flex:1"></span>' +
       '<label class="subbtn" style="cursor:pointer;" title="Order older than 60 days? Upload an OMS Guru export (zip / csv / xlsx). Read here only, nothing is saved."><i class="ti ti-upload"></i> Upload OMS export<input type="file" id="rfFile" accept=".zip,.csv,.xlsx,.xls" style="display:none"></label>' +
       '<button type="button" class="subbtn" id="rfSyncBtn" title="Pull the latest 60 days from OMS Guru now (about 3–6 minutes)"><i class="ti ti-refresh"></i> Update now</button>';
@@ -58,7 +58,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     p.id = "tab-refund"; p.className = "tabpanel";
     p.innerHTML =
       '<div class="cx-kpis" style="grid-template-columns:repeat(4,minmax(0,1fr)) !important;">' +
-        kpi("rfKpiAvail", "Self-ship RTO + lost", "rfKpiAvailSub") + kpi("rfKpiSel", "Selected to refund", "rfKpiSelSub") +
+        kpi("rfKpiAvail", "Refund pending", "rfKpiAvailSub") + kpi("rfKpiSel", "Selected to refund", "rfKpiSelSub") +
         kpi("rfKpiAmt", "Total refund", "rfKpiAmtSub") + kpi("rfKpiAcc", "Files to upload", "rfKpiAccSub") +
       "</div>" +
       '<div class="rf-grid"><div>' +
@@ -66,13 +66,13 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
           '<textarea id="rfIds" placeholder="Paste Amazon order IDs here — one per line, or copy a whole column from Excel.&#10;e.g. 408-1718820-2871569"></textarea>' +
           '<div class="rf-row"><button type="button" class="btn-gold" id="rfFindBtn"><i class="ti ti-search"></i> Find orders</button>' +
           '<span class="rf-meta">or show from NimbusPost:</span>' +
-          '<span class="rf-chip" data-rf-show="del">RTO delivered</span><span class="rf-chip" data-rf-show="transit">RTO in transit</span><span class="rf-chip" data-rf-show="lost">Lost / damaged</span><span class="rf-chip" data-rf-show="all">All</span>' +
+          '<span class="rf-chip" data-rf-show="rto">Returned (RTO)</span><span class="rf-chip" data-rf-show="late">Pickup missed</span><span class="rf-chip" data-rf-show="lost">Lost / damaged</span><span class="rf-chip" data-rf-show="all">All refund pending</span>' +
           '<button type="button" class="secondary" id="rfClearBtn" style="margin-left:auto;"><i class="ti ti-x"></i> Clear</button></div>' +
           '<div id="rfMiss"></div></div>' +
         '<div class="panel"><h2>2 · Check amounts <span class="rf-meta" id="rfCount"></span>' +
           '<label class="rf-meta" style="margin-left:auto;display:flex;align-items:center;gap:6px;"><input type="checkbox" id="rfShipChk" checked> Refund shipping too</label></h2>' +
           '<small class="hint">Same split as Seller Central\'s refund screen: price without tax + tax, shipping without tax + tax.</small>' +
-          '<div id="rfTable" style="margin-top:10px"><div class="rf-empty">Paste order IDs above, or pick RTO delivered / RTO in transit / Lost / All.</div></div></div>' +
+          '<div id="rfTable" style="margin-top:10px"><div class="rf-empty">Paste order IDs above, or pick Returned / Pickup missed / Lost / All.</div></div></div>' +
       '</div><div>' +
         '<div class="panel"><h2>3 · Download &amp; upload</h2>' +
           '<label class="rf-meta" for="rfReason" style="display:block;margin-bottom:6px;">Reason for refund</label>' +
@@ -83,7 +83,8 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
           "<b>2.</b> Log into <b>that account</b> in Seller Central.<br>" +
           "<b>3.</b> Orders → <b>Upload Order Related Files</b> → <b>Order Adjustment</b> → upload.<br>" +
           "<b>4.</b> Check <b>Review File Status</b> → should say Done, 0 errors.<br><br>" +
-          "<b>Self-ship only:</b> RTO and lost/damaged status come from NimbusPost (OMS often still says Shipped). Easy Ship orders are never listed.<br>" +
+          "<b>Refund pending when:</b> shipment returned (any RTO stage), lost/damaged, or not picked up after Amazon\'s Deliver By date (SASTA STORE &amp; Praso).<br>" +
+          "<b>Self-ship only:</b> status comes from NimbusPost (OMS often still says Shipped). Easy Ship orders are never listed.<br>" +
           "<b>Safe:</b> Amazon never refunds more than the customer paid — an order already refunded is rejected, not paid twice.<br>" +
           "<b>Older than 60 days?</b> Use <b>Upload OMS export</b> (top right)." +
         "</div></div>" +
@@ -223,35 +224,40 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
   async function showStatus(k) {
     await load(false); chip(k); sel = []; missing = [];
     addSel(store.filter(function (o) {
-      return k === "all" ? true : k === "del" ? o.nb === "rto_delivered" : k === "lost" ? o.nb === "lost" : o.nb === "rto";
+      return k === "all" ? true : k === "rto" ? /^rto/.test(o.nb) : o.nb === k;
     }));
     sel.forEach(function (o) { o.off = true; }); // nothing ticked until you choose
     render();
-    toast(sel.length + " RTO line(s) shown — tick the ones to refund.");
+    toast(sel.length + " refund-pending line(s) shown — tick the ones to refund.");
   }
 
   /* ---------- 3. render ---------- */
   function render() {
     if (!$("tab-refund")) return;
-    $("rfSyncLine").textContent = loaded ? "Self-ship RTO / lost · NimbusPost · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship RTO · NimbusPost · last 60 days";
+    $("rfSyncLine").textContent = loaded ? "Self-ship refund pending · NimbusPost · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship RTO · NimbusPost · last 60 days";
     $("rfKpiAvail").textContent = loaded ? store.length : "–";
-    $("rfKpiAvailSub").textContent = loaded ? store.filter(function (o) { return o.nb === "rto_delivered"; }).length + " back · " + store.filter(function (o) { return o.nb === "rto"; }).length + " in transit · " + store.filter(function (o) { return o.nb === "lost"; }).length + " lost" : "loading…";
+    $("rfKpiAvailSub").textContent = loaded ? store.filter(function (o) { return /^rto/.test(o.nb); }).length + " returned · " + store.filter(function (o) { return o.nb === "late"; }).length + " pickup missed · " + store.filter(function (o) { return o.nb === "lost"; }).length + " lost" : "loading…";
 
     $("rfMiss").innerHTML = missing.length ? '<div class="rf-miss"><b>Not found (' + missing.length + "):</b> " + missing.map(esc).join(", ") +
       '<br><span style="opacity:.85">Not found in OMS — older than 70 days? Upload an OMS export (top right) and click Find again.</span></div>' : "";
 
     var on = sel.filter(function (o) { return !o.off; });
     $("rfCount").textContent = sel.length ? "· " + on.length + " of " + sel.length + " ticked" : "";
-    if (!sel.length) { $("rfTable").innerHTML = '<div class="rf-empty">Paste order IDs above, or pick RTO delivered / RTO in transit / Lost / All.</div>'; }
+    if (!sel.length) { $("rfTable").innerHTML = '<div class="rf-empty">Paste order IDs above, or pick Returned / Pickup missed / Lost / All.</div>'; }
     else {
       var rows = sel.map(function (o) {
         var c = calc(o);
-        var tag = o.nb === "rto_delivered" ? "rf-tag green" : o.nb === "rto" ? "rf-tag" : "rf-tag red";   // lost / not RTO = red
-        var nsTxt = o.ns ? o.ns.replace(/^rto/i, "RTO").replace(/^lost/i, "Lost").replace(/^damaged/i, "Damaged") : "Not RTO / lost in NimbusPost";
+        var dd = function (x) { return x ? x.slice(8, 10) + "/" + x.slice(5, 7) : ""; };
+        var tag = o.nb ? "rf-tag red" : "rf-tag";
+        var nsTxt = o.nb ? "Refund pending" : "Not refund pending";
+        var why = /^rto/.test(o.nb || "") ? "Shipment returned · " + o.ns.replace(/^rto/i, "RTO")
+          : o.nb === "late" ? "Not picked up · Deliver By " + dd(o.db) + " passed"
+          : o.nb === "lost" ? (/damage/i.test(o.ns) ? "Damaged" : "Lost") + " in transit"
+          : "Not RTO / lost / late in NimbusPost";
         return "<tr" + (o.off ? ' style="opacity:.5"' : "") + "><td><input type='checkbox' data-rf-on='" + esc(o.i) + "'" + (o.off ? "" : " checked") + "></td>" +
           "<td class='cx-awb'>" + esc(o.o) + "<div class='rf-meta'>" + esc(o.i) + "</div></td><td>" + esc(o.a) + "</td>" +
           "<td style='max-width:220px'><div style='white-space:nowrap;overflow:hidden;text-overflow:ellipsis' title='" + esc(o.n) + "'>" + esc(o.n) + "</div><div class='rf-meta'>Qty " + o.q + " · " + esc(o.ty) + "</div></td>" +
-          "<td><span class='" + tag + "'>" + esc(nsTxt) + "</span><div class='rf-meta'>" + (o.aw ? esc(o.aw) + (o.nd ? " · " + esc(o.nd.slice(8, 10) + "/" + o.nd.slice(5, 7)) : "") : "") + "</div><div class='rf-meta'>OMS: " + esc(o.st) + "</div></td>" +
+          "<td><span class='" + tag + "'>" + esc(nsTxt) + "</span><div class='rf-meta' style='color:var(--x-text-2)'>" + esc(why) + "</div><div class='rf-meta'>" + (o.aw ? esc(o.aw) + (o.nd && o.nb !== "late" ? " · " + esc(dd(o.nd)) : "") : "") + "</div><div class='rf-meta'>OMS: " + esc(o.st) + "</div></td>" +
           "<td class='num'>" + f2(c.ip) + "<div class='rf-meta'>+" + f2(c.it) + " tax</div></td>" +
           "<td class='num'>" + f2(c.sp) + "<div class='rf-meta'>+" + f2(c.stx) + " tax</div></td>" +
           "<td class='num'><b>" + inr(c.tot) + "</b></td>" +
@@ -259,7 +265,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
       });
       var allOn = on.length === sel.length;
       $("rfTable").innerHTML = '<div class="table-scroll" style="max-height:520px;"><table class="data"><thead><tr><th><input type="checkbox" id="rfAll"' + (allOn ? " checked" : "") + '></th>' +
-        "<th>Order / item ID</th><th>Account</th><th>Product</th><th>NimbusPost status</th><th class='num'>Item</th><th class='num'>Shipping</th><th class='num'>Refund</th><th></th></tr></thead><tbody>" + rows.join("") + "</tbody></table></div>";
+        "<th>Order / item ID</th><th>Account</th><th>Product</th><th>Status</th><th class='num'>Item</th><th class='num'>Shipping</th><th class='num'>Refund</th><th></th></tr></thead><tbody>" + rows.join("") + "</tbody></table></div>";
     }
 
     // per-account files
