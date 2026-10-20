@@ -78,7 +78,9 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
           '<label class="rf-meta" for="rfReason" style="display:block;margin-bottom:6px;">Reason for refund</label>' +
           '<select id="rfReason" style="width:100%;min-height:36px;margin-bottom:12px;">' + REASONS.map(function (r) { return '<option value="' + r[0] + '">' + r[1] + "</option>"; }).join("") + "</select>" +
           '<div id="rfFiles"><div class="rf-empty">Select orders first.</div></div></div>' +
+        '<div class="panel"><h2>Refund robot <span class="rf-meta" id="rfRobotState"></span></h2><div id="rfRobot"><div class="rf-empty">No robot refunds yet.</div></div></div>' +
         '<div class="panel"><h2>How to upload</h2><div class="rf-rule">' +
+          "<b>SASTA STORE &amp; Praso:</b> tick orders → check amounts → <b>Refund now</b>. The robot sends it to Amazon and shows Refunded / Failed below.<br><br><b>Other accounts:</b><br>" +
           "<b>1.</b> Download the file for an account.<br>" +
           "<b>2.</b> Log into <b>that account</b> in Seller Central.<br>" +
           "<b>3.</b> Orders → <b>Upload Order Related Files</b> → <b>Order Adjustment</b> → upload.<br>" +
@@ -110,6 +112,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     p.addEventListener("click", function (e) {
       var c = e.target.closest("[data-rf-show]"); if (c) { showStatus(c.dataset.rfShow); return; }
       var d = e.target.closest("[data-rf-dl]"); if (d) { download(d.dataset.rfDl); return; }
+      var rn = e.target.closest("[data-rf-now]"); if (rn) { refundNow(rn.dataset.rfNow); return; }
       var x = e.target.closest("[data-rf-x]"); if (x) { sel = sel.filter(function (o) { return o.i !== x.dataset.rfX; }); render(); }
     });
     p.addEventListener("change", function (e) {
@@ -170,17 +173,32 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     loading = new Promise(function (res) {
       var w = setInterval(function () {
         if (!db()) return; clearInterval(w);
-        db().collection("aikm_admin").doc("omsRefundOrders").get().then(function (d) {
-          var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true;
-        }).catch(function () { toast("Could not read refund data — check connection.", true); })
+        var ref = db().collection("aikm_admin").doc("omsRefundOrders");
+        function timed(p, ms) { return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error("timeout")); }, ms); })]); }
+        // the console's idle-pause can leave Firebase switched off -> switch it on and try again
+        timed(ref.get(), 12000).catch(function () { try { db().enableNetwork(); } catch (e) {} return timed(ref.get(), 25000); })
+          .then(function (d) { var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true; })
+          .catch(function () { toast("Could not read refund data — check internet, then click the tab again.", true); })
           .then(function () { loading = null; render(); res(); });
       }, 300);
     });
     return loading;
   }
+  // Refund robot log (aikm_admin/refundLog) — listened to only while this tab is open
+  var rlog = { entries: [] }, unsubLog = null;
+  function refunded(i) { return (rlog.entries || []).filter(function (e) { return e.i === i && e.status === "done" && !e.probe; })[0] || null; }
+  function listenLog() {
+    if (unsubLog || !db()) return;
+    unsubLog = db().collection("aikm_admin").doc("refundLog").onSnapshot(function (d) { rlog = d.exists ? d.data() : { entries: [] }; render(); }, function () {});
+  }
+  function stopLog() { if (unsubLog) { unsubLog(); unsubLog = null; } }
   document.addEventListener("click", function (e) {
     var t = e.target.closest(".tabbtn[data-tab]"); if (!t) return;
-    if (t.dataset.tab === "refund") load(false);
+    if (t.dataset.tab === "refund") { load(false); var w = setInterval(function () { if (db()) { clearInterval(w); listenLog(); } }, 500); }
+    else stopLog();
+  });
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) stopLog(); else if (document.querySelector('.tabbtn.active[data-tab="refund"]')) listenLog();
   });
 
   // 15-day OMS data — only read when a pasted order is not in the 60-day refund list
@@ -200,7 +218,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
   function indexBy(list) { var m = {}; list.forEach(function (o) { (m[o.o] = m[o.o] || []).push(o); }); return m; }
   function addSel(lines) {
     var have = {}; sel.forEach(function (o) { have[o.i] = 1; });
-    lines.forEach(function (o) { if (o.i && !have[o.i]) { have[o.i] = 1; sel.push(Object.assign({}, o, { off: !o.nb })); } }); // not RTO in NimbusPost -> unticked
+    lines.forEach(function (o) { if (o.i && !have[o.i]) { have[o.i] = 1; sel.push(Object.assign({}, o, { off: !o.nb || !!refunded(o.i) })); } }); // not refund pending / already refunded -> unticked
   }
 
   async function find() {
@@ -224,7 +242,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
   async function showStatus(k) {
     await load(false); chip(k); sel = []; missing = [];
     addSel(store.filter(function (o) {
-      return k === "all" ? true : k === "rto" ? /^rto/.test(o.nb) : o.nb === k;
+      return !refunded(o.i) && (k === "all" ? true : k === "rto" ? /^rto/.test(o.nb) : o.nb === k);
     }));
     sel.forEach(function (o) { o.off = true; }); // nothing ticked until you choose
     render();
@@ -235,12 +253,14 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
   function render() {
     if (!$("tab-refund")) return;
     $("rfSyncLine").textContent = loaded ? "Self-ship refund pending · NimbusPost · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship RTO · NimbusPost · last 60 days";
-    $("rfKpiAvail").textContent = loaded ? store.length : "–";
-    $("rfKpiAvailSub").textContent = loaded ? store.filter(function (o) { return /^rto/.test(o.nb); }).length + " returned · " + store.filter(function (o) { return o.nb === "late"; }).length + " pickup missed · " + store.filter(function (o) { return o.nb === "lost"; }).length + " lost" : "loading…";
+    var pend = store.filter(function (o) { return !refunded(o.i); });
+    $("rfKpiAvail").textContent = loaded ? pend.length : "–";
+    $("rfKpiAvailSub").textContent = loaded ? pend.filter(function (o) { return /^rto/.test(o.nb); }).length + " returned · " + pend.filter(function (o) { return o.nb === "late"; }).length + " pickup missed · " + pend.filter(function (o) { return o.nb === "lost"; }).length + " lost" : "loading…";
 
     $("rfMiss").innerHTML = missing.length ? '<div class="rf-miss"><b>Not found (' + missing.length + "):</b> " + missing.map(esc).join(", ") +
       '<br><span style="opacity:.85">Not found in OMS — older than 70 days? Upload an OMS export (top right) and click Find again.</span></div>' : "";
 
+    sel.forEach(function (o) { if (refunded(o.i)) o.off = true; });
     var on = sel.filter(function (o) { return !o.off; });
     $("rfCount").textContent = sel.length ? "· " + on.length + " of " + sel.length + " ticked" : "";
     if (!sel.length) { $("rfTable").innerHTML = '<div class="rf-empty">Paste order IDs above, or pick Returned / Pickup missed / Lost / All.</div>'; }
@@ -248,13 +268,15 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
       var rows = sel.map(function (o) {
         var c = calc(o);
         var dd = function (x) { return x ? x.slice(8, 10) + "/" + x.slice(5, 7) : ""; };
-        var tag = o.nb ? "rf-tag red" : "rf-tag";
-        var nsTxt = o.nb ? "Refund pending" : "Not refund pending";
+        var rf = refunded(o.i);
+        if (rf) o.off = true;
+        var tag = rf ? "rf-tag green" : o.nb ? "rf-tag red" : "rf-tag";
+        var nsTxt = rf ? "Refunded ✓ " + new Date(rf.at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : o.nb ? "Refund pending" : "Not refund pending";
         var why = /^rto/.test(o.nb || "") ? "Shipment returned · " + o.ns.replace(/^rto/i, "RTO")
           : o.nb === "late" ? "Not picked up · Deliver By " + dd(o.db) + " passed"
           : o.nb === "lost" ? (/damage/i.test(o.ns) ? "Damaged" : "Lost") + " in transit"
           : "Not RTO / lost / late in NimbusPost";
-        return "<tr" + (o.off ? ' style="opacity:.5"' : "") + "><td><input type='checkbox' data-rf-on='" + esc(o.i) + "'" + (o.off ? "" : " checked") + "></td>" +
+        return "<tr" + (o.off ? ' style="opacity:.5"' : "") + "><td><input type='checkbox' data-rf-on='" + esc(o.i) + "'" + (o.off ? "" : " checked") + (rf ? " disabled title='Already refunded by the robot'" : "") + "></td>" +
           "<td class='cx-awb'>" + esc(o.o) + "<div class='rf-meta'>" + esc(o.i) + "</div></td><td>" + esc(o.a) + "</td>" +
           "<td style='max-width:220px'><div style='white-space:nowrap;overflow:hidden;text-overflow:ellipsis' title='" + esc(o.n) + "'>" + esc(o.n) + "</div><div class='rf-meta'>Qty " + o.q + " · " + esc(o.ty) + "</div></td>" +
           "<td><span class='" + tag + "'>" + esc(nsTxt) + "</span><div class='rf-meta' style='color:var(--x-text-2)'>" + esc(why) + "</div><div class='rf-meta'>" + (o.aw ? esc(o.aw) + (o.nd && o.nb !== "late" ? " · " + esc(dd(o.nd)) : "") : "") + "</div><div class='rf-meta'>OMS: " + esc(o.st) + "</div></td>" +
@@ -280,8 +302,51 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     $("rfKpiAccSub").textContent = on.length ? "one per Amazon account" : "";
     $("rfFiles").innerHTML = accs.length ? accs.map(function (a) {
       return '<div class="rf-acc"><div class="rf-acc-info"><div class="rf-acc-name">' + esc(a) + '</div><div class="rf-acc-sub">' + Object.keys(by[a].orders).length + " order(s) · " + inr(by[a].amt) +
-        '</div></div><button type="button" class="btn-gold" data-rf-dl="' + esc(a) + '"><i class="ti ti-download"></i> File</button></div>';
+        (ROBOT[a] ? " · <b style='color:var(--x-green)'>robot</b>" : " · upload file by hand") + '</div></div>' +
+        (ROBOT[a] ? '<button type="button" class="btn-gold" data-rf-now="' + esc(a) + '" title="Robot sends this refund to Amazon now"><i class="ti ti-send"></i> Refund now</button>' : "") +
+        '<button type="button" class="' + (ROBOT[a] ? "secondary" : "btn-gold") + '" data-rf-dl="' + esc(a) + '" title="Download the Order Adjustment file"><i class="ti ti-download"></i>' + (ROBOT[a] ? "" : " File") + '</button></div>';
     }).join("") : '<div class="rf-empty">Select orders first.</div>';
+    renderRobot();
+  }
+
+  /* ---------- Refund robot (only on your command) ---------- */
+  var ROBOT = { "SASTA STORE": 1, "PRASO ENTERPRISES": 1 }, RWF = "refund-robot.yml";
+  async function refundNow(acc) {
+    var reason = $("rfReason").value, reasonTxt = $("rfReason").selectedOptions[0].textContent;
+    var lines = sel.filter(function (o) { return !o.off && o.a === acc && !refunded(o.i); });
+    if (!lines.length) return;
+    var live = rlog.live || {};
+    if (live.state === "running" && Date.now() - new Date(live.updatedAt).getTime() < 25 * 60000) { toast("The robot is still working on the last refund — wait for it to finish.", true); return; }
+    var amt = lines.reduce(function (s, o) { return s + calc(o).tot; }, 0);
+    var orders = {}; lines.forEach(function (o) { orders[o.o] = 1; });
+    if (!confirm("REFUND NOW — " + acc + "\n\n" + Object.keys(orders).length + " order(s) · " + lines.length + " line(s) · " + inr(amt) + "\nReason: " + reasonTxt +
+      "\n\nThe robot sends this to Amazon now. Money goes back to the customers and cannot be undone.\nAll details checked?")) return;
+    var payload = lines.map(function (o) { var c = calc(o); return { a: o.a, o: o.o, i: o.i, r: reason, ip: c.ip, it: c.it, sp: c.sp, stx: c.stx }; });
+    var json = JSON.stringify(payload);
+    if (json.length > 60000) { toast("Too many lines for one go (" + lines.length + ") — untick some and send in two parts.", true); return; }
+    var tok = await getToken();
+    if (!tok) { toast("GitHub token missing — click any 'Sync OMS now' button once to set it up, then try again.", true); return; }
+    try {
+      var r = await fetch("https://api.github.com/repos/" + REPO + "/actions/workflows/" + RWF + "/dispatches", {
+        method: "POST", headers: { Accept: "application/vnd.github+json", Authorization: "Bearer " + tok, "Content-Type": "application/json" },
+        body: JSON.stringify({ ref: "main", inputs: { lines: json, requested_by: "console" } }) });
+      if (r.status !== 204) throw new Error("GitHub said " + r.status);
+      rlog.live = { state: "running", step: acc + ": starting…", updatedAt: new Date().toISOString() };
+      render(); listenLog();
+      toast("Refund robot started for " + acc + " — results show here in about 2–5 minutes.");
+    } catch (err) { toast("Could not start the robot: " + err.message, true); }
+  }
+  function renderRobot() {
+    if (!$("rfRobot")) return;
+    var live = rlog.live || {}, running = live.state === "running" && Date.now() - new Date(live.updatedAt).getTime() < 25 * 60000;
+    $("rfRobotState").textContent = running ? "· working: " + (live.step || "") : "";
+    var ent = (rlog.entries || []).filter(function (e) { return !e.probe; }).slice(0, 40);
+    $("rfRobot").innerHTML = ent.length ? '<div class="table-scroll" style="max-height:300px;"><table class="data"><tbody>' + ent.map(function (e) {
+      var t = e.status === "done" ? "rf-tag green" : e.status === "skipped" ? "rf-tag" : "rf-tag red";
+      return "<tr><td class='cx-awb'>" + esc(e.o) + "<div class='rf-meta'>" + esc(e.a) + " · " + new Date(e.at).toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "numeric", minute: "2-digit" }) + "</div></td>" +
+        "<td class='num'>" + inr(e.amt || 0) + "</td><td><span class='" + t + "'>" + (e.status === "done" ? "Refunded" : e.status === "skipped" ? "Skipped" : "Failed") + "</span>" +
+        (e.status !== "done" ? "<div class='rf-meta' style='white-space:normal;max-width:220px'>" + esc(e.msg) + "</div>" : "") + "</td></tr>";
+    }).join("") + "</tbody></table></div>" : '<div class="rf-empty">' + (running ? "Working… results appear here." : "No robot refunds yet.") + "</div>";
   }
 
   /* ---------- 4. the Amazon file ---------- */
