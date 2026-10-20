@@ -708,6 +708,68 @@ const RELIST_OFFER_ATTRS = ['condition_type', 'condition_note', 'list_price', 'm
   'max_order_quantity', 'gift_options', 'country_of_origin', 'item_package_quantity', 'batteries_required',
   'supplier_declared_dg_hz_regulation', 'externally_assigned_product_identifier', 'manufacturer', 'packer_contact_information',
   'importer_contact_information', 'manufacturer_contact_information', 'item_weight', 'unit_count', 'item_package_weight'];
+// ── PRICE FIX for listings Amazon suppressed for their price ─────────────────────────────
+// Asked for by the owner (20 Oct 2026): instead of relisting at the same price, move the price to
+// just under the Buy Box (or the lowest other seller if nobody holds it) - never below LOTS cost
+// + PRICE_FIX_MARGIN and never above MRP. Changes the price on the SAME SKU (no new SKU).
+// Cost comes only from CONFIRMED mappings (Amazon page ASIN mapping incl. packs/combos/split packs,
+// other-vendor bill cost, or a hand-entered cost) - never a name guess. No cost known = no change.
+const PRICE_FIX_MARGIN = 5;
+let costData = null;
+async function loadCostData() {
+  if (costData) return costData;
+  const A = dbMain.collection('aikm_admin');
+  const [chunks, map, man] = await Promise.all([A.doc('lotsCatalog').collection('chunks').get(), A.doc('spapiAsinLotsMap').get(), A.doc('spapiManualCosts').get()]);
+  const lots = {};
+  chunks.docs.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code) lots[String(p.code)] = p; }));
+  costData = { lots, map: (map.exists && map.data().map) || {}, manual: (man.exists && man.data().costs) || {} };
+  return costData;
+}
+function bestSlab(p) { const s = (p && p.slabs) || []; let b = null; s.forEach((x) => { const v = Number(x.price); if (v > 0 && (b == null || v < b)) b = v; }); return b; }
+async function knownCost(i) {
+  const c = await loadCostData();
+  const man = Number(c.manual[i.sku]); if (man > 0) return { cost: man, src: 'manual cost' };
+  const m = c.map[i.asin] || c.map[String(i.asin).toUpperCase()];
+  if (!m) return null;
+  if (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS') { const v = Number(m.vendor && m.vendor.cost); return v > 0 ? { cost: v, src: m.vendorName + ' bill' } : null; }
+  const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : (m.code ? [{ code: m.code, qty: 1 }] : []);
+  if (!parts.length) return null;
+  let cost = 0;
+  for (const x of parts) {
+    const p = c.lots[String(x.code)], b = bestSlab(p); if (b == null) return null;
+    cost += b * Math.max(1, Number(x.qty) || 1) / Math.max(1, parseInt(x.lotsPack) || 1);
+  }
+  return { cost: Math.round(cost * 100) / 100, src: 'LOTS' };
+}
+async function fixSuppressedPrice(sellerId, i, old, productType) {
+  const offers = (relistFresh.get(i.asin) || []).filter((o) => !o.isMine && o.price > 0);
+  const bb = offers.find((o) => o.isBuyBoxWinner), low = offers[0];
+  const ref = bb || low;
+  if (!ref) return { done: false, note: 'No other seller price to compare with - change the price by hand.' };
+  const kc = await knownCost(i);
+  if (!kc) return { done: false, note: 'No confirmed cost (map it on the Amazon page) - price not changed.' };
+  const floor = Math.ceil(kc.cost + PRICE_FIX_MARGIN), mrp = Number(i.mrp) || null;
+  let target = Math.floor(ref.price - 1);
+  if (mrp && target > mrp) target = Math.floor(mrp);
+  if (target < floor) return { done: false, note: `Buy Box ₹${ref.price} is below your cost ₹${kc.cost} + ₹${PRICE_FIX_MARGIN} - price not changed (would sell at a loss).` };
+  if (Math.abs(target - i.price) < 1) return { done: false, note: `Already at ₹${i.price} (just under ${bb ? 'the Buy Box' : 'the lowest seller'}) - Amazon may need a day to re-check.` };
+  if (!productType) return { done: false, note: 'Product type unknown - price not changed.' };
+  const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
+  delete po.start_at; delete po.end_at;
+  ['maximum_seller_allowed_price', 'minimum_seller_allowed_price', 'discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
+  Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL', our_price: [{ schedule: [{ value_with_tax: target }] }] });
+  if (!po.maximum_retail_price && mrp) po.maximum_retail_price = [{ schedule: [{ value_with_tax: mrp }] }];
+  const call = (mode) => spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
+    query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, mode ? { mode } : {}),
+    body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer', value: [po] }] } });
+  assertListingsOk(await call('VALIDATION_PREVIEW'));
+  assertListingsOk(await call(null));
+  const basis = `${bb ? 'Buy Box' : 'lowest seller'} ₹${ref.price} − ₹1 · cost ₹${kc.cost} (${kc.src})`;
+  console.log(`Price fix ${i.sku}: ₹${i.price} -> ₹${target} (${basis})`);
+  snapPatch('inventory', `${ACCOUNT_LABEL}_${i.sku}`, { price: target });
+  return { done: true, price: target, basis, floor };
+}
+
 // New offer = the old listing's own offer block (Amazon India keeps MRP inside purchasable_offer as
 // maximum_retail_price), with the same selling price, stock and GST code as before.
 function relistAttributes(oa, i) {
@@ -759,7 +821,7 @@ async function runRelistRobot(sellerId) {
   if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
   const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
   const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
-  if (st.ver !== 2) { st.cool = {}; st.ver = 2; }   // v2 offer format (20 Oct 2026): retry earlier format failures
+  if (st.ver !== 3) { st.cool = {}; st.ver = 3; }   // v3 (20 Oct 2026): price fix - re-check blocked listings now
   const now = Date.now();
   const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
   const eligible = inv.filter((i) => (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (i.quantity || 0) > 0 && i.price > 0);
@@ -769,7 +831,7 @@ async function runRelistRobot(sellerId) {
   console.log(`Relist robot: ${eligible.length} in-stock self-ship listings, ${checked.length} with fresh offers, ${notSelling.length} not selling.`);
   if (checked.length >= 10 && notSelling.length / checked.length >= RELIST_BREAKER) {
     console.warn(`Relist robot STOPPED: ${notSelling.length} of ${checked.length} look "Not selling" - looks like an account or Amazon problem, nothing changed.`);
-    await stRef.set({ streak: {}, cool: st.cool, ver: 2, lastRun: now, stopped: `${notSelling.length}/${checked.length} not selling` });
+    await stRef.set({ streak: {}, cool: st.cool, ver: 3, lastRun: now, stopped: `${notSelling.length}/${checked.length} not selling` });
     return;
   }
   const streak = {};
@@ -794,7 +856,9 @@ async function runRelistRobot(sellerId) {
       if ((old.issues || []).some((x) => (x.severity || '').toUpperCase() === 'ERROR' && (x.categories || []).includes('INVALID_PRICE'))) {
         console.log(`Relist ${oldSku}: Amazon suppressed it for its price (${oldWhy}) - not relisted at the same price.`);
         st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
-        await log(i, { status: 'price_issue', why: oldWhy });
+        const fx = await fixSuppressedPrice(sellerId, i, old, sum.productType || await productTypeFor(sellerId, oldSku)).catch((e) => ({ done: false, note: 'Price change failed: ' + (e.message || e) }));
+        await log(i, fx.done ? { status: 'price_fixed', why: oldWhy, newPrice: fx.price, basis: fx.basis, floor: fx.floor }
+          : { status: 'price_issue', why: oldWhy, fixNote: fx.note || null });
         continue;
       }
       if (status.includes('BUYABLE') && (relistFresh.get(asin) || []).length >= 20) {
@@ -842,7 +906,7 @@ async function runRelistRobot(sellerId) {
     await new Promise((r) => setTimeout(r, 1500));
   }
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
-  await stRef.set({ streak, cool: st.cool, ver: 2, lastRun: now, stopped: null });
+  await stRef.set({ streak, cool: st.cool, ver: 3, lastRun: now, stopped: null });
 }
 
 // ── Write-back functions ──────────────────────────────────────────────────────────
