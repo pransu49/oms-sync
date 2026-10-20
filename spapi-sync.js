@@ -824,7 +824,7 @@ async function runRelistRobot(sellerId) {
   if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
   const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
   const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
-  if (st.ver !== 5) { st.cool = {}; st.ver = 5; }   // v5 (20 Oct 2026): dry-run answer VALID was read as a failure - retry those
+  if (st.ver !== 6) { st.cool = {}; st.ver = 6; }   // v6 (20 Oct 2026): live-but-not-selling listings are now relisted too - re-check them
   const now = Date.now();
   const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
   const eligible = inv.filter((i) => (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (i.quantity || 0) > 0 && i.price > 0);
@@ -838,7 +838,7 @@ async function runRelistRobot(sellerId) {
   notSelling.forEach((i) => { streak[i.sku] = (st.streak[i.sku] || 0) + 1; });
   const resting = (i) => st.cool[i.asin] && now < st.cool[i.asin];
   const ready = (breaker ? [] : notSelling.filter((i) => streak[i.sku] >= RELIST_STREAK && !resting(i)))
-    .slice(0, RELIST_MAX_PER_RUN).map((i) => ({ i, reason: 'not_selling' }));
+    .slice(0, RELIST_MAX_PER_RUN).map((i) => ({ i, reason: 'not_selling', minAge: 1 }));   // new SKUs: Amazon needs ~2 h to make them live
   // Sales rules (owner, 20 Oct 2026), from this account's orders of the last 90 days:
   //   Rule 1: sold regularly (4+ orders in days 7-37) but no order in the last 7 days -> relist (listing must be 7+ days old)
   //   Rule 3: no order in the last 30 days -> relist with the same price (listing must be 30+ days old)
@@ -896,11 +896,12 @@ async function runRelistRobot(sellerId) {
         await log(i, { status: 'blocked', why: oldWhy });
         continue;
       }
-      if (reason === 'not_selling' && status.includes('BUYABLE')) {
-        // Live and error-free on Amazon - our offer is just not among the offers Amazon returned (many cheaper sellers).
-        console.log(`Relist ${oldSku}: Amazon says BUYABLE - live, not relisted.`);
+      const soldLast7 = ((salesByAsin()[asin] || {}).last ?? Infinity) < 7;
+      if (reason === 'not_selling' && status.includes('BUYABLE') && soldLast7) {
+        // Amazon says it is live AND it had an order in the last 7 days - it is selling, keep it.
+        console.log(`Relist ${oldSku}: Amazon says BUYABLE and it sold in the last 7 days - not relisted.`);
         st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
-        await log(i, { status: 'buyable', why: 'Amazon shows this listing as buyable; your offer is just not among the offers Amazon lists (cheaper sellers ahead).' });
+        await log(i, { status: 'buyable', why: 'Amazon shows this listing as buyable and it sold in the last 7 days; your offer is just not among the offers Amazon lists (cheaper sellers ahead).' });
         continue;
       }
       const productType = sum.productType || await productTypeFor(sellerId, oldSku);
@@ -955,7 +956,7 @@ async function runRelistRobot(sellerId) {
   await runBuyBoxPricer(sellerId, eligible, st, log).catch((e) => console.warn('Buy Box pricer skipped:', e.message || e));
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
   Object.keys(st.bbCool).forEach((a) => { if (st.bbCool[a] < now) delete st.bbCool[a]; });
-  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, ver: 5, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
+  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, ver: 6, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
 }
 
 // Orders per ASIN for this account (snapshot, last 90 days): days since the last order, and orders in days 7-37.
