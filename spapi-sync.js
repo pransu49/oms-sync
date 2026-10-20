@@ -1039,19 +1039,29 @@ async function applyPendingPriceUpdates(sellerId) {
   console.log(`Applying ${docs.length} pending price update(s)...`);
 
   for (const doc of docs) {
-    const { sku, newPrice } = doc.data();
+    const { sku } = doc.data(); const newPrice = Math.round(Number(doc.data().newPrice) * 100) / 100;
     try {
-      const productType = await productTypeFor(sellerId, sku);
+      if (!(newPrice > 0)) throw new Error('Price must be more than 0.');
+      // Start from the listing's own offer so MRP and other offer details are kept (Amazon India needs MRP).
+      const cur = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku },
+        query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries'] } });
+      const productType = ((cur.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, sku);
       if (!productType) throw new Error('No known product type for this SKU yet.');
-      assertListingsOk(await spClient.callAPI({
-        operation: 'patchListingsItem', endpoint: 'listingsItems',
-        path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
-        body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer',
-          value: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', our_price: [{ schedule: [{ value_with_tax: newPrice }] }] }] }] },
-      }));
-      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
+      const po = JSON.parse(JSON.stringify((((cur.attributes || {}).purchasable_offer) || [])[0] || {}));
+      const mrpVal = Number((((po.maximum_retail_price || [])[0] || {}).schedule || [])[0]?.value_with_tax) || Number(SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`]?.mrp) || null;
+      if (mrpVal && newPrice > mrpVal) throw new Error(`New price ₹${newPrice} is above MRP ₹${mrpVal}.`);
+      delete po.start_at; delete po.end_at;
+      ['maximum_seller_allowed_price', 'minimum_seller_allowed_price', 'discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
+      Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL', our_price: [{ schedule: [{ value_with_tax: newPrice }] }] });
+      if (!po.maximum_retail_price && mrpVal) po.maximum_retail_price = [{ schedule: [{ value_with_tax: mrpVal }] }];
+      const call = (mode) => spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' },
+        path: { sellerId, sku }, query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, mode ? { mode } : {}),
+        body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer', value: [po] }] } });
+      assertListingsOk(await call('VALIDATION_PREVIEW')); // dry run first - nothing changes if Amazon would refuse
+      assertListingsOk(await call(null));
+      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp(), error: admin.firestore.FieldValue.delete() });
       // Write new price directly to inventory so UI stays in sync
-      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ price: newPrice });
+      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).set({ price: newPrice }, { merge: true });
       snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { price: newPrice });
       console.log(`Price updated for SKU ${sku}: now ${newPrice}`);
     } catch (e) {

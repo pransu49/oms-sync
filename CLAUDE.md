@@ -6,3 +6,5 @@
 - After any change to `console/easyship-tab.js`, check: `grep -c refund-tab console/easyship-tab.js` must be 1 or more.
 - The console page (`page.dalbhaat-admin-console.liquid` on Shopify) also loads the refund tab by itself
   (block `AIKM BULK REFUND LOADER`). Keep that block too when replacing the console template.
+- The Loss Orders "Fix prices" panel (`console/loss-tab.js`) is loaded by the block at the end of
+  `console/refund-tab.js` (`aikmLossJs`). Keep that block when replacing `refund-tab.js`.
