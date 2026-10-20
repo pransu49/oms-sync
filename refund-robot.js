@@ -30,6 +30,7 @@ const f2 = (n) => (Math.round(Number(n || 0) * 100) / 100).toFixed(2);
 const nowIso = () => new Date().toISOString();
 
 admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
+admin.firestore().settings({ ignoreUndefinedProperties: true });
 const logRef = admin.firestore().collection('aikm_admin').doc('refundLog');
 
 function client(token) {
@@ -64,7 +65,10 @@ function parseReport(text) {
   return { summary, errors };
 }
 
+const RECORD_FEED = String(process.env.RECORD_FEED_ID || '').trim(); // record-only: read this feed's result, send nothing
+
 async function submit(sp, rows) {
+  if (RECORD_FEED) return readFeed(sp, RECORD_FEED);
   const tsv = [HEAD.join('\t')].concat(rows.map((x) => [x.o, x.i, x.r, 'INR', f2(x.ip), f2(x.it), x.sp || x.stx ? f2(x.sp) : '', x.sp || x.stx ? f2(x.stx) : '',
     '', '', '', '', '', ''].join('\t'))).join('\r\n') + '\r\n';
   const contentType = 'text/tab-separated-values; charset=UTF-8';
@@ -72,8 +76,11 @@ async function submit(sp, rows) {
   await sp.upload(doc, { content: tsv, contentType });
   const feed = await sp.callAPI({ operation: 'createFeed', endpoint: 'feeds',
     body: { feedType: 'POST_FLAT_FILE_PAYMENT_ADJUSTMENT_DATA', marketplaceIds: [MARKETPLACE_ID], inputFeedDocumentId: doc.feedDocumentId } });
-  const feedId = feed.feedId;
-  console.log(`Feed ${feedId} submitted (${rows.length} line(s)).`);
+  console.log(`Feed ${feed.feedId} submitted (${rows.length} line(s)).`);
+  return readFeed(sp, feed.feedId);
+}
+
+async function readFeed(sp, feedId) {
   let info = null;
   for (let i = 0; i < 60; i++) { // up to ~20 min
     await sleep(i < 6 ? 15000 : 30000);
@@ -105,13 +112,13 @@ async function main() {
   const results = [];
   const add = (x, status, msg, feedId) => results.push({ a: x.a, o: x.o, i: x.i, r: x.r,
     amt: Math.round((Number(x.ip || 0) + Number(x.it || 0) + Number(x.sp || 0) + Number(x.stx || 0)) * 100) / 100,
-    status, msg: String(msg || '').slice(0, 300), feedId: feedId || '', at: nowIso(), by: BY, probe: PROBE || undefined });
+    status, msg: String(msg || '').slice(0, 300), feedId: feedId || '', at: nowIso(), by: BY, probe: PROBE });
 
   const byAcc = {};
   lines.forEach((x) => {
     if (!x || !/^\d{3}-\d{7}-\d{7}$/.test(String(x.o)) || !/^\d{6,20}$/.test(String(x.i))) { add(x || {}, 'error', 'Bad order / item id'); return; }
     if (!REASONS.includes(x.r)) x.r = 'CustomerCancel';
-    if (!PROBE && done.has(x.i)) { add(x, 'skipped', 'Already refunded by the robot earlier'); return; }
+    if (!PROBE && !RECORD_FEED && done.has(x.i)) { add(x, 'skipped', 'Already refunded by the robot earlier'); return; }
     const acc = ACCOUNTS[x.a];
     if (!acc || !acc.token) { add(x, 'skipped', 'Account not connected to Amazon API - use the download file'); return; }
     (byAcc[x.a] = byAcc[x.a] || []).push(x);

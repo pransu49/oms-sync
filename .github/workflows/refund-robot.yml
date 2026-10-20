@@ -13,6 +13,9 @@ on:
       probe:
         description: 'true = access test with a fake order (no money moves)'
         default: 'false'
+      record_feed_id:
+        description: 'record-only: save the result of this already-sent Amazon feed (sends nothing)'
+        default: ''
 
 concurrency:
   group: refund-robot
@@ -39,6 +42,7 @@ jobs:
           LINES: ${{ inputs.lines }}
           REQUESTED_BY: ${{ inputs.requested_by }}
           PROBE: ${{ inputs.probe }}
+          RECORD_FEED_ID: ${{ inputs.record_feed_id }}
 
       - name: Report sync health to console
         if: always()
