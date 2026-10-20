@@ -1,0 +1,49 @@
+name: Refund robot (on command only)
+
+# Never scheduled. Started only by the "Refund now" button in the console's Bulk Refund tab.
+on:
+  workflow_dispatch:
+    inputs:
+      lines:
+        description: 'refund lines (JSON, sent by the console)'
+        default: '[]'
+      requested_by:
+        description: 'who clicked Refund now'
+        default: 'console'
+      probe:
+        description: 'true = access test with a fake order (no money moves)'
+        default: 'false'
+
+concurrency:
+  group: refund-robot
+  cancel-in-progress: false
+
+jobs:
+  refund:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-save amazon-sp-api firebase-admin@12
+      - shell: bash
+        run: node refund-robot.js 2>&1 | tee run.log
+        env:
+          SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
+          SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
+          SPAPI_REFRESH_TOKEN_PRASO: ${{ secrets.SPAPI_REFRESH_TOKEN }}
+          SPAPI_REFRESH_TOKEN_SASTASTORE: ${{ secrets.SPAPI_REFRESH_TOKEN_SASTASTORE }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}   # aikm-oms-sync (refund list + log)
+          LINES: ${{ inputs.lines }}
+          REQUESTED_BY: ${{ inputs.requested_by }}
+          PROBE: ${{ inputs.probe }}
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+        run: node report-health.js refundrobot "Refund robot" run.log || true
