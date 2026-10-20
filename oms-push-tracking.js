@@ -124,7 +124,14 @@ async function main() {
     .map((l) => l.map(csvCell).join(',')).join('\r\n') + '\r\n';
 
   const result = { at: admin.firestore.FieldValue.serverTimestamp(), count: rows.length, dry: DRY, skippedNoChannelId: skipped.noChannelId, message: '' };
-  if (!rows.length) { result.message = 'Nothing new to push.'; if (!DRY) await logRef.set({ last: result, stuck }, { merge: true }); console.log(result.message); return; }
+  if (!rows.length) {
+    result.message = 'Nothing new to push.';
+    // same "nothing new" note under 30 min old and same stuck list -> don't re-save (every open console tab re-reads it)
+    const p = logDoc.exists && logDoc.get('last'), pAt = p && p.at && p.at.toMillis ? p.at.toMillis() : 0;
+    const same = p && p.message === result.message && Date.now() - pAt < 30 * 60e3 && JSON.stringify(logDoc.get('stuck') || {}) === JSON.stringify(stuck || {});
+    if (!DRY && !same) await logRef.set({ last: result, stuck }, { merge: true });
+    console.log(result.message + (same ? ' (status not re-saved)' : '')); return;
+  }
   if (DRY) { console.log('DRY RUN — nothing uploaded.'); return; }
 
   // 3) upload to OMS Guru (Import Data -> Bulk Update Order Details, type 49)

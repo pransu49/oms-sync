@@ -140,24 +140,49 @@ async function main() {
   admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
   const db = admin.firestore();
 
+  // Firebase read saving: every open console tab re-reads each document written here.
+  //  - Dashboard rows are saved one document per shipment DAY, so only the days whose
+  //    shipments changed are rewritten (old fixed-size chunks shifted on every new order -> ~13 rewrites/run).
+  //  - The dashboard is refreshed at most every 30 min (a manual "Sync now" always refreshes it).
+  //  - The order index is rewritten only when it actually changed.
   const col = db.collection('nimbusDash');
   const snap = await col.get();
-  const old = {}; snap.forEach((d) => { old[d.id] = d.get('hash'); });
-  const used = new Set(['_meta']);
-  let written = 0;
-  for (let i = 0, k = 0; i < rows.length; i += CHUNK, k++) {
-    const part = rows.slice(i, i + CHUNK), id = `chunk_${k}`, h = md5(part);
-    used.add(id);
-    if (old[id] !== h) { await col.doc(id).set({ rows: part, hash: h }); written++; }
+  const old = {}; let meta = null;
+  snap.forEach((d) => { if (d.id === '_meta') meta = d.data(); else old[d.id] = d.get('hash'); });
+  const manual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
+  const lastDash = meta && meta.updatedAt && meta.updatedAt.toMillis ? meta.updatedAt.toMillis() : 0;
+  const migrate = Object.keys(old).some((id) => /^chunk_/.test(id));
+  let written = 0, stale = [];
+  if (manual || migrate || Date.now() - lastDash >= 28 * 60e3) {
+    const byDay = {};
+    rows.forEach((r) => { const d = /^\d{4}-\d{2}-\d{2}/.test(r.cr) ? r.cr.slice(0, 10) : 'unknown'; (byDay[d] = byDay[d] || []).push(r); });
+    const used = new Set(['_meta']);
+    for (const day of Object.keys(byDay).sort()) {
+      const list = byDay[day];
+      for (let i = 0, k = 0; i < list.length; i += CHUNK, k++) {
+        // the console joins documents in name order -> newest day first (as before): d_<99999999 - YYYYMMDD>
+        const key = day === 'unknown' ? 'z_unknown' : `d_${99999999 - Number(day.replace(/-/g, ''))}`;
+        const part = list.slice(i, i + CHUNK), id = k ? `${key}_${k}` : key, h = md5(part);
+        used.add(id);
+        if (old[id] !== h) { await col.doc(id).set({ rows: part, hash: h }); written++; }
+      }
+    }
+    stale = Object.keys(old).filter((id) => !used.has(id));
+    if (stale.length) { const b = db.batch(); stale.forEach((id) => b.delete(col.doc(id))); await b.commit(); }
+    await col.doc('_meta').set({ updatedAt: admin.firestore.FieldValue.serverTimestamp(), total: rows.length, counts, daysBack: DAYS_BACK, idxHash: (meta && meta.idxHash) || '' });
+  } else {
+    console.log(`Dashboard: last refreshed ${Math.round((Date.now() - lastDash) / 60e3)} min ago - next refresh after 30 min.`);
   }
-  const stale = Object.keys(old).filter((id) => !used.has(id));
-  if (stale.length) { const b = db.batch(); stale.forEach((id) => b.delete(col.doc(id))); await b.commit(); }
-  await col.doc('_meta').set({ updatedAt: admin.firestore.FieldValue.serverTimestamp(), total: rows.length, counts, daysBack: DAYS_BACK });
   // Full list as one JSON text (Firestore doesn't index inside text, so no "too many index entries" limit).
   // Small 'orders' map = only shipments still awaiting pickup (what the console's confirmation page needs).
   const pending = {};
   Object.entries(byOrder).filter(([, v]) => v.s === 'pickup').slice(0, 3000).forEach(([k, v]) => { pending[k] = v; });
-  await db.collection('nimbusIndex').doc('byOrder').set({ data: JSON.stringify(byOrder), orders: pending, count: Object.keys(byOrder).length, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+  const idxHash = md5([byOrder, pending]);
+  if (!meta || meta.idxHash !== idxHash) {
+    await db.collection('nimbusIndex').doc('byOrder').set({ data: JSON.stringify(byOrder), orders: pending, count: Object.keys(byOrder).length, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+    await col.doc('_meta').set({ idxHash }, { merge: true });
+    console.log('Order index changed - saved.');
+  } else console.log('Order index unchanged - not re-saved.');
 
   console.log(`Dashboard: ${written} chunk(s) updated, ${stale.length} removed. Order index: ${Object.keys(byOrder).length}.`);
 }
