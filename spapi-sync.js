@@ -759,7 +759,7 @@ async function fixSuppressedPrice(sellerId, i, old, productType) {
   ['maximum_seller_allowed_price', 'minimum_seller_allowed_price', 'discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
   Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL', our_price: [{ schedule: [{ value_with_tax: target }] }] });
   if (!po.maximum_retail_price && mrp) po.maximum_retail_price = [{ schedule: [{ value_with_tax: mrp }] }];
-  const call = (mode) => spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
+  const call = (mode) => spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku: i.sku },
     query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, mode ? { mode } : {}),
     body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer', value: [po] }] } });
   assertListingsOk(await call('VALIDATION_PREVIEW'));
@@ -801,7 +801,7 @@ async function relistPreview(sku) {
     query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries', 'issues'] } });
   const sum = (old.summaries || [])[0] || {}, newSku = relistNewSku(sku) || sku + '-R1';
   const attributes = relistAttributes(old.attributes || {}, i);
-  const pre = await spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: newSku },
+  const pre = await spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku: newSku },
     query: { marketplaceIds: [MARKETPLACE_ID], mode: 'VALIDATION_PREVIEW' }, body: { productType: sum.productType, requirements: 'LISTING_OFFER_ONLY', attributes } });
   console.log('Relist preview', sku, '->', newSku, JSON.stringify(pre).slice(0, 2000));
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku, at: Date.now(), preview: JSON.stringify(pre).slice(0, 5000), sent: JSON.stringify(attributes).slice(0, 5000),
@@ -861,6 +861,14 @@ async function runRelistRobot(sellerId) {
           : { status: 'price_issue', why: oldWhy, fixNote: fx.note || null });
         continue;
       }
+      // Any other Amazon ERROR on the listing (catalogue / variation / missing attributes) stays on the ASIN,
+      // so a new SKU would be blocked the same way - show Amazon's reason instead of relisting.
+      if (oldWhy) {
+        console.log(`Relist ${oldSku}: Amazon reports an error on the listing (${oldWhy}) - not relisted, needs fixing in Seller Central.`);
+        st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
+        await log(i, { status: 'blocked', why: oldWhy });
+        continue;
+      }
       if (status.includes('BUYABLE') && (relistFresh.get(asin) || []).length >= 20) {
         console.log(`Relist ${oldSku}: Amazon says BUYABLE and ASIN has 20+ offers (ours may be hidden) - skipped.`);
         st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku]; continue;
@@ -871,7 +879,7 @@ async function runRelistRobot(sellerId) {
       if (!newSku) throw new Error('Could not make a free new SKU name.');
       const oa = old.attributes || {}, attributes = relistAttributes(oa, i);
       const why = (old.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').map((x) => x.message).filter(Boolean).join(' | ').slice(0, 400);
-      const put = (mode) => spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: newSku },
+      const put = (mode) => spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku: newSku },
         query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, mode ? { mode } : {}),
         body: { productType, requirements: 'LISTING_OFFER_ONLY', attributes } });
       // 1) dry run: Amazon checks everything, nothing is created
@@ -1575,7 +1583,21 @@ async function debugSku(sku) {
   console.log('price attrs:', JSON.stringify(pick));
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku, at: Date.now(), keys: Object.keys(a), price: JSON.stringify(pick), summaries: JSON.stringify(res.summaries || []).slice(0, 2000), offers: JSON.stringify(res.offers || []).slice(0, 2000), issues: JSON.stringify(res.issues || []).slice(0, 4000) });
 }
-if (/^relistpreview:/i.test(process.env.SYNC_MODE || '')) { relistPreview(process.env.SYNC_MODE.slice(14).trim()).then(() => process.exit(0)).catch((e) => { console.error('relist preview failed:', e.message || e); process.exit(1); }); }
+async function listingCheck(list) {
+  const out = {};
+  for (const sku of list.split(',').map((x) => x.trim()).filter(Boolean)) {
+    try {
+      const r = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId: process.env.SPAPI_SELLER_ID, sku },
+        query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['summaries', 'offers', 'issues'] } });
+      const sm = (r.summaries || [])[0] || {};
+      out[sku] = { status: sm.status || [], offers: (r.offers || []).length, errors: (r.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').map((x) => x.message) };
+    } catch (e) { out[sku] = { error: e.message || String(e) }; }
+  }
+  console.log('Listing check:', JSON.stringify(out));
+  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_debug`).set({ sku: 'check', at: Date.now(), check: JSON.stringify(out).slice(0, 9000) });
+}
+if (/^listingcheck:/i.test(process.env.SYNC_MODE || '')) { listingCheck(process.env.SYNC_MODE.slice(13)).then(() => process.exit(0)).catch((e) => { console.error('check failed:', e.message || e); process.exit(1); }); }
+else if (/^relistpreview:/i.test(process.env.SYNC_MODE || '')) { relistPreview(process.env.SYNC_MODE.slice(14).trim()).then(() => process.exit(0)).catch((e) => { console.error('relist preview failed:', e.message || e); process.exit(1); }); }
 else if (/^debugsku:/i.test(process.env.SYNC_MODE || '')) { debugSku(process.env.SYNC_MODE.slice(9).trim()).then(() => process.exit(0)).catch((e) => { console.error('debug failed:', e.message || e); process.exit(1); }); }
 else {
 const DEBUG_ID = /^debug:/i.test(process.env.SYNC_MODE || '') ? process.env.SYNC_MODE.slice(6).trim() : null;
