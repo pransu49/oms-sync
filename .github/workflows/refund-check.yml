@@ -1,0 +1,44 @@
+name: Refund check (Amazon refund records)
+
+# Read-only. Runs after every refund-list sync, after the refund robot, or by hand.
+on:
+  workflow_run:
+    workflows: ['Refund orders (self-ship RTO, 60 days)', 'Refund robot (on command only)']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      probe_orders:
+        description: 'test only: ACCOUNT:orderId,ACCOUNT:orderId'
+        default: ''
+
+concurrency:
+  group: refund-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-save amazon-sp-api firebase-admin@12
+      - shell: bash
+        run: node refund-check.js 2>&1 | tee run.log
+        env:
+          SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
+          SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
+          SPAPI_REFRESH_TOKEN_PRASO: ${{ secrets.SPAPI_REFRESH_TOKEN }}
+          SPAPI_REFRESH_TOKEN_SASTASTORE: ${{ secrets.SPAPI_REFRESH_TOKEN_SASTASTORE }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          PROBE_ORDERS: ${{ inputs.probe_orders || '' }}
+
+      - name: Report sync health to console
+        if: always() && inputs.probe_orders == ''
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+        run: node report-health.js refundcheck "Refund check" run.log || true
