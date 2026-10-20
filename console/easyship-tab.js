@@ -1,4 +1,5 @@
-/* AIKM Admin Console — Easy Ship tab. Loaded by one <script> line in page.dalbhaat-admin-console.liquid */
+/* AIKM Admin Console — Easy Ship tab. Loaded by one <script> line in page.dalbhaat-admin-console.liquid
+   !! The LAST block of this file loads the Bulk Refund tab. NEVER delete it when editing this file. !! */
 (function(){var st=document.createElement('style');st.textContent="\nhtml#aikm body #tab-easyship .es-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;}\nhtml#aikm body #tab-easyship .es-state{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:20px;border:1px solid var(--x-line);background:var(--x-surface);font-size:12.5px;font-weight:600;color:var(--x-text-2);}\nhtml#aikm body #tab-easyship .es-dot{width:8px;height:8px;border-radius:50%;background:var(--x-muted);}\nhtml#aikm body #tab-easyship .es-state.run .es-dot{background:var(--x-amber);animation:esPulse 1.2s infinite;}\nhtml#aikm body #tab-easyship .es-state.ok .es-dot{background:var(--x-green);}\nhtml#aikm body #tab-easyship .es-state.bad .es-dot{background:var(--x-red);}\n@keyframes esPulse{50%{opacity:.35;}}\nhtml#aikm body #tab-easyship .es-meta{font-size:12px;color:var(--x-muted);}\nhtml#aikm body #tab-easyship .es-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:16px;}\nhtml#aikm body #tab-easyship .es-acc{display:flex;align-items:center;gap:14px;padding:12px 14px;border:1px solid var(--x-line);border-radius:10px;background:var(--x-surface-2);margin-bottom:8px;}\nhtml#aikm body #tab-easyship .es-acc-ic{width:38px;height:38px;flex:0 0 38px;border-radius:10px;display:flex;align-items:center;justify-content:center;background:var(--x-gold-soft);color:var(--x-gold);font-size:19px;}\nhtml#aikm body #tab-easyship .es-acc-name{font-weight:600;font-size:13.5px;color:var(--x-text);}\nhtml#aikm body #tab-easyship .es-acc-sub{font-size:12px;color:var(--x-muted);margin-top:2px;}\nhtml#aikm body #tab-easyship .es-acc-info{flex:1;min-width:0;}\nhtml#aikm body #tab-easyship .es-empty{padding:18px;text-align:center;color:var(--x-muted);font-size:13px;border:1px dashed var(--x-line-2);border-radius:10px;}\nhtml#aikm body #tab-easyship .es-tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11px;font-weight:600;background:var(--x-red-soft);color:var(--x-red);}\nhtml#aikm body #tab-easyship .es-tag.amber{background:var(--x-amber-soft);color:var(--x-amber);}\nhtml#aikm body #tab-easyship .es-rule{font-size:12px;color:var(--x-muted);line-height:1.6;}\nhtml#aikm body #tab-easyship .es-rule b{color:var(--x-text-2);}\nhtml#aikm body #subtab-easyship .es-btn-main{background:var(--x-primary) !important;color:var(--x-primary-ink) !important;border-color:var(--x-primary) !important;}\nhtml#aikm body #tab-easyship td.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600;}\n@media (max-width:1100px){html#aikm body #tab-easyship .es-grid{grid-template-columns:1fr;}}\n";document.head.appendChild(st);})();
 
 (function () {
@@ -382,3 +383,17 @@
     } catch (err) { setState("bad", "Could not start: " + err.message); toast("Could not start: " + err.message, true); }
   }
 })();
+
+/* ===== DO NOT REMOVE — loads the Bulk Refund tab (console/refund-tab.js). =====
+   Keep this block at the end of this file when editing the Easy Ship tab.
+   (A second copy also lives in page.dalbhaat-admin-console.liquid; the id check stops double loading.)
+   Loads the exact latest version (by commit) so updates show at once; falls back to @main. */
+(function () { try { if (document.getElementById("aikmRefundJs")) return;
+  function add(ref) { if (document.getElementById("aikmRefundJs")) return; var s = document.createElement("script"); s.id = "aikmRefundJs"; s.defer = true;
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-tab.js"; document.head.appendChild(s); }
+  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
+  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/refund-tab.js&per_page=1")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
+} catch (e) {} })();
