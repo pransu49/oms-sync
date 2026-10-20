@@ -822,7 +822,7 @@ async function runRelistRobot(sellerId) {
   if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
   const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
   const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
-  if (st.ver !== 3) { st.cool = {}; st.ver = 3; }   // v3 (20 Oct 2026): price fix - re-check blocked listings now
+  if (st.ver !== 4) { st.cool = {}; st.ver = 4; }   // v4 (20 Oct 2026): clear rests left by the morning's fixes
   const now = Date.now();
   const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
   const eligible = inv.filter((i) => (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (i.quantity || 0) > 0 && i.price > 0);
@@ -832,7 +832,7 @@ async function runRelistRobot(sellerId) {
   console.log(`Relist robot: ${eligible.length} in-stock self-ship listings, ${checked.length} with fresh offers, ${notSelling.length} not selling.`);
   if (checked.length >= 10 && notSelling.length / checked.length >= RELIST_BREAKER) {
     console.warn(`Relist robot STOPPED: ${notSelling.length} of ${checked.length} look "Not selling" - looks like an account or Amazon problem, nothing changed.`);
-    await stRef.set({ streak: {}, cool: st.cool, ver: 3, lastRun: now, stopped: `${notSelling.length}/${checked.length} not selling` });
+    await stRef.set({ streak: {}, cool: st.cool, ver: 4, lastRun: now, stopped: `${notSelling.length}/${checked.length} not selling` });
     return;
   }
   const streak = {};
@@ -878,9 +878,12 @@ async function runRelistRobot(sellerId) {
         await log(i, { status: 'blocked', why: oldWhy });
         continue;
       }
-      if (status.includes('BUYABLE') && (relistFresh.get(asin) || []).length >= 20) {
-        console.log(`Relist ${oldSku}: Amazon says BUYABLE and ASIN has 20+ offers (ours may be hidden) - skipped.`);
-        st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku]; continue;
+      if (status.includes('BUYABLE')) {
+        // Live and error-free on Amazon - our offer is just not among the offers Amazon returned (many cheaper sellers).
+        console.log(`Relist ${oldSku}: Amazon says BUYABLE - live, not relisted.`);
+        st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
+        await log(i, { status: 'buyable', why: 'Amazon shows this listing as buyable; your offer is just not among the offers Amazon lists (cheaper sellers ahead).' });
+        continue;
       }
       const productType = sum.productType || await productTypeFor(sellerId, oldSku);
       if (!productType) throw new Error('Product type unknown for the old SKU.');
@@ -930,7 +933,7 @@ async function runRelistRobot(sellerId) {
     await new Promise((r) => setTimeout(r, 1500));
   }
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
-  await stRef.set({ streak, cool: st.cool, ver: 3, lastRun: now, stopped: null });
+  await stRef.set({ streak, cool: st.cool, ver: 4, lastRun: now, stopped: null });
 }
 
 // ── Write-back functions ──────────────────────────────────────────────────────────
