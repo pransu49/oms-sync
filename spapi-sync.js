@@ -702,7 +702,7 @@ async function syncCompetitivePricing(asinList) {
 //   • Circuit breaker: if 30%+ of checked listings look "Not selling" (account / API problem),
 //     nothing is changed. Max RELIST_MAX_PER_RUN per run; each ASIN rests 3 days after a relist.
 //   • Turn off any time with the repo variable/secret RELIST_ROBOT=off.
-const RELIST_MAX_PER_RUN = 10, RELIST_STREAK = 2, RELIST_BREAKER = 0.3;
+const RELIST_MAX_PER_RUN = 10, RELIST_SALES_MAX_PER_RUN = 20, RELIST_STREAK = 2, RELIST_BREAKER = 0.3;
 const RELIST_COOLDOWN_OK = 72 * 3600e3, RELIST_COOLDOWN_FAIL = 24 * 3600e3;
 const relistFresh = new Map();   // asin -> offers fetched this run
 const RELIST_OFFER_ATTRS = ['condition_type', 'condition_note', 'list_price', 'merchant_shipping_group', 'product_tax_code',
@@ -749,10 +749,11 @@ async function fixSuppressedPrice(sellerId, i, old, productType) {
   if (!ref) return { done: false, note: 'No other seller price to compare with - change the price by hand.' };
   const kc = await knownCost(i);
   if (!kc) return { done: false, note: 'No confirmed cost (map it on the Amazon page) - price not changed.' };
-  const floor = Math.ceil(kc.cost + PRICE_FIX_MARGIN), mrp = Number(i.mrp) || null;
+  const mrp = Number(i.mrp) || null;
   let target = Math.floor(ref.price - 1);
   if (mrp && target > mrp) target = Math.floor(mrp);
-  if (target < floor) return { done: false, note: `Buy Box ₹${ref.price} is below your cost ₹${kc.cost} + ₹${PRICE_FIX_MARGIN} - price not changed (would sell at a loss).` };
+  const floor = noLossFloor(i, kc.cost, target);
+  if (target < floor) return { done: false, note: `Buy Box ₹${ref.price} is below your no-loss price ₹${floor} (cost ₹${kc.cost} + fees + shipping) - price not changed.` };
   if (Math.abs(target - i.price) < 1) return { done: false, note: `Already at ₹${i.price} (just under ${bb ? 'the Buy Box' : 'the lowest seller'}) - Amazon may need a day to re-check.` };
   if (!productType) return { done: false, note: 'Product type unknown - price not changed.' };
   const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
@@ -765,7 +766,7 @@ async function fixSuppressedPrice(sellerId, i, old, productType) {
     body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer', value: [po] }] } });
   assertListingsOk(await call('VALIDATION_PREVIEW'));
   assertListingsOk(await call(null));
-  const basis = `${bb ? 'Buy Box' : 'lowest seller'} ₹${ref.price} − ₹1 · cost ₹${kc.cost} (${kc.src})`;
+  const basis = `${bb ? 'Buy Box' : 'lowest seller'} ₹${ref.price} − ₹1 · no-loss ₹${floor} (cost ₹${kc.cost} ${kc.src} + fees + shipping)`;
   console.log(`Price fix ${i.sku}: ₹${i.price} -> ₹${target} (${basis})`);
   snapPatch('inventory', `${ACCOUNT_LABEL}_${i.sku}`, { price: target });
   return { done: true, price: target, basis, floor };
@@ -831,35 +832,51 @@ async function runRelistRobot(sellerId) {
   const isNot = (i) => { const o = relistFresh.get(i.asin) || []; return o.length > 0 && !o.some((x) => x.isMine); };
   const notSelling = checked.filter(isNot);
   console.log(`Relist robot: ${eligible.length} in-stock self-ship listings, ${checked.length} with fresh offers, ${notSelling.length} not selling.`);
-  if (checked.length >= 10 && notSelling.length / checked.length >= RELIST_BREAKER) {
-    console.warn(`Relist robot STOPPED: ${notSelling.length} of ${checked.length} look "Not selling" - looks like an account or Amazon problem, nothing changed.`);
-    await stRef.set({ streak: {}, cool: st.cool, ver: 5, lastRun: now, stopped: `${notSelling.length}/${checked.length} not selling` });
-    return;
-  }
+  const breaker = checked.length >= 10 && notSelling.length / checked.length >= RELIST_BREAKER;
+  if (breaker) console.warn(`Relist robot: "Not selling" relists STOPPED - ${notSelling.length} of ${checked.length} look not selling (account or Amazon problem).`);
   const streak = {};
   notSelling.forEach((i) => { streak[i.sku] = (st.streak[i.sku] || 0) + 1; });
-  const ready = notSelling.filter((i) => streak[i.sku] >= RELIST_STREAK && !(st.cool[i.asin] && now < st.cool[i.asin]))
-    .slice(0, RELIST_MAX_PER_RUN);
-  console.log(`Relist robot: ${ready.length} ready (seen ${RELIST_STREAK}+ syncs in a row, not resting).`);
+  const resting = (i) => st.cool[i.asin] && now < st.cool[i.asin];
+  const ready = (breaker ? [] : notSelling.filter((i) => streak[i.sku] >= RELIST_STREAK && !resting(i)))
+    .slice(0, RELIST_MAX_PER_RUN).map((i) => ({ i, reason: 'not_selling' }));
+  // Sales rules (owner, 20 Oct 2026), from this account's orders of the last 90 days:
+  //   Rule 1: sold regularly (4+ orders in days 7-37) but no order in the last 7 days -> relist (listing must be 7+ days old)
+  //   Rule 3: no order in the last 30 days -> relist with the same price (listing must be 30+ days old)
+  const sales = salesByAsin(), taken = new Set(ready.map((x) => x.i.asin));
+  const rule1 = [], rule3 = [];
+  eligible.forEach((i) => {
+    if (taken.has(i.asin) || resting(i)) return;
+    const s2 = sales[i.asin] || { last: Infinity, mid: 0 };
+    if (s2.last >= 7 && s2.mid >= 4) rule1.push({ i, reason: 'sales_stopped_7d', minAge: 7, last: s2.last });
+    else if (s2.last >= 30) rule3.push({ i, reason: 'no_sales_30d', minAge: 30, last: s2.last });
+  });
+  rule3.sort((a, b) => b.last - a.last);
+  const salesReady = rule1.concat(rule3).slice(0, RELIST_SALES_MAX_PER_RUN);
+  ready.push(...salesReady);
+  console.log(`Relist robot: ${ready.length - salesReady.length} not-selling ready; sales rules: ${rule1.length} stopped selling (7 days), ${rule3.length} no sale 30+ days -> ${salesReady.length} this run.`);
   const log = (i, rec) => {
     const doc = { account: ACCOUNT_LABEL, asin: i.asin, name: i.name || '', oldSku: i.sku, price: i.price, mrp: i.mrp || null, qty: i.quantity, at: Date.now(), ...rec };
     snapPatch('pricing', `${ACCOUNT_LABEL}_${i.asin}`, { relist: doc });
     return dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${i.asin}_${doc.at}`).set(doc).catch((e) => console.warn('relist log', e.message || e));
   };
-  for (const i of ready) {
-    const oldSku = i.sku, asin = i.asin;
+  for (const job of ready) {
+    const i = job.i, oldSku = i.sku, asin = i.asin, reason = job.reason;
     let oldWhy = null;
     try {
       const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: oldSku },
         query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries', 'issues'] } });
       const sum = (old.summaries || [])[0] || {}, status = (sum.status || []).map(String);
+      if (job.minAge && sum.createdDate && now - Date.parse(sum.createdDate) < job.minAge * 864e5) {
+        // too new to judge by sales (e.g. a SKU the robot created) - check again once it is old enough
+        st.cool[asin] = Date.parse(sum.createdDate) + job.minAge * 864e5; continue;
+      }
       oldWhy = (old.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').map((x) => x.message).filter(Boolean).join(' | ').slice(0, 400) || null;
       // Suppressed by Amazon for its price: a relist at the same price is suppressed again - show the reason instead.
       if ((old.issues || []).some((x) => (x.severity || '').toUpperCase() === 'ERROR' && (x.categories || []).includes('INVALID_PRICE'))) {
         console.log(`Relist ${oldSku}: Amazon suppressed it for its price (${oldWhy}) - not relisted at the same price.`);
         st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
         const fx = await fixSuppressedPrice(sellerId, i, old, sum.productType || await productTypeFor(sellerId, oldSku)).catch((e) => ({ done: false, note: 'Price change failed: ' + (e.message || e) }));
-        await log(i, fx.done ? { status: 'price_fixed', why: oldWhy, newPrice: fx.price, basis: fx.basis, floor: fx.floor }
+        await log(i, fx.done ? { status: 'price_fixed', reason, why: oldWhy, newPrice: fx.price, basis: fx.basis, floor: fx.floor }
           : { status: 'price_issue', why: oldWhy, fixNote: fx.note || null });
         continue;
       }
@@ -879,7 +896,7 @@ async function runRelistRobot(sellerId) {
         await log(i, { status: 'blocked', why: oldWhy });
         continue;
       }
-      if (status.includes('BUYABLE')) {
+      if (reason === 'not_selling' && status.includes('BUYABLE')) {
         // Live and error-free on Amazon - our offer is just not among the offers Amazon returned (many cheaper sellers).
         console.log(`Relist ${oldSku}: Amazon says BUYABLE - live, not relisted.`);
         st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
@@ -903,7 +920,7 @@ async function runRelistRobot(sellerId) {
       assertListingsOk(pre);
       // 2) real listing
       assertListingsOk(await put(null));
-      console.log(`Relist ${oldSku} -> ${newSku} (ASIN ${asin}) at Rs ${i.price}, MRP ${i.mrp || '-'}, qty ${i.quantity}: ACCEPTED`);
+      console.log(`Relist [${reason}] ${oldSku} -> ${newSku} (ASIN ${asin}) at Rs ${i.price}, MRP ${i.mrp || '-'}, qty ${i.quantity}: ACCEPTED`);
       // 3) delete the old SKU only now
       let delErr = null;
       try {
@@ -917,7 +934,7 @@ async function runRelistRobot(sellerId) {
         if (c != null) await dbMain.collection('aikm_admin').doc('spapiManualCosts').set({ costs: { [newSku]: c } }, { merge: true });
       } catch (e) { console.warn('relist manual cost copy', e.message || e); }
       st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
-      await log(i, { status: delErr ? 'relisted_old_not_deleted' : 'relisted', newSku, error: delErr, why });
+      await log(i, { status: delErr ? 'relisted_old_not_deleted' : 'relisted', reason, newSku, error: delErr, why });
     } catch (e) {
       const error = e.message || String(e);
       if (/not found/i.test(error) && !oldWhy) {
@@ -929,12 +946,86 @@ async function runRelistRobot(sellerId) {
       }
       console.warn(`Relist FAILED for ${oldSku} (ASIN ${asin}):`, error);
       st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
-      await log(i, { status: 'failed', error, why: oldWhy });
+      await log(i, { status: 'failed', reason, error, why: oldWhy });
     }
     await new Promise((r) => setTimeout(r, 1500));
   }
+  // Rule 2: Buy Box lost by Rs 1-5 -> beat it by Rs 1, never at a loss
+  st.bbCool = st.bbCool || {};
+  await runBuyBoxPricer(sellerId, eligible, st, log).catch((e) => console.warn('Buy Box pricer skipped:', e.message || e));
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
-  await stRef.set({ streak, cool: st.cool, ver: 5, lastRun: now, stopped: null });
+  Object.keys(st.bbCool).forEach((a) => { if (st.bbCool[a] < now) delete st.bbCool[a]; });
+  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, ver: 5, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
+}
+
+// Orders per ASIN for this account (snapshot, last 90 days): days since the last order, and orders in days 7-37.
+function salesByAsin() {
+  const out = {}, now = Date.now();
+  Object.values(SNAP.orders).forEach((o) => {
+    if (!o || o.isCanceled || /^(pending|cancel)/i.test(o.status || '') || !o.purchaseDate) return;
+    const age = (now - Date.parse(o.purchaseDate)) / 864e5;
+    (o.items || []).forEach((it) => {
+      if (!it || !it.asin) return;
+      const s = out[it.asin] || (out[it.asin] = { last: Infinity, mid: 0 });
+      s.last = Math.min(s.last, age);
+      if (age >= 7 && age < 37) s.mid++;
+    });
+  });
+  return out;
+}
+
+// ── No-loss floor: cost + Amazon fees + shipping + Rs 1 (same fee rules as the profit column on the Amazon page) ──
+const REF_FEE = { LAUNDRY_DETERGENT: 8, CLEANING_AGENT: 8, TOOTH_CLEANING_AGENT: 8, MOUTHWASH: 8, DEODORANT: 7, SHAMPOO: 8, BODY_WASH: 8,
+  HAIR_CONDITIONER: 8, AIR_FRESHENER: 8, CONDOM: 2, SQUEEGEE: 12, DEFAULT: 8 };   // % above Rs 1000, 0% below
+function easyShipFee(kg) { const n = Math.max(Number(kg) || 0.5, 0.5); return n <= 0.5 ? 55 : n <= 1 ? 75 : n <= 2 ? 112 : n <= 5 ? 112 + 34 * Math.ceil(n - 2) : 214 + 18 * Math.ceil(n - 5); }
+function closingFee(p) { return p <= 300 ? 2 : p <= 500 ? 23 : p <= 1000 ? 48 : 79; }
+function noLossFloor(i, cost, price) {
+  const ref = price > 1000 ? price * (REF_FEE[i.amazonProductType] || REF_FEE.DEFAULT) / 100 : 0;
+  return Math.ceil(cost + Math.max(easyShipFee(i.weightKg), 45) + closingFee(price) + ref + 1);
+}
+const OUR_SELLER_IDS = new Set(['AI66SST976WPS', 'A1KF1CBHR5UA1W', process.env.SPAPI_SELLER_ID].filter(Boolean));
+const BB_GAP_MAX = 5, BB_MAX_PER_RUN = 30, BB_COOL_MS = 6 * 3600e3;
+async function setOfferPrice(sellerId, i, old, productType, price) {
+  const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
+  delete po.start_at; delete po.end_at;
+  ['maximum_seller_allowed_price', 'minimum_seller_allowed_price', 'discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
+  Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL', our_price: [{ schedule: [{ value_with_tax: price }] }] });
+  if (!po.maximum_retail_price && i.mrp) po.maximum_retail_price = [{ schedule: [{ value_with_tax: Number(i.mrp) }] }];
+  const call = (mode) => spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku: i.sku },
+    query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, mode ? { mode } : {}),
+    body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer', value: [po] }] } });
+  assertListingsOk(await call('VALIDATION_PREVIEW'));
+  assertListingsOk(await call(null));
+  snapPatch('inventory', `${ACCOUNT_LABEL}_${i.sku}`, { price });
+}
+async function runBuyBoxPricer(sellerId, eligible, st, log) {
+  const now = Date.now(), L = (o) => (o.price || 0) + (o.shipping || 0), jobs = [];
+  for (const i of eligible) {
+    const offers = relistFresh.get(i.asin) || [], mine = offers.find((o) => o.isMine), win = offers.find((o) => o.isBuyBoxWinner);
+    if (!mine || !win || win.isMine || OUR_SELLER_IDS.has(win.sellerId)) continue;
+    const gap = Math.round((L(mine) - L(win)) * 100) / 100;
+    if (gap > 0 && gap <= BB_GAP_MAX && !(st.bbCool[i.sku] > now)) jobs.push({ i, gap, win });
+  }
+  console.log(`Buy Box pricer: ${jobs.length} listing(s) lost the Buy Box by Rs 1-${BB_GAP_MAX}.`);
+  let changed = 0, skipped = 0;
+  for (const { i, gap, win } of jobs.slice(0, BB_MAX_PER_RUN)) {
+    st.bbCool[i.sku] = now + BB_COOL_MS;
+    try {
+      const kc = await knownCost(i);
+      if (!kc) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no confirmed cost, price not changed (map it on the Amazon page).` }); continue; }
+      const target = Math.floor((i.price - gap - 1) * 100) / 100, floor = noLossFloor(i, kc.cost, target);
+      if (target < floor) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}; beating it needs ₹${target}, below your no-loss price ₹${floor} (cost ₹${kc.cost} + fees + shipping) - not changed.` }); continue; }
+      const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
+        query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries'] } });
+      const productType = ((old.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, i.sku);
+      await setOfferPrice(sellerId, i, old, productType, target);
+      changed++;
+      console.log(`Buy Box pricer ${i.sku}: Rs ${i.price} -> Rs ${target} (lost by Rs ${gap}, no-loss floor Rs ${floor})`);
+      await log(i, { status: 'bb_price', newPrice: target, floor, basis: `Buy Box ₹${L(win)} · lost by ₹${gap} · beat by ₹1 · no-loss ₹${floor}` });
+    } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await log(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  console.log(`Buy Box pricer: ${changed} price(s) lowered, ${skipped} skipped (loss / no cost).`);
 }
 
 // ── Write-back functions ──────────────────────────────────────────────────────────
