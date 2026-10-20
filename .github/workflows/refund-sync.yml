@@ -25,6 +25,7 @@ jobs:
           OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}   # aikm-oms-sync project
+          FIREBASE_SERVICE_ACCOUNT_MAIN: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}   # read-only: Amazon Deliver By dates
           NIMBUS_API_KEY: ${{ secrets.NIMBUS_API_KEY }}
           NIMBUS_API_SECRET: ${{ secrets.NIMBUS_API_SECRET }}
           REFUND_DAYS_BACK: '60'

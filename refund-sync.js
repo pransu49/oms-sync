@@ -249,7 +249,25 @@ async function nimbusShipments() {
   return all.filter((o) => new Date(o.created_at || o.order_date).getTime() >= cutoff);
 }
 // latest non-cancelled shipment per order; keep the order only if that shipment is RTO
-function rtoOrders(ship) {
+// Deliver-by dates from the Amazon (SP-API) sync: MAIN console Firebase, deliverByIndex/<account>
+// (order id -> 'YYYY-MM-DD'). Only accounts connected to SP-API (SASTA STORE, Praso) have it.
+async function loadDeliverBy() {
+  const svc = process.env.FIREBASE_SERVICE_ACCOUNT_MAIN;
+  if (!svc) { console.log('No FIREBASE_SERVICE_ACCOUNT_MAIN - deliver-by rule skipped.'); return {}; }
+  const app = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(svc)) }, 'main');
+  const snap = await app.firestore().collection('deliverByIndex').get();
+  const map = {};
+  snap.forEach((d) => Object.assign(map, (d.data() || {}).orders || {}));
+  console.log(`Deliver-by dates loaded: ${Object.keys(map).length} orders (${snap.docs.map((d) => d.id).join(', ')}).`);
+  return map;
+}
+
+// Refund-pending orders from NimbusPost (latest non-cancelled shipment per order):
+//   rto     - RTO initiated / in transit / out for delivery / delivered  -> shipment returned back
+//   lost    - lost / damaged
+//   late    - still waiting for pickup and Amazon's Deliver By date has passed
+function rtoOrders(ship, deliverBy) {
+  const today = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10); // India date
   const byOrder = {};
   ship.forEach((o) => {
     const st = String(o.order_status || '').toLowerCase();
@@ -259,23 +277,36 @@ function rtoOrders(ship) {
     const t = new Date(o.created_at || o.order_date).getTime() || 0;
     if (!byOrder[id] || t > byOrder[id].t) byOrder[id] = { t, o };
   });
-  const out = {}, latest = {};
+  const out = {}, latest = {}, kinds = { rto: 0, lost: 0, late: 0 };
+  let pickupNoDate = 0;
   Object.entries(byOrder).forEach(([id, { o }]) => {
     const st = String(o.order_status || '').toLowerCase();
     latest[st] = (latest[st] || 0) + 1;
-    const lost = /lost|damage|destroy|dispos|shortage|missing/.test(st);
-    if (!st.startsWith('rto') && !lost) return;
     const sh = o.shipment || {};
-    out[id] = { ns: st.replace(/_/g, ' '), nb: lost ? 'lost' : st === 'rto_delivered' ? 'rto_delivered' : 'rto', aw: String(sh.awb || ''),
-      c: String(sh.courier_name || ''), nd: String(sh.delivered_at || o.updated_at || '').slice(0, 10) };
+    const lost = /lost|damage|destroy|dispos|shortage|missing/.test(st);
+    const pickup = st === 'created' || st === 'new' || st === 'booked' || st === 'manifested' || st.startsWith('pickup_pending') || st.startsWith('pickup_failed') || st === 'pickup_scheduled';
+    let kind = null;
+    if (st.startsWith('rto')) kind = 'rto';
+    else if (lost) kind = 'lost';
+    else if (pickup) {
+      const db = deliverBy[id];
+      if (!db) { pickupNoDate++; return; }
+      if (today > db) kind = 'late';
+    }
+    if (!kind) return;
+    kinds[kind]++;
+    out[id] = { ns: st.replace(/_/g, ' '), nb: kind === 'rto' ? (st === 'rto_delivered' ? 'rto_delivered' : 'rto') : kind, aw: String(sh.awb || ''),
+      c: String(sh.courier_name || ''), nd: String((kind === 'rto' ? sh.delivered_at || o.updated_at : o.updated_at) || '').slice(0, 10),
+      db: deliverBy[id] || '' };
   });
   console.log('NimbusPost latest status per order:', JSON.stringify(latest));
+  console.log(`Refund pending: ${kinds.rto} returned (RTO), ${kinds.lost} lost/damaged, ${kinds.late} not picked up before Deliver By. (${pickupNoDate} pickup-pending order(s) have no Deliver By date - account not on SP-API)`);
   return out;
 }
 
 // Compact record: a=account, o=order id, i=order item id, q=qty, p=item price per unit (incl. tax),
 // s=shipping per unit (incl. tax), t=tax %, st=OMS status, d=order date, ty=payment type, n=product,
-// ns=NimbusPost status, nb=rto|rto_delivered, aw=AWB, c=courier, nd=RTO status date
+// ns=NimbusPost status, nb=rto|rto_delivered|lost|late, aw=AWB, c=courier, nd=status date, db=Amazon Deliver By date
 function slim(row, rto) {
   const ch = row['Channel Name'] || '';
   return Object.assign({
@@ -296,7 +327,7 @@ function slim(row, rto) {
 async function save(list) {
   const svcJson = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!svcJson) throw new Error('Missing FIREBASE_SERVICE_ACCOUNT env var.');
-  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(JSON.parse(svcJson)) });
+  if (!admin.apps.some((a) => a.name === '[DEFAULT]')) admin.initializeApp({ credential: admin.credential.cert(JSON.parse(svcJson)) });
   const ref = admin.firestore().collection('aikm_admin').doc('omsRefundOrders');
 
   // Firestore record limit is 1 MB - stay well under it.
@@ -317,8 +348,8 @@ async function main() {
   await new Promise((r) => setTimeout(r, 1500 + Math.floor(Math.random() * 1500)));
   console.log('Reading NimbusPost shipments (self-ship) ...');
   const ship = await nimbusShipments();
-  const rto = rtoOrders(ship);
-  console.log(`NimbusPost: ${ship.length} shipments in ${DAYS_BACK} days, ${Object.keys(rto).length} order(s) whose latest shipment is RTO / lost / damaged.`);
+  const rto = rtoOrders(ship, await loadDeliverBy());
+  console.log(`NimbusPost: ${ship.length} shipments in ${DAYS_BACK} days, ${Object.keys(rto).length} order(s) refund pending.`);
 
   // OMS Guru's "download" link is always the PREVIOUS export on the account, not the one just asked for.
   // So: 1) queue our long export (the link we get back belongs to someone else - ignored),
@@ -351,7 +382,7 @@ async function main() {
   const matched = new Set(list.map((o) => o.o));
   const notInOms = Object.keys(rto).filter((id) => !matched.has(id));
   const byStatus = {}; list.forEach((o) => { byStatus[o.ns] = (byStatus[o.ns] || 0) + 1; });
-  console.log(`Self-ship RTO lines matched in OMS: ${list.length}`, JSON.stringify(byStatus));
+  console.log(`Refund-pending lines matched in OMS: ${list.length}`, JSON.stringify(byStatus));
   global.__notInOms = notInOms;
   if (notInOms.length) console.log(`RTO in NimbusPost but not found in OMS (${notInOms.length}): ${notInOms.slice(0, 30).join(', ')}`);
   await save(list);
