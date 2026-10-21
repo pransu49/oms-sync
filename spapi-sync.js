@@ -1535,6 +1535,112 @@ async function applyPendingHsnUpdates(sellerId) {
   }
 }
 
+
+// ── ADD ASIN (owner, 21 Oct 2026: "if we add an ASIN in the robot it should list on Amazon, making profit") ──
+// The Amazon page writes spapiAddAsin/{account_asin} = { account, asin, qty, cost?, mrp?, gst?, status:'pending' }.
+// Every sync (quick or full): check the ASIN, cost and competition, pick a PROFITABLE price, list it as a new offer.
+//   price = ₹1 under the Buy Box (incl. shipping) if that still earns ₹15+/order, else the price that earns ₹20/order;
+//           no other seller -> MRP. Never above MRP. No cost known -> waits for a cost (Map it on the page).
+// Result statuses: listed | exists | needs_cost | needs_mrp | blocked | loss | failed  (the page shows each, with Retry).
+const GST_CODE = { 0: 'A_GEN_EXEMPT', 0.25: 'A_GEN_MINIMUM', 3: 'A_GEN_JEWELLERY', 5: 'A_GEN_SUPERREDUCED', 18: 'A_GEN_STANDARD', 40: 'A_GEN_HIGHPEAK' };
+function myUsualShip() {
+  const v = Object.values(SNAP.pricing).filter((p) => p && p.account === ACCOUNT_LABEL).map((p) => ((p.offers || []).find((o) => o.isMine) || {}).shipping)
+    .filter((x) => x != null && x > 0).sort((a, b) => a - b);
+  return v.length ? v[Math.floor(v.length / 2)] : (SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? 74 : 80);
+}
+function priceForProfit(i, cost, ship, want) {
+  for (let p = Math.max(1, Math.floor(cost)); p < cost * 4 + 500; p++) if (orderProfit(i, cost, p, ship) >= want) return p;
+  return null;
+}
+async function applyAddAsinRequests(sellerId) {
+  const snap = await db.collection('spapiAddAsin').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').limit(15).get();
+  if (snap.empty) { console.log('Add ASIN: nothing pending.'); return; }
+  console.log(`Add ASIN: ${snap.size} request(s).`);
+  for (const d of snap.docs) {
+    const r = d.data(), asin = String(r.asin || '').trim().toUpperCase();
+    const done = (patch) => d.ref.set({ ...patch, doneAt: Date.now() }, { merge: true });
+    try {
+      if (!/^[A-Z0-9]{10}$/.test(asin)) { await done({ status: 'failed', error: 'Not a valid ASIN (10 letters/digits).' }); continue; }
+      const mine = Object.values(SNAP.inventory).filter((x) => x && x.account === ACCOUNT_LABEL && x.asin === asin);
+      if (mine.length) { await done({ status: 'exists', sku: mine[0].sku, error: `Already listed as ${mine.map((x) => x.sku).join(', ')} (stock ${mine.map((x) => x.quantity || 0).join(', ')}). Update stock in OMS Guru instead.` }); continue; }
+      // 1) catalogue: name, product type, MRP hint
+      const cat = await spClient.callAPI({ operation: 'getCatalogItem', endpoint: 'catalogItems', path: { asin }, options: { version: '2022-04-01' },
+        query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['summaries', 'productTypes', 'attributes', 'images'] } });
+      const sm = (cat.summaries || [])[0] || {}, ca = cat.attributes || {};
+      const productType = ((cat.productTypes || [])[0] || {}).productType;
+      const name = sm.itemName || r.name || asin;
+      const imgSet = (cat.images || [])[0], img = imgSet && (imgSet.images || []).find((x) => x.variant === 'MAIN');
+      if (!productType) { await done({ status: 'failed', name, error: 'Amazon has no product type for this ASIN - it may not be sellable in India.' }); continue; }
+      // 2) can we sell it?
+      let restricted = null;
+      try {
+        const rr = await spClient.callAPI({ operation: 'getListingsRestrictions', endpoint: 'listingsRestrictions', query: { asin, sellerId, marketplaceIds: [MARKETPLACE_ID], conditionType: 'new_new' } });
+        restricted = (rr.restrictions || []).flatMap((x) => (x.reasons || []).map((y) => y.message || y.reasonCode)).filter(Boolean).join(' | ') || null;
+      } catch (e) { console.warn(`Add ASIN restriction check failed for ${asin}:`, e.message || e); }
+      if (restricted) { await done({ status: 'blocked', name, img: img ? img.link : null, error: restricted.slice(0, 300) }); continue; }
+      // 3) cost (typed on the page, or the ASIN's LOTS / vendor mapping) and MRP
+      let sku = 'N-' + asin; for (let n = 2; SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`]; n++) sku = `N-${asin}-${n}`;
+      const i = { sku, asin, name, account: ACCOUNT_LABEL, amazonProductType: productType, weightKg: 0.5, price: 0, taxCode: null };
+      const kc = Number(r.cost) > 0 ? { cost: Number(r.cost), src: 'typed' } : await knownCost(i);
+      if (!kc) { await done({ status: 'needs_cost', name, img: img ? img.link : null, error: 'No cost known. Click Map (or type the cost) and press Retry.' }); continue; }
+      const mrpCat = Number(((((ca.maximum_retail_price || [])[0] || {}).value) ?? (((ca.list_price || [])[0] || {}).value)) || 0) || null;
+      const mrp = Number(r.mrp) > 0 ? Number(r.mrp) : (await knownMrp(i)) || mrpCat;
+      if (!mrp) { await done({ status: 'needs_mrp', name, img: img ? img.link : null, error: 'No MRP found. Type the MRP and press Retry.' }); continue; }
+      let gst = Number.isFinite(Number(r.gst)) && r.gst !== '' && r.gst != null ? Number(r.gst) : null;
+      if (gst == null) { const c = await loadCostData(), m = c.map[asin]; const p = m && m.code && c.lots[String(m.code)]; const g = p ? Number(p.gst) : (m && m.vendor ? Number(m.vendor.gst) : NaN); if (Number.isFinite(g)) gst = g; }
+      i.taxCode = gst != null && GST_CODE[gst] ? GST_CODE[gst] : null; i.mrp = mrp;
+      // 4) competition -> profitable price
+      let offers = [];
+      try {
+        const res = await spClient.callAPI({ operation: 'getItemOffers', endpoint: 'productPricing', path: { Asin: asin }, query: { MarketplaceId: MARKETPLACE_ID, ItemCondition: 'New' } });
+        offers = (res.Offers || res.payload?.Offers || []).map((o) => ({ sellerId: o.SellerId, price: parseFloat(o.ListingPrice?.Amount) || 0, shipping: parseFloat(o.Shipping?.Amount) || 0, bb: !!o.IsBuyBoxWinner }))
+          .filter((o) => o.price > 0 && !OUR_SELLER_IDS.has(o.sellerId));
+      } catch (e) { console.warn(`Add ASIN offers failed for ${asin}:`, e.message || e); }
+      const L = (o) => o.price + o.shipping, ship = myUsualShip();
+      const ref = offers.find((o) => o.bb) || offers.slice().sort((a, b) => L(a) - L(b))[0];
+      const p15 = priceForProfit(i, kc.cost, ship, MIN_PROFIT), p20 = priceForProfit(i, kc.cost, ship, TARGET_PROFIT);
+      if (p15 == null || p15 > mrp) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Earning ₹${MIN_PROFIT}/order needs ₹${p15 || '?'}, above MRP ₹${mrp} (cost ₹${kc.cost}). Not listed.` }); continue; }
+      let price, basis;
+      if (!ref) { price = Math.floor(mrp); basis = 'No other seller - listed at MRP'; }
+      else {
+        const win = Math.floor(L(ref) - 1 - ship);
+        if (orderProfit(i, kc.cost, win, ship) >= MIN_PROFIT) { price = win; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} incl. shipping − ₹1`; }
+        else { price = p20 && p20 <= mrp ? p20 : p15; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} is too cheap to match with profit - listed at the ₹${price === p20 ? TARGET_PROFIT : MIN_PROFIT}/order price`; }
+      }
+      price = Math.min(price, Math.floor(mrp));
+      const profit = Math.round(orderProfit(i, kc.cost, price, ship));
+      // 5) list it (dry run first)
+      const qty = Math.max(1, Math.min(999, parseInt(r.qty) || 10));
+      const attributes = {
+        condition_type: [{ value: 'new_new', marketplace_id: MARKETPLACE_ID }],
+        merchant_suggested_asin: [{ value: asin, marketplace_id: MARKETPLACE_ID }],
+        purchasable_offer: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', audience: 'ALL', our_price: [{ schedule: [{ value_with_tax: price }] }], maximum_retail_price: [{ schedule: [{ value_with_tax: mrp }] }] }],
+        fulfillment_availability: [{ fulfillment_channel_code: 'DEFAULT', quantity: qty }],
+        skip_offer: [{ value: false, marketplace_id: MARKETPLACE_ID }],
+      };
+      if (i.taxCode) attributes.product_tax_code = [{ value: i.taxCode, marketplace_id: MARKETPLACE_ID }];
+      const put = (mode) => spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku },
+        query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, mode ? { mode } : {}), body: { productType, requirements: 'LISTING_OFFER_ONLY', attributes } });
+      let pre = await put('VALIDATION_PREVIEW');
+      const missing = (pre.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').flatMap((x) => x.attributeNames || []).filter((k) => ca[k] && !attributes[k]);
+      if (missing.length) { missing.forEach((k) => { attributes[k] = ca[k]; }); pre = await put('VALIDATION_PREVIEW'); }
+      assertListingsOk(pre);
+      assertListingsOk(await put(null));
+      if (r.cost && Number(r.cost) > 0) await dbMain.collection('aikm_admin').doc('spapiManualCosts').set({ costs: { [sku]: Number(r.cost) } }, { merge: true }).catch(() => {});
+      console.log(`Relist [new ASIN] ${sku} (ASIN ${asin}) at Rs ${price}, MRP ${mrp}, qty ${qty}, profit Rs ${profit}/order: ACCEPTED`);
+      await done({ status: 'listed', sku, name, img: img ? img.link : null, price, mrp, qty, cost: kc.cost, costSrc: kc.src, profit, basis, ship });
+      const at = Date.now();
+      await dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${asin}_${at}`).set({ account: ACCOUNT_LABEL, asin, name, oldSku: sku, newSku: sku, price, mrp, qty, at,
+        status: 'new_listing', profit, basis: `${basis} · profit ₹${profit}/order · live in ~2 h · link ${sku} in OMS Guru` }).catch(() => {});
+    } catch (e) {
+      const error = (e.message || String(e)).slice(0, 400);
+      console.warn(`Add ASIN FAILED for ${asin}:`, error);
+      await done({ status: 'failed', error });
+    }
+    await new Promise((res) => setTimeout(res, 1200));
+  }
+}
+
 async function applyPendingNewListings(sellerId) {
   const pendingSnap = await db.collection('spapiNewListingRequests')
     .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
@@ -1885,6 +1991,7 @@ async function run() {
     console.log('Step 0d: applying any pending HSN/tax code updates...');
     await applyPendingHsnUpdates(sellerId).catch((e) => console.warn('Skipped applyPendingHsnUpdates (sync continues):', e.message || e));
     console.log('Step 0e: applying any pending new-listing requests...');
+    await applyAddAsinRequests(sellerId).catch((e) => console.warn('Skipped Add ASIN (sync continues):', e.message || e));
     await applyPendingNewListings(sellerId).catch((e) => console.warn('Skipped applyPendingNewListings (sync continues):', e.message || e));
     console.log('Step 0f: applying any pending listing deletions...');
     await applyPendingListingDeletions(sellerId).catch((e) => console.warn('Skipped applyPendingListingDeletions (sync continues):', e.message || e));
