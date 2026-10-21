@@ -708,7 +708,7 @@ async function syncCompetitivePricing(asinList) {
 //   • Turn off any time with the repo variable/secret RELIST_ROBOT=off.
 // RELIST_SALES_RULES: 7-day / 30-day no-sale relists - switched OFF 21 Oct 2026 (same-price relists did not win sales; price does).
 const RELIST_SALES_RULES = false;
-const RELIST_MAX_PER_RUN = 10, RELIST_SALES_MAX_PER_RUN = 20, RELIST_STREAK = 2, RELIST_BREAKER = 0.3;
+const RELIST_MAX_PER_RUN = 20, RELIST_SALES_MAX_PER_RUN = 20, RELIST_STREAK = 2, RELIST_BREAKER = 0.3;
 const RELIST_COOLDOWN_OK = 72 * 3600e3, RELIST_COOLDOWN_FAIL = 24 * 3600e3;
 const relistFresh = new Map();   // asin -> offers fetched this run
 const RELIST_OFFER_ATTRS = ['condition_type', 'condition_note', 'list_price', 'merchant_shipping_group', 'product_tax_code',
@@ -733,6 +733,15 @@ async function loadCostData() {
   return costData;
 }
 function bestSlab(p) { const s = (p && p.slabs) || []; let b = null; s.forEach((x) => { const v = Number(x.price); if (v > 0 && (b == null || v < b)) b = v; }); return b; }
+async function knownMrp(i) {
+  const c = await loadCostData(), m = c.map[i.asin] || c.map[String(i.asin).toUpperCase()];
+  if (!m) return null;
+  if (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS') { const v = Number(m.vendor && m.vendor.mrp); return v > 0 ? v : null; }
+  const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : (m.code ? [{ code: m.code, qty: 1 }] : []);
+  let t = 0;
+  for (const x of parts) { const p = c.lots[String(x.code)], v = Number(p && p.mrp); if (!(v > 0)) return null; t += v * Math.max(1, Number(x.qty) || 1) / Math.max(1, parseInt(x.lotsPack) || 1); }
+  return t > 0 ? Math.round(t * 100) / 100 : null;
+}
 async function knownCost(i) {
   const c = await loadCostData();
   const man = Number(c.manual[i.sku]); if (man > 0) return { cost: man, src: 'manual cost' };
@@ -909,9 +918,9 @@ async function runRelistRobot(sellerId) {
       }
       const soldToday = ((salesByAsin()[asin] || {}).last ?? Infinity) < 1;   // 21 Oct: was 7 days - kept 8 hidden listings unsold; relists came back live 75 of 83 times
       if (reason === 'not_selling' && status.includes('BUYABLE') && soldToday) {
-        // Amazon says it is live AND it had an order in the last 7 days - it is selling, keep it.
-        console.log(`Relist ${oldSku}: Amazon says BUYABLE and it sold in the last 7 days - not relisted.`);
-        st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
+        // Amazon says it is live AND it had an order in the last 24 hours - it is selling, keep it (re-check in 12 h).
+        console.log(`Relist ${oldSku}: Amazon says BUYABLE and it sold in the last 24 hours - not relisted.`);
+        st.cool[asin] = now + 12 * 3600e3;   // re-check in 12 h delete streak[oldSku];
         await log(i, { status: 'buyable', why: 'Amazon shows this listing as buyable and it sold in the last 24 hours; your offer is just not among the offers Amazon lists (cheaper sellers ahead).' });
         continue;
       }
@@ -919,6 +928,11 @@ async function runRelistRobot(sellerId) {
       if (!productType) throw new Error('Product type unknown for the old SKU.');
       const newSku = relistNewSku(oldSku);
       if (!newSku) throw new Error('Could not make a free new SKU name.');
+      if (!i.mrp && !(((old.attributes || {}).purchasable_offer || [])[0] || {}).maximum_retail_price) {
+        const mm = await knownMrp(i);   // Amazon India rejects an offer without MRP (33-5PE9, 21 Oct 2026)
+        if (mm) i.mrp = mm;
+        else { st.cool[asin] = now + RELIST_COOLDOWN_FAIL; await log(i, { status: 'failed', reason, error: 'No MRP on this listing and none in LOTS / vendor mapping. Add the MRP on the Amazon page (MRP box → Push), then the robot relists it.' }); continue; }
+      }
       const oa = old.attributes || {}, attributes = relistAttributes(oa, i);
       const why = (old.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').map((x) => x.message).filter(Boolean).join(' | ').slice(0, 400);
       const put = (mode) => spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku: newSku },
