@@ -711,7 +711,7 @@ const RELIST_SALES_RULES = false;
 const RELIST_MAX_PER_RUN = 20, RELIST_SALES_MAX_PER_RUN = 20, RELIST_STREAK = 1, RELIST_BREAKER = 0.3;
 // Owner 21 Oct 2026: "any ASIN not selling must be relisted again" - zero not-selling target. Short rests only:
 // a new offer needs ~2 h to go live, so every listing is re-checked after 3 h and relisted again if still hidden.
-const RELIST_COOLDOWN_OK = 3 * 3600e3, RELIST_COOLDOWN_FAIL = 3 * 3600e3, RELIST_COOLDOWN_BLOCKED = 24 * 3600e3;
+const RELIST_COOLDOWN_OK = 3 * 3600e3, RELIST_COOLDOWN_FAIL = 3 * 3600e3, RELIST_COOLDOWN_BLOCKED = 24 * 3600e3, RELIST_CAP_WEEK = 2;
 const relistFresh = new Map();   // asin -> offers fetched this run
 const RELIST_OFFER_ATTRS = ['condition_type', 'condition_note', 'list_price', 'merchant_shipping_group', 'product_tax_code',
   'max_order_quantity', 'gift_options', 'country_of_origin', 'item_package_quantity', 'batteries_required',
@@ -848,6 +848,13 @@ async function runRelistRobot(sellerId) {
   const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
   if (st.ver !== 9) { st.cool = {}; st.ver = 9; }   // v9 (21 Oct 2026): price-blocked listings now relisted - re-check all now   // v7 (21 Oct 2026): hidden-but-buyable listings relisted, blocked prices fixed with min limit - re-check all now   // v6 (20 Oct 2026): live-but-not-selling listings are now relisted too - re-check them
   const now = Date.now();
+  if (!st.rel) {    // first run with the relist cap: count this week's relists from the log
+    st.rel = {};
+    try {
+      const q = await dbMain.collection('spapiRelistLog').where('at', '>', now - 7 * 864e5).get();
+      q.forEach((d) => { const x = d.data(); if (x.account === ACCOUNT_LABEL && /^relisted/.test(x.status || '') && x.asin) (st.rel[x.asin] = st.rel[x.asin] || []).push(x.at); });
+    } catch (e) { console.warn('relist history not loaded:', e.message || e); }
+  }
   if (!st.pfix) {   // first run with this rule: price fixes already done in the last 24 h count as tried
     st.pfix = {};
     try {
@@ -944,6 +951,16 @@ async function runRelistRobot(sellerId) {
         await log(i, { status: 'buyable', why: 'Amazon shows this listing as buyable and it sold in the last 24 hours; your offer is just not among the offers Amazon lists (cheaper sellers ahead).' });
         continue;
       }
+      // Account safety (owner, 21 Oct 2026): at most RELIST_CAP_WEEK relists per ASIN in 7 days. Endless
+      // delete-and-relist churn on one ASIN can look like listing manipulation to Amazon - hand it to the owner instead.
+      st.rel = st.rel || {};
+      const recent = (st.rel[asin] || []).filter((t) => now - t < 7 * 864e5);
+      if (recent.length >= RELIST_CAP_WEEK) {
+        console.log(`Relist ${oldSku}: already relisted ${recent.length} times in 7 days - not relisted again (needs a manual check).`);
+        st.cool[asin] = now + RELIST_COOLDOWN_BLOCKED; delete streak[oldSku];
+        await log(i, { status: 'failed', reason, error: `Relisted ${recent.length} times this week and still hidden. The robot stops here to keep the account safe - check this listing in Seller Central (Inventory → Fix stranded / suppressed).` });
+        continue;
+      }
       const productType = sum.productType || await productTypeFor(sellerId, oldSku);
       if (!productType) throw new Error('Product type unknown for the old SKU.');
       const newSku = relistNewSku(oldSku);
@@ -980,6 +997,7 @@ async function runRelistRobot(sellerId) {
         if (c != null) await dbMain.collection('aikm_admin').doc('spapiManualCosts').set({ costs: { [newSku]: c } }, { merge: true });
       } catch (e) { console.warn('relist manual cost copy', e.message || e); }
       st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
+      st.rel = st.rel || {}; st.rel[asin] = (st.rel[asin] || []).filter((t) => now - t < 7 * 864e5).concat([now]);
       await log(i, { status: delErr ? 'relisted_old_not_deleted' : 'relisted', reason, newSku, error: delErr, why });
     } catch (e) {
       const error = e.message || String(e);
@@ -1003,7 +1021,7 @@ async function runRelistRobot(sellerId) {
   Object.keys(st.bbCool).forEach((a) => { if (st.bbCool[a] < now) delete st.bbCool[a]; });
   pruneLearn(st.learn);
   Object.keys(st.pfix || {}).forEach((a) => { if (now - st.pfix[a] > 3 * 864e5) delete st.pfix[a]; });
-  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, pfix: st.pfix || {}, ver: 9, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
+  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, pfix: st.pfix || {}, rel: st.rel || {}, ver: 9, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
 }
 
 // Orders per ASIN for this account (snapshot, last 90 days): days since the last order, and orders in days 7-37.
