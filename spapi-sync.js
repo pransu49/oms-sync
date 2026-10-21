@@ -1552,15 +1552,54 @@ function priceForProfit(i, cost, ship, want) {
   for (let p = Math.max(1, Math.floor(cost)); p < cost * 4 + 500; p++) if (orderProfit(i, cost, p, ship) >= want) return p;
   return null;
 }
+
+// Barcode -> ASIN(s) via the Catalog API (tries EAN, UPC, GTIN). Returns [{ asin, name }].
+async function asinsForBarcode(code) {
+  const types = code.length === 12 ? ['UPC', 'EAN', 'GTIN'] : code.length === 14 ? ['GTIN', 'EAN'] : ['EAN', 'GTIN', 'UPC'];
+  for (const t of types) {
+    try {
+      const res = await spClient.callAPI({ operation: 'searchCatalogItems', endpoint: 'catalogItems', options: { version: '2022-04-01' },
+        query: { marketplaceIds: [MARKETPLACE_ID], identifiers: [code], identifiersType: t, includedData: ['summaries'], pageSize: 10 } });
+      const items = res.items || res.payload?.items || [];
+      if (items.length) return items.map((x) => ({ asin: x.asin, name: (((x.summaries || [])[0] || {}).itemName) || '' }));
+    } catch (e) { console.warn(`Barcode lookup (${t}) failed for ${code}:`, e.message || e); }
+    await new Promise((res) => setTimeout(res, 600));
+  }
+  return [];
+}
+// Same barcode in the LOTS catalogue -> save the ASIN's LOTS mapping (cost, MRP, GST then come from LOTS).
+async function mapByBarcode(asin, code) {
+  const c = await loadCostData(), strip = (x) => String(x || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (c.map[asin]) return null;   // already mapped - keep the owner's mapping
+  const p = Object.values(c.lots).find((x) => x && x.barcode && strip(x.barcode) === strip(code));
+  if (!p) return null;
+  const rec = { code: String(p.code), name: p.name || '', vendorName: 'LOTS', parts: [{ code: String(p.code), name: p.name || '', qty: 1 }], savedAt: new Date().toISOString(), source: 'barcode' };
+  await dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').set({ map: { [asin]: rec } }, { merge: true });
+  c.map[asin] = rec;
+  console.log(`Add ASIN: barcode ${code} = LOTS ${p.code} (${p.name}) - mapped to ${asin}.`);
+  return p;
+}
 async function applyAddAsinRequests(sellerId) {
   const snap = await db.collection('spapiAddAsin').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').limit(15).get();
   if (snap.empty) { console.log('Add ASIN: nothing pending.'); return; }
   console.log(`Add ASIN: ${snap.size} request(s).`);
   for (const d of snap.docs) {
-    const r = d.data(), asin = String(r.asin || '').trim().toUpperCase();
+    const r = d.data();
+    let asin = String(r.asin || '').trim().toUpperCase();
     const done = (patch) => d.ref.set({ ...patch, doneAt: Date.now() }, { merge: true });
     try {
-      if (!/^[A-Z0-9]{10}$/.test(asin)) { await done({ status: 'failed', error: 'Not a valid ASIN (10 letters/digits).' }); continue; }
+      // Barcode printed on the product (EAN/UPC/GTIN) -> find the ASIN, and the LOTS item with the same barcode
+      const barcode = String(r.barcode || (/^\d{8}$|^\d{12,14}$/.test(asin) ? asin : '')).replace(/\D/g, '');
+      let lotsHit = null;
+      if (barcode) {
+        const found = await asinsForBarcode(barcode);
+        if (!found.length) { await done({ status: 'failed', barcode, error: `No Amazon product found for barcode ${barcode}. Check the number, or add it by ASIN.` }); continue; }
+        const own = found.find((a) => Object.values(SNAP.inventory).some((x) => x && x.account === ACCOUNT_LABEL && x.asin === a.asin));
+        asin = (own || found[0]).asin;
+        await d.ref.set({ asin, barcode, alsoAsins: found.slice(0, 5).map((x) => x.asin) }, { merge: true });
+        lotsHit = await mapByBarcode(asin, barcode);
+      }
+      if (!/^[A-Z0-9]{10}$/.test(asin)) { await done({ status: 'failed', error: 'Not a valid ASIN (10 letters/digits) or barcode (8, 12, 13 or 14 digits).' }); continue; }
       const mine = Object.values(SNAP.inventory).filter((x) => x && x.account === ACCOUNT_LABEL && x.asin === asin);
       if (mine.length) { await done({ status: 'exists', sku: mine[0].sku, error: `Already listed as ${mine.map((x) => x.sku).join(', ')} (stock ${mine.map((x) => x.quantity || 0).join(', ')}). Update stock in OMS Guru instead.` }); continue; }
       // 1) catalogue: name, product type, MRP hint
@@ -1582,6 +1621,7 @@ async function applyAddAsinRequests(sellerId) {
       let sku = 'N-' + asin; for (let n = 2; SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`]; n++) sku = `N-${asin}-${n}`;
       const i = { sku, asin, name, account: ACCOUNT_LABEL, amazonProductType: productType, weightKg: 0.5, price: 0, taxCode: null };
       const kc = Number(r.cost) > 0 ? { cost: Number(r.cost), src: 'typed' } : await knownCost(i);
+      if (kc && lotsHit && !(Number(r.cost) > 0)) kc.src = 'LOTS barcode match';
       if (!kc) { await done({ status: 'needs_cost', name, img: img ? img.link : null, error: 'No cost known. Click Map (or type the cost) and press Retry.' }); continue; }
       const mrpCat = Number(((((ca.maximum_retail_price || [])[0] || {}).value) ?? (((ca.list_price || [])[0] || {}).value)) || 0) || null;
       const mrp = Number(r.mrp) > 0 ? Number(r.mrp) : (await knownMrp(i)) || mrpCat;
