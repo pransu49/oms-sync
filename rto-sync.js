@@ -85,7 +85,7 @@ async function main() {
     (d.data().orders || []).forEach((o) => {
       const id = baseOrder(o.channelOrderId); if (!id) return;
       const acc = String(o.channel || '').replace(/\s*-\s*(Amazon|Meesho|Flipkart|Snapdeal|Shopify).*$/i, '').trim();
-      omsBy[id] = { it: { t: String(o.productName || o.sku || '').slice(0, 90), sku: o.sku || '', asin: o.asin || '', q: num(o.qty) || 1 }, n: o.buyerName || '', ci: o.buyerCity || '', st: o.buyerState || '', pin: o.buyerPincode || '', pay: o.orderType || '', a: o.awb || '', acc, ch: o.channel || '', inv: o.invoiceNumber || '' };
+      omsBy[id] = { os: o.status || '', it: { t: String(o.productName || o.sku || '').slice(0, 90), sku: o.sku || '', asin: o.asin || '', q: num(o.qty) || 1 }, n: o.buyerName || '', ci: o.buyerCity || '', st: o.buyerState || '', pin: o.buyerPincode || '', pay: o.orderType || '', a: o.awb || '', acc, ch: o.channel || '', inv: o.invoiceNumber || '' };
       if (o.awb) accByAwb[o.awb] = acc;
     });
   });
@@ -161,6 +161,7 @@ async function main() {
     const m = omsBy[x.o]; if (!m) return;
     x.n = x.n || m.n; x.ci = x.ci || m.ci; x.st = x.st || m.st; x.pin = x.pin || m.pin;
     x.pay = x.pay || m.pay; x.acc = x.acc || m.acc; x.inv = x.inv || m.inv;
+    if (m.os) x.om = m.os;
     if ((!x.items || !x.items.length) && m.it && m.it.t) x.items = [m.it];
     if (m.a && !x.a) x.a = m.a; else if (m.a && m.a !== x.a && m.a !== x.a2) x.a2 = m.a;
   });

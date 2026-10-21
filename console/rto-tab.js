@@ -225,7 +225,8 @@
       '<div class="rt-ids"><span>AWB ' + hl(r.a || "—") + "</span>" + (r.a2 ? "<span>AWB " + hl(r.a2) + "</span>" : "") +
         (r.ra ? "<span>Return ID " + hl(r.ra) + "</span>" : "") + (rec.id ? "<span>Return ID " + hl(rec.id) + " ✓</span>" : "") + "</div>" +
       (money ? '<div class="rt-money">' + money + "</div>" : "") +
-      (rec.r ? '<div class="rt-money">' + (rec.cond === "bad" ? '<span class="rt-tag cust">Damaged</span> ' : "") + omsLine(rec) + "</div>" : "") +
+      (rec.r ? '<div class="rt-money">' + (rec.cond === "bad" ? '<span class="rt-tag cust">Damaged</span> ' : "") + omsLine(rec) + "</div>" :
+        r.om ? '<div class="rt-money"><span class="rt-muted">OMS Guru status: ' + esc(r.om) + (/return received/i.test(r.om) ? " ✓ (already accepted there)" : "") + "</span></div>" : "") +
     '</div><div class="rt-act">' +
       (S.pend && (r._t + " " + (rec.id || "")).indexOf(S.pend) < 0 ? '<button type="button" class="btn-gold" data-rt-link="' + esc(r.o) + '"><i class="ti ti-link"></i> This is the parcel</button>' : "") +
       actions(r, rec) +
