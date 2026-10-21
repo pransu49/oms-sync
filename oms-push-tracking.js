@@ -1,9 +1,9 @@
 // oms-push-tracking.js
-// Pushes NimbusPost AWBs into OMS Guru using OMS Guru's own "Bulk Update Order Details" import
+// Pushes NimbusPost (and Zippy) AWBs into OMS Guru using OMS Guru's own "Bulk Update Order Details" import
 // (the same CSV you upload by hand at client.omsguru.com/import_data).
 //
 // Picks: Amazon orders in OMS Guru still New / Ready to ship / Packed with NO AWB (OMS refuses updates after Shipped),
-// where NimbusPost already has an AWB (not cancelled).
+// where NimbusPost already has an AWB (not cancelled) — or, when NimbusPost has none, the uploaded Zippy export does.
 // Fills: Channel Id, Channel Order Id, Sub Order Id = ALL, Shipment Tracker, Shipping Company, Shipment Date.
 // Order Status is left empty (OMS Guru says not to set it).
 //
@@ -68,10 +68,20 @@ async function main() {
   const nimbus = {}; let nbAll = {};
   if (nbDoc.exists) { try { nbAll = nbDoc.get('data') ? JSON.parse(nbDoc.get('data')) : (nbDoc.get('orders') || {}); } catch (e) { nbAll = nbDoc.get('orders') || {}; } }
   Object.entries(nbAll).forEach(([k, v]) => { nimbus[nid(k)] = v; });
+  // Zippy AWBs (uploaded in the console: Self-Ship -> Zippy file -> Upload Zippy export) fill in where NimbusPost has none
+  const zpDoc = await db.collection('aikm_admin').doc('zippyIndex').get();
+  let zpAll = {}; try { zpAll = zpDoc.exists && zpDoc.get('data') ? JSON.parse(zpDoc.get('data')) : {}; } catch (e) { zpAll = {}; }
+  let fromZippy = 0;
+  Object.entries(zpAll).forEach(([k, v]) => {
+    const id = nid(k), n = nimbus[id];
+    if (!v || !v.a || v.s === 'cancelled') return;
+    if (n && n.a && n.s !== 'cancelled') return;                      // NimbusPost already has a live AWB for this order
+    nimbus[id] = { a: String(v.a), c: v.c || '', s: 'zippy' }; fromZippy++;
+  });
   const logRef = db.collection('aikm_admin').doc('omsTrackingPush');
   const logDoc = await logRef.get();
   const pushed = (logDoc.exists && logDoc.get('ids')) || {};
-  console.log(`OMS orders: ${oms.length} · NimbusPost AWBs: ${Object.keys(nimbus).length} · previously pushed: ${Object.keys(pushed).length}`);
+  console.log(`OMS orders: ${oms.length} · NimbusPost + Zippy AWBs: ${Object.keys(nimbus).length} (Zippy ${fromZippy}) · previously pushed: ${Object.keys(pushed).length}`);
 
   // 2) pick orders
   const byOrder = {};

@@ -1,12 +1,12 @@
 // amazon-confirm.js
-// Confirms self-ship orders on Amazon (Orders API: confirmShipment) with the NimbusPost AWB.
+// Confirms self-ship orders on Amazon (Orders API: confirmShipment) with the NimbusPost or Zippy AWB.
 // Accounts: the ones with an SP-API refresh token (Praso, Sasta Store).
 //
 // An order is confirmed when ALL are true:
 //   - Amazon self-ship order of that account in OMS Guru (has buyer phone)
 //   - OMS Guru status is still New / Ready to ship / Packed (= not yet confirmed anywhere)
 //   - OMS Guru already holds the AWB (so OMS never ends up "Shipped" without AWB)
-//   - NimbusPost has the same AWB and the shipment is not cancelled
+//   - NimbusPost (or the uploaded Zippy export) has the same AWB and the shipment is not cancelled
 // DRY_RUN=true  -> only lists what it would confirm.   PROBE=true -> permission test only.
 
 const SellingPartnerAPI = require('amazon-sp-api');
@@ -90,6 +90,15 @@ async function main() {
   const nimbus = {}; let nbAll = {};
   if (nbDoc.exists) { try { nbAll = nbDoc.get('data') ? JSON.parse(nbDoc.get('data')) : (nbDoc.get('orders') || {}); } catch (e) { nbAll = nbDoc.get('orders') || {}; } }
   Object.entries(nbAll).forEach(([k, v]) => { nimbus[nid(k)] = v; });
+  // Zippy AWBs (uploaded Zippy export) count the same as NimbusPost when NimbusPost has no live AWB for the order
+  const zpDoc = await db.collection('aikm_admin').doc('zippyIndex').get();
+  let zpAll = {}; try { zpAll = zpDoc.exists && zpDoc.get('data') ? JSON.parse(zpDoc.get('data')) : {}; } catch (e) { zpAll = {}; }
+  Object.entries(zpAll).forEach(([k, v]) => {
+    const id = nid(k), n = nimbus[id];
+    if (!v || !v.a || v.s === 'cancelled') return;
+    if (n && n.a && n.s !== 'cancelled') return;
+    nimbus[id] = { a: String(v.a), c: v.c || '', s: 'zippy' };
+  });
   const logRef = db.collection('aikm_admin').doc('amazonConfirm');
   const logDoc = await logRef.get();
   const done = (logDoc.exists && logDoc.get('ids')) || {};
