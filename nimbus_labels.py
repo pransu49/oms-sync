@@ -83,6 +83,24 @@ def oms_orders(sla, acct):
     return out
 
 
+def deliver_by_dates():
+    """Amazon 'Deliver by' dates saved by the SP-API sync (deliverByIndex/<account>): {orderId: 'YYYY-MM-DD'}"""
+    out = {}
+    try:
+        for d in db.collection('deliverByIndex').stream():
+            out.update((d.to_dict() or {}).get('orders') or {})
+    except Exception as e:
+        print('Deliver-by dates skipped:', e)
+    return out
+
+
+def dd_text(ymd_s):
+    try:
+        return 'DELIVER BY: ' + dt.datetime.strptime(ymd_s, '%Y-%m-%d').strftime('%a, %d %b %Y').upper()
+    except (TypeError, ValueError):
+        return ''
+
+
 # ---------------------------------------------------------------- 2. shipments from NimbusPost
 def nb_get(url):
     for i in range(5):
@@ -218,13 +236,27 @@ def clean(s):
     return re.sub(r'\s+', ' ', s).strip()
 
 
-def stamp(page, items, seq, total):
+def stamp(page, items, seq, total, dd=''):
     W, H = page.rect.width, page.rect.height
     top, bot = blank_band(page)
     pad = 3
     if bot - top < 18:  # no room: thin strip at the very bottom
         top, bot = H - 30, H - 2
-    top, bot = top + pad, min(bot - pad, top + pad + 74)
+    top, bot = top + pad, min(bot - pad, top + pad + (90 if dd else 74))
+    if dd:  # Amazon "Deliver by" date: white text on a black strip, above the product name
+        if bot - top >= 36:
+            sh = 13
+            page.draw_rect(pymupdf.Rect(W * 0.04, top, W * 0.96, top + sh), color=(0, 0, 0), fill=(0, 0, 0))
+            fs = 9
+            while pymupdf.get_text_length(dd, 'hebo', fs) > W * 0.9 and fs > 5:
+                fs -= 0.5
+            page.insert_text((W / 2 - pymupdf.get_text_length(dd, 'hebo', fs) / 2, top + sh - 3.5), dd, fontname='hebo', fontsize=fs, color=(1, 1, 1))
+            top += sh + 3
+        else:  # label too full: small tag in the top-left corner
+            fs = 6
+            tw = pymupdf.get_text_length(dd, 'hebo', fs) + 6
+            page.draw_rect(pymupdf.Rect(2, 1, 2 + tw, 10), color=(0, 0, 0), fill=(0, 0, 0))
+            page.insert_text((5, 8), dd, fontname='hebo', fontsize=fs, color=(1, 1, 1))
     band_h = bot - top
     multi = len(items) > 1
     total_q = sum(q for _, q in items)
@@ -316,7 +348,8 @@ def main():
         srcs.update(batch_labels(rest))
     no_label = [k for k in ids if k not in srcs]
 
-    note('running', step=f'Printing product names on {len(srcs)} labels…')
+    dds = deliver_by_dates()
+    note('running', step=f'Printing product names + deliver-by dates on {len(srcs)} labels…')
     out = pymupdf.open()
     final = [k for k in ids if k in srcs]
     TW, TH = 283.92, 426.0  # NimbusPost 4x6 label — Amazon Shipping's A4 labels are scaled to fit
@@ -328,7 +361,7 @@ def main():
         else:
             np_ = out.new_page(width=TW, height=TH)
             np_.show_pdf_page(np_.rect, d, p, keep_proportion=True)
-        stamp(out[-1], orders[k]['items'], i + 1, len(final))
+        stamp(out[-1], orders[k]['items'], i + 1, len(final), dd_text(dds.get(k)))
     data = out.tobytes(garbage=3, deflate=True)
 
     name = f'labels/{job_ref.id}.pdf'
