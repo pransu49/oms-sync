@@ -308,7 +308,7 @@ def main():
     job = (job_ref.get().to_dict() or {}) if JOB_ID else {}
     sla = (job.get('sla') or os.environ.get('SLA') or '').strip()
     acct = (job.get('acct') if JOB_ID else os.environ.get('ACCT')) or ''
-    only_new = bool(job.get('onlyNew')) if JOB_ID else os.environ.get('ONLY_NEW') == 'true'
+    only_new = False  # always include every label — re-downloading the same SLA date must always work
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', sla):
         raise RuntimeError('No SLA date given')
     note('running', step='Reading OMS Guru orders…', sla=sla, acct=acct)
