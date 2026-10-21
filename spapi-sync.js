@@ -748,34 +748,39 @@ async function knownCost(i) {
   }
   return { cost: Math.round(cost * 100) / 100, src: 'LOTS' };
 }
-async function fixSuppressedPrice(sellerId, i, old, productType) {
-  const offers = (relistFresh.get(i.asin) || []).filter((o) => !o.isMine && o.price > 0);
-  const bb = offers.find((o) => o.isBuyBoxWinner), low = offers[0];
-  const ref = bb || low;
-  if (!ref) return { done: false, note: 'No other seller price to compare with - change the price by hand.' };
+// Amazon lists at most 20 offers. When all 20 are cheaper than us our offer is simply not in the list:
+// that is a price problem (the Buy Box pricer handles it), not a listing to relist.
+function pricedOut(i, o) {
+  if (o.length < 20) return false;
+  const L = (x) => (x.price || 0) + (x.shipping || 0), mine = (i.price || 0) + myShipCharge(i);
+  return mine > Math.max(...o.map(L));
+}
+async function fixSuppressedPrice(sellerId, i, old, productType, why) {
+  // Owner, 21 Oct 2026: blocked listings must come back live at a profitable price.
+  // Target = ₹1 under the Buy Box (landed, incl. shipping). If that earns under ₹15/order, go live at the lowest
+  // price that earns ₹15 instead (listed and earning beats suppressed). The listing's own min/max price limits are
+  // moved to fit (Amazon error 18155 "below your minimum price threshold" was blocking 4 listings).
+  const L = (o) => (o.price || 0) + (o.shipping || 0);
+  const offers = (relistFresh.get(i.asin) || []).filter((o) => !o.isMine && o.price > 0).sort((x, y) => L(x) - L(y));
+  const bb = offers.find((o) => o.isBuyBoxWinner), ref = bb || offers[0];
   const kc = await knownCost(i);
   if (!kc) return { done: false, note: 'No confirmed cost (map it on the Amazon page) - price not changed.' };
-  const mrp = Number(i.mrp) || null;
-  let target = Math.floor(ref.price - 1);
-  if (mrp && target > mrp) target = Math.floor(mrp);
-  const floor = noLossFloor(i, kc.cost, target);
-  if (target < floor) return { done: false, note: `Buy Box ₹${ref.price} is below your no-loss price ₹${floor} (cost ₹${kc.cost} + fees + shipping) - price not changed.` };
-  if (Math.abs(target - i.price) < 1) return { done: false, note: `Already at ₹${i.price} (just under ${bb ? 'the Buy Box' : 'the lowest seller'}) - Amazon may need a day to re-check.` };
   if (!productType) return { done: false, note: 'Product type unknown - price not changed.' };
-  const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
-  delete po.start_at; delete po.end_at;
-  ['maximum_seller_allowed_price', 'minimum_seller_allowed_price', 'discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
-  Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL', our_price: [{ schedule: [{ value_with_tax: target }] }] });
-  if (!po.maximum_retail_price && mrp) po.maximum_retail_price = [{ schedule: [{ value_with_tax: mrp }] }];
-  const call = (mode) => spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku: i.sku },
-    query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, mode ? { mode } : {}),
-    body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer', value: [po] }] } });
-  assertListingsOk(await call('VALIDATION_PREVIEW'));
-  assertListingsOk(await call(null));
-  const basis = `${bb ? 'Buy Box' : 'lowest seller'} ₹${ref.price} − ₹1 · no-loss ₹${floor} (cost ₹${kc.cost} ${kc.src} + fees + shipping)`;
+  const ship = myShipCharge(i), mrp = Number(i.mrp) || null;
+  const floor = Math.ceil(noLossFloor(i, kc.cost, i.price, ship));
+  let target = ref ? Math.floor(L(ref) - 1 - ship) : Math.max(i.price, floor);
+  let basis = ref ? `${bb ? 'Buy Box' : 'lowest seller'} ₹${Math.round(L(ref))} incl. shipping − ₹1` : 'no other seller';
+  if (orderProfit(i, kc.cost, target, ship) < MIN_PROFIT) { target = floor; basis = `lowest price that earns ₹${MIN_PROFIT}/order (Buy Box too cheap to match)`; }
+  if (/low pricing error/i.test(why || '') && target <= i.price) { target = Math.ceil(i.price) + 1; basis = 'Amazon flagged the price as too low - re-submitted ₹1 higher'; }
+  if (mrp && target > mrp) {
+    if (floor > mrp) return { done: false, note: `Earning ₹${MIN_PROFIT}/order needs ₹${floor}, above MRP ₹${mrp} - check the cost (${kc.src} ₹${kc.cost}).` };
+    target = Math.floor(mrp);
+  }
+  await setOfferPrice(sellerId, i, old, productType, target);   // also moves min/max limits so the price fits
+  const profit = orderProfit(i, kc.cost, target, ship);
+  basis += ` · profit ₹${Math.round(profit)}/order`;
   console.log(`Price fix ${i.sku}: ₹${i.price} -> ₹${target} (${basis})`);
-  snapPatch('inventory', `${ACCOUNT_LABEL}_${i.sku}`, { price: target });
-  return { done: true, price: target, basis, floor };
+  return { done: true, price: target, basis, floor, profit };
 }
 
 // New offer = the old listing's own offer block (Amazon India keeps MRP inside purchasable_offer as
@@ -830,12 +835,12 @@ async function runRelistRobot(sellerId) {
   if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
   const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
   const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
-  if (st.ver !== 6) { st.cool = {}; st.ver = 6; }   // v6 (20 Oct 2026): live-but-not-selling listings are now relisted too - re-check them
+  if (st.ver !== 7) { st.cool = {}; st.ver = 7; }   // v7 (21 Oct 2026): hidden-but-buyable listings relisted, blocked prices fixed with min limit - re-check all now   // v6 (20 Oct 2026): live-but-not-selling listings are now relisted too - re-check them
   const now = Date.now();
   const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
   const eligible = inv.filter((i) => (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (i.quantity || 0) > 0 && i.price > 0);
   const checked = eligible.filter((i) => relistFresh.has(i.asin));
-  const isNot = (i) => { const o = relistFresh.get(i.asin) || []; return o.length > 0 && !o.some((x) => x.isMine); };
+  const isNot = (i) => { const o = relistFresh.get(i.asin) || []; return o.length > 0 && !o.some((x) => x.isMine) && !pricedOut(i, o); };
   const notSelling = checked.filter(isNot);
   console.log(`Relist robot: ${eligible.length} in-stock self-ship listings, ${checked.length} with fresh offers, ${notSelling.length} not selling.`);
   const breaker = checked.length >= 10 && notSelling.length / checked.length >= RELIST_BREAKER;
@@ -881,7 +886,7 @@ async function runRelistRobot(sellerId) {
       if ((old.issues || []).some((x) => (x.severity || '').toUpperCase() === 'ERROR' && (x.categories || []).includes('INVALID_PRICE'))) {
         console.log(`Relist ${oldSku}: Amazon suppressed it for its price (${oldWhy}) - not relisted at the same price.`);
         st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
-        const fx = await fixSuppressedPrice(sellerId, i, old, sum.productType || await productTypeFor(sellerId, oldSku)).catch((e) => ({ done: false, note: 'Price change failed: ' + (e.message || e) }));
+        const fx = await fixSuppressedPrice(sellerId, i, old, sum.productType || await productTypeFor(sellerId, oldSku), oldWhy).catch((e) => ({ done: false, note: 'Price change failed: ' + (e.message || e) }));
         await log(i, fx.done ? { status: 'price_fixed', reason, why: oldWhy, newPrice: fx.price, basis: fx.basis, floor: fx.floor }
           : { status: 'price_issue', why: oldWhy, fixNote: fx.note || null });
         continue;
@@ -902,12 +907,12 @@ async function runRelistRobot(sellerId) {
         await log(i, { status: 'blocked', why: oldWhy });
         continue;
       }
-      const soldLast7 = ((salesByAsin()[asin] || {}).last ?? Infinity) < 7;
-      if (reason === 'not_selling' && status.includes('BUYABLE') && soldLast7) {
+      const soldToday = ((salesByAsin()[asin] || {}).last ?? Infinity) < 1;   // 21 Oct: was 7 days - kept 8 hidden listings unsold; relists came back live 75 of 83 times
+      if (reason === 'not_selling' && status.includes('BUYABLE') && soldToday) {
         // Amazon says it is live AND it had an order in the last 7 days - it is selling, keep it.
         console.log(`Relist ${oldSku}: Amazon says BUYABLE and it sold in the last 7 days - not relisted.`);
         st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
-        await log(i, { status: 'buyable', why: 'Amazon shows this listing as buyable and it sold in the last 7 days; your offer is just not among the offers Amazon lists (cheaper sellers ahead).' });
+        await log(i, { status: 'buyable', why: 'Amazon shows this listing as buyable and it sold in the last 24 hours; your offer is just not among the offers Amazon lists (cheaper sellers ahead).' });
         continue;
       }
       const productType = sum.productType || await productTypeFor(sellerId, oldSku);
@@ -963,7 +968,7 @@ async function runRelistRobot(sellerId) {
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
   Object.keys(st.bbCool).forEach((a) => { if (st.bbCool[a] < now) delete st.bbCool[a]; });
   pruneLearn(st.learn);
-  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, ver: 6, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
+  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, ver: 7, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
 }
 
 // Orders per ASIN for this account (snapshot, last 90 days): days since the last order, and orders in days 7-37.
@@ -1101,7 +1106,9 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   const now = Date.now(), L = (o) => (o.price || 0) + (o.shipping || 0), lower = [], raise = [];
   for (const i of eligible) {
     if (st.bbCool[i.sku] > now) continue;
-    const offers = relistFresh.get(i.asin) || [], mine = offers.find((o) => o.isMine), win = offers.find((o) => o.isBuyBoxWinner);
+    const offers = relistFresh.get(i.asin) || [], win = offers.find((o) => o.isBuyBoxWinner);
+    let mine = offers.find((o) => o.isMine);
+    if (!mine && pricedOut(i, offers)) mine = { price: i.price, shipping: myShipCharge(i), isMine: true };   // hidden behind 20 cheaper offers
     if (!mine || !win) continue;
     if (win.isMine) {
       const next = offers.filter((o) => !o.isMine && !OUR_SELLER_IDS.has(o.sellerId) && o.price > 0).sort((x, y) => L(x) - L(y))[0];
