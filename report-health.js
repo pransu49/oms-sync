@@ -33,8 +33,31 @@ if (status !== 'success') {
   else { reason = 'Sync failed'; fix = 'Share the log with Claude.'; }
 }
 
+// ---- Telegram alerts (AIKM_OPS_ALERTS_bot) ----
+// 1) A robot stops  -> one alert (repeated at most every 6 hours while it stays broken)
+// 2) It works again -> one "working again" alert
+// 3) Robot actions in this run (price changes, relists, refunds, SLA due) -> one grouped message
+const { notify, istNow } = require('./telegram');
+const ACTION_RULES = [
+  [/Buy Box pricer (LOWER|RAISE) /, 'price'],
+  [/^\s*Price fix /, 'price'],
+  [/Robot learning REVERT /, 'price'],
+  [/^\s*Relist \[.*ACCEPTED/, 'relist'],
+  [/^Finished: \d+ refunded/, 'refund'],
+];
+const clean = (l) => l.replace(/^\S+Z\s+/, '').replace(/\s+/g, ' ').trim();
+function actionLines() {
+  const out = { price: [], relist: [], refund: [] };
+  lines.forEach((l) => { const r = ACTION_RULES.find(([re]) => re.test(l)); if (r) out[r[1]].push(clean(l)); });
+  return out;
+}
+const slaLine = lines.find((l) => /^SLA_ALERT:/.test(l));
+const slaList = lines.filter((l) => /^SLA_ITEM:/.test(l)).map((l) => l.replace(/^SLA_ITEM:\s*/, ''));
+const short = (arr, n) => arr.slice(0, n).join('\n') + (arr.length > n ? `\n…and ${arr.length - n} more (see the console)` : '');
+
 (async () => {
   admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
+  const db = admin.firestore();
   const run = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
   const entry = {
     label, ok: status === 'success', status, reason, fix,
@@ -43,16 +66,60 @@ if (status !== 'success') {
   };
   if (status !== 'success') { entry.log = tail; entry.failedAt = admin.firestore.FieldValue.serverTimestamp(); }
   else entry.log = lines.slice(-40).join('\n').slice(-8000);
-  const ref = admin.firestore().collection('aikm_admin').doc('syncHealth');
+  const ref = db.collection('aikm_admin').doc('syncHealth');
+  let prev = null;
+  try { prev = (await ref.get()).get(key) || null; } catch (e) { /* unknown - treat as first run */ }
+  const ms = (t) => (t && t.toMillis ? t.toMillis() : 0);
+
+  // --- alerts ---
+  const alertRef = db.collection('aikm_admin').doc('telegramAlerts');
+  const today = istNow();
+  try {
+    if (status !== 'success' && status !== 'cancelled') {
+      const lastAlert = prev && !prev.ok ? ms(prev.alertedAt) : 0;
+      if (!lastAlert || Date.now() - lastAlert > 6 * 3600e3) {
+        const again = lastAlert ? ' (still not working)' : '';
+        await notify(`🔴 ${label} stopped${again}\n\nWhy: ${reason || 'Unknown'}\nWhat to do: ${fix || 'Share the log with Claude.'}${entry.error ? '\n\nError: ' + entry.error.slice(0, 200) : ''}\n\nDetails: ${run}`);
+        entry.alertedAt = admin.firestore.FieldValue.serverTimestamp();
+      } else entry.alertedAt = prev.alertedAt;
+    } else if (status === 'success' && prev && prev.ok === false && prev.alertedAt) {
+      await notify(`✅ ${label} is working again.`);
+    }
+
+    if (status === 'success') {
+      const a = actionLines();
+      const acc = /sasta/i.test(key) ? ' (Sasta Store)' : /praso/i.test(key) ? ' (Praso)' : '';
+      const parts = [];
+      if (a.price.length) parts.push(`💰 Price changes${acc}: ${a.price.length}\n` + short(a.price, 12));
+      if (a.relist.length) parts.push(`🔁 Relisted${acc}: ${a.relist.length}\n` + short(a.relist, 8));
+      if (a.refund.length) parts.push('💸 Bulk refund\n' + a.refund.join('\n'));
+      const inc = admin.firestore.FieldValue.increment;
+      const counts = {};
+      if (a.price.length) counts.price = inc(a.price.length);
+      if (a.relist.length) counts.relist = inc(a.relist.length);
+      if (a.refund.length) { const m = a.refund[0].match(/(\d+) refunded, (\d+) failed/); if (m) { counts.refundOk = inc(+m[1]); counts.refundFail = inc(+m[2]); } }
+      if (parts.length) await notify(parts.join('\n\n'));
+      if (Object.keys(counts).length) await alertRef.set({ day: { [today.date]: counts } }, { merge: true });
+
+      // SLA due: at most twice a day (morning + afternoon), only 9 am - 8 pm
+      if (slaLine && today.hour >= 9 && today.hour <= 20) {
+        const slot = `${today.date}-${today.hour < 14 ? 'am' : 'pm'}`;
+        const st = (await alertRef.get()).data() || {};
+        if (st.slaSlot !== slot) {
+          await notify(`📦 ${slaLine.replace(/^SLA_ALERT:\s*/, '')}\n\n${short(slaList, 15)}`);
+          await alertRef.set({ slaSlot: slot }, { merge: true });
+        }
+      }
+      if (slaLine) { const n = slaLine.match(/(\d+) order/); if (n) await alertRef.set({ day: { [today.date]: { slaDue: +n[1] } } }, { merge: true }); }
+    }
+  } catch (e) { console.log('Alert step skipped:', e.message); }
+
   // Every open console tab re-reads this document each time it changes. A healthy sync that was
   // already reported healthy in the last 25 minutes is not re-saved (saves thousands of reads/day).
-  if (status === 'success') {
-    try {
-      const prev = (await ref.get()).get(key);
-      const at = prev && prev.at && prev.at.toMillis ? prev.at.toMillis() : 0;
-      if (prev && prev.ok && Date.now() - at < 25 * 60e3) { console.log(`Health unchanged (${key} ok) - not re-saved.`); return; }
-    } catch (e) { /* fall through and save */ }
+  if (status === 'success' && prev && prev.ok && Date.now() - ms(prev.at) < 25 * 60e3) {
+    console.log(`Health unchanged (${key} ok) - not re-saved.`); return;
   }
+  if (status === 'success') entry.alertedAt = null;
   await ref.set({ [key]: entry }, { merge: true });
   console.log(`Health saved: ${key} = ${status}${reason ? ' (' + reason + ')' : ''}`);
 })().catch((e) => { console.log('Could not save health report:', e.message); });

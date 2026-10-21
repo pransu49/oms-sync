@@ -1,0 +1,23 @@
+name: Daily Telegram summary
+
+on:
+  schedule:
+    - cron: '23 15 * * *'   # ~8:53 pm IST (GitHub may run it a little late)
+  workflow_dispatch:         # "Run workflow" button = send the summary now
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install firebase-admin
+      - name: Send summary
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node daily-summary.js

@@ -338,6 +338,36 @@ async function saveReadyToConfirm(orders) {
   console.log(`Ready to confirm on Amazon (have AWB, not shipped): ${list.length} line(s).`);
 }
 
+
+// Prints SLA_ALERT / SLA_ITEM lines for orders due today (or overdue) that are not shipped yet.
+// report-health.js turns them into a Telegram alert (max twice a day).
+const MON = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+function toIso(str) {
+  const t = String(str || '').trim(); let m;
+  if ((m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  if ((m = t.match(/^(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4})/))) return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  if ((m = t.match(/^(\d{1,2})[-\s]([A-Za-z]{3})[A-Za-z]*[-\s,]+(\d{4})/)) && MON[m[2].toLowerCase()]) return `${m[3]}-${String(MON[m[2].toLowerCase()]).padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  if ((m = t.match(/^([A-Za-z]{3})[A-Za-z]*\s+(\d{1,2}),?\s+(\d{4})/)) && MON[m[1].toLowerCase()]) return `${m[3]}-${String(MON[m[1].toLowerCase()]).padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  return '';
+}
+function slaCheck(orders) {
+  try {
+    const today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+    const due = {};
+    orders.forEach((o) => {
+      if (!/^(new|ready to ship|packed|pending|confirmed)$/i.test(String(o.status || '').trim())) return;
+      const d = toIso(o.slaDate); if (!d || d > today) return;
+      const id = o.channelOrderId || o.invoiceNumber; if (!id || due[id]) return;
+      due[id] = { id, d, lbl: !!String(o.awb || '').trim(), ch: String(o.channel || '').slice(0, 22), p: String(o.productName || '').slice(0, 35) };
+    });
+    const list = Object.values(due).sort((a, b) => a.d.localeCompare(b.d));
+    if (!list.length) { console.log('SLA check: nothing due today that is unshipped.'); return; }
+    const over = list.filter((x) => x.d < today).length;
+    console.log(`SLA_ALERT: ${list.length} order(s) due to ship today are not shipped yet${over ? ` (${over} already overdue)` : ''}`);
+    list.forEach((x) => console.log(`SLA_ITEM: ${x.d < today ? '⏰ OVERDUE ' : ''}${x.id} · ${x.ch} · ${x.p}${x.lbl ? ' · label ready' : ' · NO label'}`));
+  } catch (e) { console.log('SLA check skipped:', e.message); }
+}
+
 async function main() {
   console.log(`Logging into OMS Guru as ${EMAIL}...`);
   await login();
@@ -355,6 +385,7 @@ async function main() {
   const orders = rawRows.map(slimOrder);
   await pushToFirestore(orders);
   await saveReadyToConfirm(orders);
+  slaCheck(orders);
   console.log('Done.');
 }
 
