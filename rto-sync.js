@@ -35,8 +35,14 @@ async function call(sp, args) {
   throw new Error('Amazon kept throttling ' + args.operation);
 }
 
-async function report(sp, type, days) {
-  const body = { reportType: type, marketplaceIds: [MP], dataStartTime: new Date(Date.now() - days * 864e5).toISOString(), dataEndTime: new Date().toISOString() };
+// Amazon allows at most 30 days per orders report -> ask in 30-day windows and join them
+async function reportWindows(sp, type, days) {
+  let out = [];
+  for (let from = days; from > 0; from -= 30) out = out.concat(await report(sp, type, from, Math.max(0, from - 30)));
+  return out;
+}
+async function report(sp, type, days, toDays = 0) {
+  const body = { reportType: type, marketplaceIds: [MP], dataStartTime: new Date(Date.now() - days * 864e5).toISOString(), dataEndTime: new Date(Date.now() - toDays * 864e5).toISOString() };
   const { reportId } = await call(sp, { operation: 'createReport', endpoint: 'reports', body });
   for (let i = 0; i < 40; i++) {
     await sleep(15000);
@@ -96,7 +102,7 @@ async function main() {
     const sp = new SellingPartnerAPI({ region: 'eu', refresh_token: acc.token, credentials: { SELLING_PARTNER_APP_CLIENT_ID: process.env.SPAPI_CLIENT_ID, SELLING_PARTNER_APP_CLIENT_SECRET: process.env.SPAPI_CLIENT_SECRET } });
     try {
       const ret = await report(sp, 'GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE', RET_DAYS);
-      const ord = await report(sp, 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL', ORD_DAYS);
+      const ord = await reportWindows(sp, 'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL', ORD_DAYS);
       const byOrder = {}; ord.forEach((r) => { (byOrder[r['amazon-order-id']] = byOrder[r['amazon-order-id']] || []).push(r); });
       const returnedIds = new Set(ret.map((r) => r['order id']));
       // orders Amazon marks as returned to seller but with no return request yet (rare) also count
