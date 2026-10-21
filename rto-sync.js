@@ -168,7 +168,7 @@ async function main() {
   const list = Object.values(rows).map((x) => {
     // one simple status for the screen
     x.k = /undeliver/i.test(x.ty || '') || /^UND/i.test(x.rs || '') || (x.nb && !x.ty) ? 'rto' : 'cust';
-    x.s = x.rd || x.nd ? 'back' : 'way';
+    x.s = x.rd || x.nd || /returned to seller/i.test(x.os || '') ? 'back' : 'way';
     return x;
   }).sort((a, b) => String(b.rq || b.cr || b.d).localeCompare(String(a.rq || a.cr || a.d)));
 
