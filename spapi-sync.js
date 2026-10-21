@@ -33,7 +33,7 @@ let SYNC_MODE = String(process.env.SYNC_MODE || 'full').toLowerCase() === 'fast'
 // A queued full sync is often cancelled by the next quick sync (GitHub keeps only one waiting run), so the
 // robot silently skipped hours (21 Oct 2026). Any quick sync now upgrades itself to FULL when the last
 // full sync is older than this - the robot can no longer be skipped.
-const FULL_DUE_MS = { praso: 65 * 60e3, sastastore: 100 * 60e3 };
+const FULL_DUE_MS = { praso: 55 * 60e3, sastastore: 55 * 60e3 };   // owner 21 Oct: robot every hour on both accounts
 const RUN_STARTED = Date.now();
 let ordersSyncedOk = false;
 let deliveryBackfillRun = false;
@@ -708,8 +708,10 @@ async function syncCompetitivePricing(asinList) {
 //   • Turn off any time with the repo variable/secret RELIST_ROBOT=off.
 // RELIST_SALES_RULES: 7-day / 30-day no-sale relists - switched OFF 21 Oct 2026 (same-price relists did not win sales; price does).
 const RELIST_SALES_RULES = false;
-const RELIST_MAX_PER_RUN = 20, RELIST_SALES_MAX_PER_RUN = 20, RELIST_STREAK = 2, RELIST_BREAKER = 0.3;
-const RELIST_COOLDOWN_OK = 72 * 3600e3, RELIST_COOLDOWN_FAIL = 24 * 3600e3;
+const RELIST_MAX_PER_RUN = 20, RELIST_SALES_MAX_PER_RUN = 20, RELIST_STREAK = 1, RELIST_BREAKER = 0.3;
+// Owner 21 Oct 2026: "any ASIN not selling must be relisted again" - zero not-selling target. Short rests only:
+// a new offer needs ~2 h to go live, so every listing is re-checked after 3 h and relisted again if still hidden.
+const RELIST_COOLDOWN_OK = 3 * 3600e3, RELIST_COOLDOWN_FAIL = 3 * 3600e3, RELIST_COOLDOWN_BLOCKED = 24 * 3600e3;
 const relistFresh = new Map();   // asin -> offers fetched this run
 const RELIST_OFFER_ATTRS = ['condition_type', 'condition_note', 'list_price', 'merchant_shipping_group', 'product_tax_code',
   'max_order_quantity', 'gift_options', 'country_of_origin', 'item_package_quantity', 'batteries_required',
@@ -844,7 +846,7 @@ async function runRelistRobot(sellerId) {
   if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
   const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
   const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
-  if (st.ver !== 7) { st.cool = {}; st.ver = 7; }   // v7 (21 Oct 2026): hidden-but-buyable listings relisted, blocked prices fixed with min limit - re-check all now   // v6 (20 Oct 2026): live-but-not-selling listings are now relisted too - re-check them
+  if (st.ver !== 8) { st.cool = {}; st.ver = 8; }   // v7 (21 Oct 2026): hidden-but-buyable listings relisted, blocked prices fixed with min limit - re-check all now   // v6 (20 Oct 2026): live-but-not-selling listings are now relisted too - re-check them
   const now = Date.now();
   const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
   const eligible = inv.filter((i) => (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (i.quantity || 0) > 0 && i.price > 0);
@@ -858,7 +860,7 @@ async function runRelistRobot(sellerId) {
   notSelling.forEach((i) => { streak[i.sku] = (st.streak[i.sku] || 0) + 1; });
   const resting = (i) => st.cool[i.asin] && now < st.cool[i.asin];
   const ready = (breaker ? [] : notSelling.filter((i) => streak[i.sku] >= RELIST_STREAK && !resting(i)))
-    .slice(0, RELIST_MAX_PER_RUN).map((i) => ({ i, reason: 'not_selling', minAge: 1 }));   // new SKUs: Amazon needs ~2 h to make them live
+    .slice(0, RELIST_MAX_PER_RUN).map((i) => ({ i, reason: 'not_selling', minAge: 3 / 24 }));   // a SKU under 3 h old is still going live - not judged yet
   // Sales rules (owner, 20 Oct 2026), from this account's orders of the last 90 days:
   //   Rule 1: sold regularly (4+ orders in days 7-37) but no order in the last 7 days -> relist (listing must be 7+ days old)
   //   Rule 3: no order in the last 30 days -> relist with the same price (listing must be 30+ days old)
@@ -912,15 +914,15 @@ async function runRelistRobot(sellerId) {
       if (restricted || transparency) {
         oldWhy = restricted || transparency.message.slice(0, 300);
         console.log(`Relist ${oldSku}: cannot sell this ASIN (${oldWhy}) - not relisted.`);
-        st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
+        st.cool[asin] = now + RELIST_COOLDOWN_BLOCKED; delete streak[oldSku];
         await log(i, { status: 'blocked', why: oldWhy });
         continue;
       }
       const soldToday = ((salesByAsin()[asin] || {}).last ?? Infinity) < 1;   // 21 Oct: was 7 days - kept 8 hidden listings unsold; relists came back live 75 of 83 times
       if (reason === 'not_selling' && status.includes('BUYABLE') && soldToday) {
-        // Amazon says it is live AND it had an order in the last 24 hours - it is selling, keep it (re-check in 12 h).
+        // Amazon says it is live AND it had an order in the last 24 hours - it is selling, keep it (re-check in 3 h).
         console.log(`Relist ${oldSku}: Amazon says BUYABLE and it sold in the last 24 hours - not relisted.`);
-        st.cool[asin] = now + 12 * 3600e3;   // re-check in 12 h delete streak[oldSku];
+        st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];   // re-check in 3 h
         await log(i, { status: 'buyable', why: 'Amazon shows this listing as buyable and it sold in the last 24 hours; your offer is just not among the offers Amazon lists (cheaper sellers ahead).' });
         continue;
       }
@@ -982,7 +984,7 @@ async function runRelistRobot(sellerId) {
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
   Object.keys(st.bbCool).forEach((a) => { if (st.bbCool[a] < now) delete st.bbCool[a]; });
   pruneLearn(st.learn);
-  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, ver: 7, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
+  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, ver: 8, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
 }
 
 // Orders per ASIN for this account (snapshot, last 90 days): days since the last order, and orders in days 7-37.
@@ -1076,7 +1078,7 @@ function noLossFloor(i, cost, price, ship = myShipCharge(i)) {
   return Math.ceil(price - orderProfit(i, cost, price, ship) + MIN_PROFIT);
 }
 const OUR_SELLER_IDS = new Set(['AI66SST976WPS', 'A1KF1CBHR5UA1W', process.env.SPAPI_SELLER_ID].filter(Boolean));
-const BB_MAX_PER_RUN = 40, BB_MAX_RAISE_PER_RUN = 30, BB_MAX_CUT = 0.3, BB_MAX_RAISE = 0.2, BB_COOL_MS = 6 * 3600e3;
+const BB_MAX_PER_RUN = 80, BB_MAX_RAISE_PER_RUN = 30, BB_MAX_CUT = 0.3, BB_MAX_RAISE = 0.2, BB_COOL_MS = 2 * 3600e3;   // re-check each price every 2 h for maximum Buy Box
 async function setOfferPrice(sellerId, i, old, productType, price) {
   const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
   delete po.start_at; delete po.end_at;
