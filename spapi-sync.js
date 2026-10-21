@@ -29,7 +29,11 @@ const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
 // QUICK vs FULL sync
 //   quick (every 15 min): write-backs, orders changed since last sync, stock/price/MRP report.
 //   full  (hourly Praso / 2-hourly Sasta Store): everything, incl. competitor prices & buy box.
-const SYNC_MODE = String(process.env.SYNC_MODE || 'full').toLowerCase() === 'fast' ? 'fast' : 'full';
+let SYNC_MODE = String(process.env.SYNC_MODE || 'full').toLowerCase() === 'fast' ? 'fast' : 'full';
+// A queued full sync is often cancelled by the next quick sync (GitHub keeps only one waiting run), so the
+// robot silently skipped hours (21 Oct 2026). Any quick sync now upgrades itself to FULL when the last
+// full sync is older than this - the robot can no longer be skipped.
+const FULL_DUE_MS = { praso: 65 * 60e3, sastastore: 100 * 60e3 };
 const RUN_STARTED = Date.now();
 let ordersSyncedOk = false;
 let deliveryBackfillRun = false;
@@ -1815,6 +1819,13 @@ async function publishListingIndex() {
 }
 
 async function run() {
+  if (SYNC_MODE === 'fast') {
+    try {
+      const m = (await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_meta`).get()).data() || {};
+      const due = FULL_DUE_MS[ACCOUNT_LABEL] || 65 * 60e3, age = m.fullSyncedAt ? Date.now() - m.fullSyncedAt : Infinity;
+      if (age > due) { SYNC_MODE = 'full'; console.log(`Last full sync ${Math.round(age / 60e3)} min ago (due every ${due / 60e3} min) - running FULL now.`); }
+    } catch (e) { console.warn('Full-sync due check skipped:', e.message || e); }
+  }
   console.log(`=== ${SYNC_MODE === 'fast' ? 'QUICK' : 'FULL'} sync for ${ACCOUNT_LABEL} ===`);
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
   const test = await spClient.callAPI({ operation: 'getMarketplaceParticipations', endpoint: 'sellers' });
