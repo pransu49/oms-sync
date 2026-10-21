@@ -18,7 +18,11 @@
       var col = fbDb.collection("aikm_admin").doc("data").collection("entriesChunks"), prev = {}, ids;
       if (typeof __entriesListenerLive !== "undefined" && __entriesListenerLive) { Object.assign(prev, entriesChunksHashCache); ids = new Set(Object.keys(entriesChunksHashCache)); }
       else { var s = await col.get(); s.docs.forEach(function (d) { prev[d.id] = d.data().hash; }); ids = new Set(s.docs.map(function (d) { return d.id; })); }
-      var B = 32; while (all.length / B > 400) B *= 2;
+      // OMS Guru orders are NOT saved here: every console tab already builds them itself from the OMS
+      // Guru data it listens to. Saving them (≈10,000 rows, re-stamped each day) made every save rewrite
+      // everything. Only orders from files you upload by hand are saved.
+      all = all.filter(function (e) { return !(e && e.sourceFile === "OMS Guru (auto-sync)"); });
+      var B = 8; while (all.length / B > 400) B *= 2;
       var buckets = []; for (var i = 0; i < B; i++) buckets.push([]);
       all.forEach(function (e) { var k = key(e); buckets[h(k) % B].push({ k: k, j: JSON.stringify(e), e: e }); });
       var used = new Set(), wrote = 0;
@@ -39,6 +43,15 @@
       if (name === "entriesChunks") return bucketed(arr || []);
       return original.apply(this, arguments);
     };
+    // When saved entries arrive from another computer, put this tab's OMS Guru orders back in right after.
+    if (typeof rebuildMapsFromEntries === "function" && typeof integrateOmsIntoMasterData === "function") {
+      var origRebuild = rebuildMapsFromEntries, again = null;
+      window.rebuildMapsFromEntries = function () {
+        var r = origRebuild.apply(this, arguments);
+        clearTimeout(again); again = setTimeout(function () { try { if (window.omsOrdersRaw && window.omsOrdersRaw.length) integrateOmsIntoMasterData(); } catch (e) {} }, 0);
+        return r;
+      };
+    }
     console.log("[read-saver] active");
   })();
 })();
