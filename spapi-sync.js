@@ -1421,7 +1421,8 @@ async function applyPendingMrpUpdates(sellerId) {
   // Retry requests that only failed because of the old MRP field format (fixed 7 Oct 2026)
   const docs = pendingSnap.docs.filter((d) => d.data().status === 'pending'
     || (/value_with_tax|does not belong/.test(d.data().error || '') && !d.data().retriedFormat)
-    || (/No known product type/.test(d.data().error || '') && !d.data().retriedType));  // fixed 20 Oct 2026
+    || (/No known product type/.test(d.data().error || '') && !d.data().retriedType)   // fixed 20 Oct 2026
+    || (/no longer applicable|does not belong/.test(d.data().error || '') && !d.data().retriedOffer));   // fixed 21 Oct 2026: MRP inside the offer
   if (!docs.length) { console.log('No pending MRP updates.'); return; }
   console.log(`Applying ${docs.length} pending MRP update(s)...`);
 
@@ -1433,12 +1434,28 @@ async function applyPendingMrpUpdates(sellerId) {
       // Where Amazon keeps the MRP depends on the product type: most use "List Price with Tax",
       // some only "Maximum Retail Price". Try them in order; move on only when Amazon says the
       // attribute/field doesn't apply to this product type.
-      const tries = [
+      // 21 Oct 2026: Amazon India now keeps MRP INSIDE the offer (purchasable_offer.maximum_retail_price) and rejects
+      // the old top-level fields ("no longer applicable", 29 SKUs). Write it there first, keeping the current price.
+      let usedField = null, lastErr = null;
+      try {
+        const cur = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku },
+          query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes'] } });
+        const po = JSON.parse(JSON.stringify((((cur.attributes || {}).purchasable_offer) || [])[0] || {}));
+        const price = Number(((((po.our_price || [])[0] || {}).schedule || [])[0] || {}).value_with_tax) || null;
+        if (price && price > newMrp) throw new Error(`Your selling price ₹${price} is above the new MRP ₹${newMrp} - lower the price first.`);
+        delete po.start_at; delete po.end_at;
+        Object.assign(po, { marketplace_id: MARKETPLACE_ID, currency: po.currency || 'INR', audience: po.audience || 'ALL',
+          maximum_retail_price: [{ schedule: [{ value_with_tax: newMrp }] }] });
+        assertListingsOk(await spClient.callAPI({ operation: 'patchListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' },
+          path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
+          body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer', value: [po] }] } }));
+        usedField = 'purchasable_offer.maximum_retail_price';
+      } catch (e) { lastErr = e; if (/above the new MRP/.test(e.message || '')) throw e; }
+      const tries = usedField ? [] : [
         ['list_price', { value_with_tax: newMrp }],
         ['maximum_retail_price', { value: newMrp }],
         ['maximum_retail_price', { value_with_tax: newMrp }],
       ];
-      let usedField = null, lastErr = null;
       for (const [attr, v] of tries) {
         try {
           assertListingsOk(await spClient.callAPI({
@@ -1461,7 +1478,7 @@ async function applyPendingMrpUpdates(sellerId) {
       snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { mrp: newMrp });
       console.log(`MRP updated for SKU ${sku}: now ${newMrp}`);
     } catch (e) {
-      await doc.ref.update({ status: 'failed', retriedFormat: true, retriedType: true, error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
+      await doc.ref.update({ status: 'failed', retriedFormat: true, retriedType: true, retriedOffer: true, error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`MRP update FAILED for SKU ${sku}:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
