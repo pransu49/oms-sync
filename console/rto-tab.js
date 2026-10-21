@@ -32,6 +32,7 @@
     "html#aikm body #tab-rto .rt-muted{color:var(--x-muted);font-size:12px}",
     "html#aikm body #tab-rto .rt-ids{font:12.5px/1.6 ui-monospace,Menlo,Consolas,monospace;color:var(--x-text-2);margin-top:6px}",
     "html#aikm body #tab-rto .rt-ids span{margin-right:14px;white-space:nowrap}",
+    "html#aikm body #tab-rto mark{background:var(--x-gold-soft);color:var(--x-gold);border-radius:4px;padding:0 3px}",
     "html#aikm body #tab-rto .rt-ids mark{background:var(--x-gold-soft);color:var(--x-gold);border-radius:4px;padding:0 3px}",
     "html#aikm body #tab-rto .rt-act{display:flex;flex-direction:column;gap:6px;align-items:stretch;min-width:150px}",
     "html#aikm body #tab-rto .rt-act button{white-space:nowrap}",
@@ -201,9 +202,11 @@
     var st = got ? ['back', "Received " + dd(rec.r)] : r.s === "back" ? ["back", "Returned to you " + dd(r.rd || r.nd)] : ["way", "On the way back" + (r.rq ? " · since " + dd(r.rq) : "")];
     var items = (r.items && r.items.length ? r.items : []).map(function (i) { return "<b>" + esc(i.t || i.sku) + "</b> × " + (i.q || 1); }).join("<br>");
     var cod = /cod/i.test(r.pay || "");
-    var money = r.ref ? '<span class="rt-tag gold">Refunded ' + inr(r.ref) + "</span>" :
+    var selfShip = !!r.nb || r.src === "nimbus";
+    var money = r.ref ? '<span class="rt-tag gold">Refunded to buyer ' + inr(r.ref) + "</span>" :
       cod ? '<span class="rt-muted">COD — no money was collected, nothing to refund</span>' :
-      r.pay ? '<span class="rt-tag cust">Prepaid — check refund</span>' : "";
+      !r.pay ? "" : selfShip ? '<span class="rt-tag cust">Prepaid — refund it from the Bulk Refund tab</span>' :
+      '<span class="rt-muted">Prepaid — Amazon refunds the buyer itself (Easy Ship)</span>';
     return '<div class="rt-card' + (got ? " got" : "") + '"><div>' +
       '<div class="rt-top"><span class="rt-oid" data-rt-copy="' + esc(r.o) + '" title="Click to copy">' + hl(r.o) + "</span>" +
         '<span class="rt-tag">' + esc(short(r.acc)) + (r.es ? " · Easy Ship" : r.src === "nimbus" || r.nb ? " · Self-ship" : "") + "</span>" +
@@ -212,7 +215,7 @@
       '<div class="rt-line">' + (items || '<span class="rt-muted">Product not known</span>') + "</div>" +
       '<div class="rt-line"><b>' + esc(r.n || "Customer") + "</b> · " + esc([r.ci, r.st].filter(Boolean).join(", ")) + (r.pin ? " · " + hl(r.pin) : "") + "</div>" +
       '<div class="rt-line rt-muted">Ordered ' + (dd(r.d || r.cr) || "—") + (r.rq ? " · Return started " + dd(r.rq) : "") + ((r.rd || r.nd) ? " · Back to you " + dd(r.rd || r.nd) : "") +
-        " · " + inr(r.v) + (r.pay ? " " + esc(/cod/i.test(r.pay) ? "COD" : "Prepaid") : "") + (r.inv ? " · Invoice " + esc(r.inv) : "") + (r.sf ? " · SAFE-T: " + esc(r.sf) : "") + "</div>" +
+        (r.v ? " · " + inr(r.v) : "") + (r.pay ? " · " + esc(/cod/i.test(r.pay) ? "COD" : "Prepaid") : "") + (r.inv ? " · Invoice " + esc(r.inv) : "") + (r.sf ? " · SAFE-T: " + esc(r.sf) : "") + "</div>" +
       '<div class="rt-ids"><span>AWB ' + hl(r.a || "—") + "</span>" + (r.a2 ? "<span>AWB " + hl(r.a2) + "</span>" : "") +
         (r.ra ? "<span>Return ID " + hl(r.ra) + "</span>" : "") + (rec.id ? "<span>Return ID " + hl(rec.id) + " ✓</span>" : "") + "</div>" +
       (money ? '<div class="rt-money">' + money + "</div>" : "") +
