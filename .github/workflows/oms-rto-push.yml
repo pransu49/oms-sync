@@ -1,0 +1,49 @@
+name: RTO received -> OMS Guru
+
+# Accepts returns in OMS Guru for parcels marked received in the console's RTO Check tab.
+# Started by the console a minute after you mark parcels; the hourly run is a backup.
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = only show the file, upload nothing'
+        default: 'false'
+      only_orders:
+        description: 'test only: order ids (always a dry run)'
+        default: ''
+  schedule:
+    - cron: '41 * * * *'
+
+concurrency:
+  group: oms-rto-push
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - shell: bash
+        run: set -o pipefail; node oms-rto-push.js 2>&1 | tee run.log
+        env:
+          OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
+          OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          ONLY_ORDERS: ${{ inputs.only_orders || '' }}
+
+      - name: Report sync health to console
+        if: always() && inputs.only_orders == ''
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node report-health.js rtopush "RTO -> OMS Guru" run.log || true

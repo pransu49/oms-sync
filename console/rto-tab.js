@@ -168,8 +168,14 @@
       var c = e.target.closest("[data-rt-f]");
       if (c) { var f = c.dataset.rtF.split(":"); S[f[0]] = S[f[0]] === f[1] && f[0] !== "k" ? "" : f[1]; S.shown = PAGE; render(); return; }
       var cp = e.target.closest("[data-rt-copy]"); if (cp) { try { navigator.clipboard.writeText(cp.dataset.rtCopy); toast("Copied " + cp.dataset.rtCopy); } catch (er) {} return; }
-      var got = e.target.closest("[data-rt-got]"); if (got) { var id = got.dataset.rtGot, cur = S.rec[id] || {}; save(id, { r: cur.r ? "" : today() }); toast(cur.r ? "Marked as not received" : "Marked received ✓"); return; }
-      var ln = e.target.closest("[data-rt-link]"); if (ln) { var q = S.pend; save(ln.dataset.rtLink, { id: q, r: (S.rec[ln.dataset.rtLink] || {}).r || today() }); S.pend = ""; $("rtQ").value = q; S.q = q; render(); toast("Linked " + q + " to " + ln.dataset.rtLink + " and marked received ✓"); return; }
+      var got = e.target.closest("[data-rt-got]"); if (got) {
+        var id = got.dataset.rtGot, how = got.dataset.how;
+        if (how === "undo") { save(id, { r: "", cond: "", oms: null }); toast("Marked as not received"); return; }
+        if (how === "retry") { save(id, { oms: { s: "retry" } }); queuePush(); toast("Sending to OMS Guru again…"); return; }
+        save(id, { r: today(), cond: how, oms: null }); queuePush();
+        toast(how === "bad" ? "Received as damaged — OMS Guru will take it as bad stock in ~3 min" : "Received ✓ — OMS Guru will accept the return in ~3 min"); return;
+      }
+      var ln = e.target.closest("[data-rt-link]"); if (ln) { var q = S.pend; save(ln.dataset.rtLink, { id: q }); S.pend = ""; $("rtQ").value = q; S.q = q; render(); toast("Return ID " + q + " linked to " + ln.dataset.rtLink + " — now mark it received"); return; }
       var cx = e.target.closest("#rtCancelLink"); if (cx) { S.pend = ""; render(); return; }
       var more = e.target.closest("#rtMore"); if (more) { S.shown += PAGE; render(); }
     });
@@ -219,10 +225,41 @@
       '<div class="rt-ids"><span>AWB ' + hl(r.a || "—") + "</span>" + (r.a2 ? "<span>AWB " + hl(r.a2) + "</span>" : "") +
         (r.ra ? "<span>Return ID " + hl(r.ra) + "</span>" : "") + (rec.id ? "<span>Return ID " + hl(rec.id) + " ✓</span>" : "") + "</div>" +
       (money ? '<div class="rt-money">' + money + "</div>" : "") +
+      (rec.r ? '<div class="rt-money">' + (rec.cond === "bad" ? '<span class="rt-tag cust">Damaged</span> ' : "") + omsLine(rec) + "</div>" : "") +
     '</div><div class="rt-act">' +
       (S.pend && (r._t + " " + (rec.id || "")).indexOf(S.pend) < 0 ? '<button type="button" class="btn-gold" data-rt-link="' + esc(r.o) + '"><i class="ti ti-link"></i> This is the parcel</button>' : "") +
-      '<button type="button" class="' + (got ? "secondary" : "btn-gold") + '" data-rt-got="' + esc(r.o) + '"><i class="ti ' + (got ? "ti-arrow-back-up" : "ti-check") + '"></i> ' + (got ? "Undo received" : "Mark received") + "</button>" +
+      actions(r, rec) +
     "</div></div>";
+  }
+  function omsLine(rec) {
+    var o = rec.oms;
+    if (!rec.r) return "";
+    if (!o || o.s === "retry") return '<span class="rt-tag way">OMS Guru: sending…</span>';
+    if (o.s === "done") return '<span class="rt-tag back">OMS Guru: return accepted ✓</span>' + (o.e ? ' <span class="rt-muted">' + esc(o.e) + "</span>" : "");
+    if (o.s === "sent") return '<span class="rt-tag way">OMS Guru: sent, waiting for result</span>';
+    return '<span class="rt-tag cust">OMS Guru refused</span> <span class="rt-muted">' + esc(o.e || "") + "</span>";
+  }
+  function actions(r, rec) {
+    var id = esc(r.o);
+    if (!rec.r) return '<button type="button" class="btn-gold" data-rt-got="' + id + '" data-how="good"><i class="ti ti-check"></i> Received — good</button>' +
+      '<button type="button" class="secondary" data-rt-got="' + id + '" data-how="bad"><i class="ti ti-alert-triangle"></i> Received — damaged</button>';
+    var o = rec.oms || {};
+    if (o.s === "failed") return '<button type="button" class="btn-gold" data-rt-got="' + id + '" data-how="retry"><i class="ti ti-refresh"></i> Send to OMS again</button>' +
+      '<button type="button" class="secondary" data-rt-got="' + id + '" data-how="undo"><i class="ti ti-arrow-back-up"></i> Undo received</button>';
+    if (o.s === "done" || o.s === "sent") return "";
+    return '<button type="button" class="secondary" data-rt-got="' + id + '" data-how="undo"><i class="ti ti-arrow-back-up"></i> Undo received</button>';
+  }
+  var pushTimer = null;
+  function queuePush() { // one OMS Guru upload for everything marked within a minute
+    clearTimeout(pushTimer);
+    pushTimer = setTimeout(async function () {
+      var tok = await getToken(); if (!tok) { toast("GitHub token missing — OMS Guru will be updated by the hourly run instead.", true); return; }
+      try {
+        var r = await fetch("https://api.github.com/repos/" + REPO + "/actions/workflows/oms-rto-push.yml/dispatches", { method: "POST",
+          headers: { Accept: "application/vnd.github+json", Authorization: "Bearer " + tok, "Content-Type": "application/json" }, body: JSON.stringify({ ref: "main" }) });
+        if (r.status !== 204) throw new Error("GitHub said " + r.status);
+      } catch (err) { toast("Could not start the OMS Guru update (" + err.message + ") — the hourly run will do it.", true); }
+    }, 60000);
   }
   function render() {
     if (!$("tab-rto")) return;
