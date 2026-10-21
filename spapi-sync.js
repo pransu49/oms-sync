@@ -1077,7 +1077,9 @@ async function setOfferPrice(sellerId, i, old, productType, price) {
   assertListingsOk(await call(null));
   snapPatch('inventory', `${ACCOUNT_LABEL}_${i.sku}`, { price });
   // Amazon decides later - record it so verifyPricePushes confirms it went live (or shows Amazon's reason).
-  await dbMain.collection('spapiPriceUpdates').doc(`robot_${ACCOUNT_LABEL}_${i.sku}`).set({ account: ACCOUNT_LABEL, sku: i.sku, asin: i.asin || null,
+  // Robot records live in the SP-API Firebase (not the console's) - the console never shows them, and keeping
+  // them out of the console database saves its free daily reads (they were re-read on every sync).
+  await db.collection('spapiPriceUpdates').doc(`robot_${ACCOUNT_LABEL}_${i.sku}`).set({ account: ACCOUNT_LABEL, sku: i.sku, asin: i.asin || null,
     oldPrice: i.price ?? null, newPrice: price, status: 'applied', verified: false, checks: 0, source: 'robot',
     appliedAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
 }
@@ -1332,8 +1334,21 @@ async function applyPendingPriceUpdates(sellerId) {
 // Amazon answers "ACCEPTED" first and decides later. Check each sent price on later syncs:
 // live at the new price -> verified; refused (price error) -> failed with Amazon's own reason.
 async function verifyPricePushes(sellerId) {
+  // One-time move (21 Oct 2026): robot records saved in the console's Firebase go to the SP-API Firebase.
+  try {
+    const old = await dbMain.collection('spapiPriceUpdates').where('source', '==', 'robot').where('account', '==', ACCOUNT_LABEL).get();
+    if (!old.empty) {
+      for (let k = 0; k < old.docs.length; k += 200) {
+        const part = old.docs.slice(k, k + 200), b1 = db.batch(), b2 = dbMain.batch();
+        part.forEach((d) => { b1.set(db.collection('spapiPriceUpdates').doc(d.id), d.data()); b2.delete(d.ref); });
+        await b1.commit(); await b2.commit();
+      }
+      console.log(`Moved ${old.size} robot price record(s) to the SP-API Firebase.`);
+    }
+  } catch (e) { console.warn('Robot record move skipped:', e.message || e); }
+  // Only prices still waiting for Amazon (verified == false) are read - not every price ever sent.
   const snaps = await Promise.all([db, dbMain].map((d) => d.collection('spapiPriceUpdates')
-    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'applied').get()));
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'applied').where('verified', '==', false).get()));
   const cut = Date.now() - 3 * 864e5;
   const docs = snaps.flatMap((s) => s.docs).filter((d) => { const x = d.data(); const t = x.appliedAt && x.appliedAt.toMillis ? x.appliedAt.toMillis() : 0;
     return x.verified === false && t > cut && Date.now() - t > 4 * 60000; });
@@ -1643,13 +1658,15 @@ async function setAmazonQuantity(sellerId, sku, qty) {
 async function runStockGuard(sellerId) {
   if (!sellerId) { console.log('Stock guard skipped: SPAPI_SELLER_ID not set.'); return; }
   if (!inventoryFresh) { console.log('Stock guard skipped: Amazon listings report not read this run.'); return; }
-  const L = await loadLotsForGuard();
-  const lotsCount = Object.keys(L.lotsByCode).length;
-  if (lotsCount < 500) { console.warn(`Stock guard STOPPED: LOTS catalogue has only ${lotsCount} products - looks incomplete.`); return; }
-
   const guardRef = db.collection('spapiStockGuard').doc(ACCOUNT_LABEL);
   const guardDoc = await guardRef.get();
   const guard = guardDoc.exists ? (guardDoc.data().items || {}) : {};
+  // Rule is off and nothing left to put back -> skip reading the LOTS catalogue (saves ~25 console reads per full sync)
+  if (!STOCK_GUARD_ENABLED && !Object.keys(guard).length) { console.log('Stock guard: off, nothing to undo.'); return; }
+
+  const L = await loadLotsForGuard();
+  const lotsCount = Object.keys(L.lotsByCode).length;
+  if (lotsCount < 500) { console.warn(`Stock guard STOPPED: LOTS catalogue has only ${lotsCount} products - looks incomplete.`); return; }
 
   const toZero = [], toRestore = [], release = [];
   for (const item of Object.values(SNAP.inventory)) {
