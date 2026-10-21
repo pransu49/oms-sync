@@ -846,8 +846,16 @@ async function runRelistRobot(sellerId) {
   if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
   const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
   const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
-  if (st.ver !== 8) { st.cool = {}; st.ver = 8; }   // v7 (21 Oct 2026): hidden-but-buyable listings relisted, blocked prices fixed with min limit - re-check all now   // v6 (20 Oct 2026): live-but-not-selling listings are now relisted too - re-check them
+  if (st.ver !== 9) { st.cool = {}; st.ver = 9; }   // v9 (21 Oct 2026): price-blocked listings now relisted - re-check all now   // v7 (21 Oct 2026): hidden-but-buyable listings relisted, blocked prices fixed with min limit - re-check all now   // v6 (20 Oct 2026): live-but-not-selling listings are now relisted too - re-check them
   const now = Date.now();
+  if (!st.pfix) {   // first run with this rule: price fixes already done in the last 24 h count as tried
+    st.pfix = {};
+    try {
+      const q = await dbMain.collection('spapiRelistLog').where('at', '>', now - 864e5).get();
+      q.forEach((d) => { const x = d.data(); if (x.account === ACCOUNT_LABEL && x.status === 'price_fixed' && x.asin) st.pfix[x.asin] = Math.min(st.pfix[x.asin] || Infinity, x.at); });
+      console.log(`Relist robot: ${Object.keys(st.pfix).length} listing(s) already had a price fix today.`);
+    } catch (e) { console.warn('price-fix history not loaded:', e.message || e); }
+  }
   const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
   const eligible = inv.filter((i) => (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (i.quantity || 0) > 0 && i.price > 0);
   const checked = eligible.filter((i) => relistFresh.has(i.asin));
@@ -894,10 +902,20 @@ async function runRelistRobot(sellerId) {
       }
       oldWhy = (old.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').map((x) => x.message).filter(Boolean).join(' | ').slice(0, 400) || null;
       // Suppressed by Amazon for its price: a relist at the same price is suppressed again - show the reason instead.
-      if ((old.issues || []).some((x) => (x.severity || '').toUpperCase() === 'ERROR' && (x.categories || []).includes('INVALID_PRICE'))) {
+      // 21 Oct 2026: price fixes did NOT clear "below your minimum price threshold" (18155) even after 5+ h with no
+      // min price left on the listing, while relists came back live ~90% of the time. So: fix the price once; if the
+      // listing is still blocked at the next check, relist it as a new SKU at the fixed price (no old price limits).
+      st.pfix = st.pfix || {};
+      const priceBlocked = (old.issues || []).some((x) => (x.severity || '').toUpperCase() === 'ERROR' && (x.categories || []).includes('INVALID_PRICE'));
+      const fixTriedAt = st.pfix[asin];
+      if (priceBlocked && fixTriedAt && now - fixTriedAt > 2 * 3600e3) {
+        console.log(`Relist ${oldSku}: still blocked for its price ${Math.round((now - fixTriedAt) / 36e5)} h after the price fix - relisting as a new SKU at Rs ${i.price}.`);
+        delete st.pfix[asin];
+      } else if (priceBlocked) {
         console.log(`Relist ${oldSku}: Amazon suppressed it for its price (${oldWhy}) - not relisted at the same price.`);
         st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
         const fx = await fixSuppressedPrice(sellerId, i, old, sum.productType || await productTypeFor(sellerId, oldSku), oldWhy).catch((e) => ({ done: false, note: 'Price change failed: ' + (e.message || e) }));
+        if (fx.done) { st.pfix[asin] = now; i.price = fx.price; }
         await log(i, fx.done ? { status: 'price_fixed', reason, why: oldWhy, newPrice: fx.price, basis: fx.basis, floor: fx.floor }
           : { status: 'price_issue', why: oldWhy, fixNote: fx.note || null });
         continue;
@@ -984,7 +1002,8 @@ async function runRelistRobot(sellerId) {
   Object.keys(st.cool).forEach((a) => { if (st.cool[a] < now) delete st.cool[a]; });
   Object.keys(st.bbCool).forEach((a) => { if (st.bbCool[a] < now) delete st.bbCool[a]; });
   pruneLearn(st.learn);
-  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, ver: 8, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
+  Object.keys(st.pfix || {}).forEach((a) => { if (now - st.pfix[a] > 3 * 864e5) delete st.pfix[a]; });
+  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, pfix: st.pfix || {}, ver: 9, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
 }
 
 // Orders per ASIN for this account (snapshot, last 90 days): days since the last order, and orders in days 7-37.
