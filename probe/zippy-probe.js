@@ -1,25 +1,19 @@
-const admin = require('firebase-admin');
-admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
-const db = admin.firestore();
-const pii = (k) => /name|phone|addr|email|mobile|city|pin/i.test(k);
-function show(v, depth = 0) {
-  if (v && v.toDate) return v.toDate().toISOString();
-  if (Array.isArray(v)) return { _array: v.length, first: show(v[0], depth + 1) };
-  if (v && typeof v === 'object') { if (depth > 2) return '{…}'; const o = {}; Object.entries(v).slice(0, 25).forEach(([k, x]) => { o[k] = pii(k) ? '<pii>' : show(x, depth + 1); }); o._keys = Object.keys(v).length; return o; }
-  if (typeof v === 'string' && v.length > 300) return v.slice(0, 300) + '…(' + v.length + ')';
-  return v;
-}
+const COGNITO_URL = 'https://cognito-idp.us-east-2.amazonaws.com/', CID = '38brrnlch2igpjussov7ue7tqr', API = 'https://api.in.zippyy.ai';
 (async () => {
-  const ref = db.collection('aikm_admin').doc('zippyShipmentsIndex');
-  const d = await ref.get();
-  console.log('index exists', d.exists, 'updateTime', d.updateTime && d.updateTime.toDate().toISOString());
-  console.log(JSON.stringify(show(d.data()), null, 1).slice(0, 5000));
-  const subs = await ref.listCollections();
-  console.log('subcollections:', subs.map((c) => c.id).join(','));
-  for (const c of subs) {
-    const s = await c.get(); console.log('==', c.id, s.size, 'docs');
-    s.docs.slice(0, 3).forEach((x) => console.log(' doc', x.id, 'updated', x.updateTime.toDate().toISOString(), JSON.stringify(show(x.data())).slice(0, 2500)));
-    let latest = 0; s.docs.forEach((x) => { latest = Math.max(latest, x.updateTime.toMillis()); }); console.log(' latest update', new Date(latest).toISOString());
+  console.log('secrets present:', { refresh: !!process.env.ZIPPY_REFRESH_TOKEN, email: !!process.env.ZIPPY_EMAIL, pass: !!process.env.ZIPPY_PASSWORD });
+  const ip = await (await fetch('https://ipinfo.io/json')).json().catch(() => ({})); console.log('runner location:', ip.country, ip.region);
+  let tok = null;
+  for (const [flow, params] of [['REFRESH_TOKEN_AUTH', { REFRESH_TOKEN: process.env.ZIPPY_REFRESH_TOKEN }], ['USER_PASSWORD_AUTH', { USERNAME: process.env.ZIPPY_EMAIL, PASSWORD: process.env.ZIPPY_PASSWORD }]]) {
+    const r = await fetch(COGNITO_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-amz-json-1.1', 'X-Amz-Target': 'AWSCognitoIdentityProviderService.InitiateAuth' }, body: JSON.stringify({ AuthFlow: flow, ClientId: CID, AuthParameters: params }) });
+    const j = await r.json();
+    console.log(flow, r.status, j.AuthenticationResult ? 'OK' : JSON.stringify(j).slice(0, 200));
+    if (j.AuthenticationResult) { tok = j.AuthenticationResult.IdToken; break; }
   }
-  process.exit(0);
-})().catch((e) => { console.error(e); process.exit(1); });
+  if (!tok) return;
+  const now = Date.now();
+  const r = await fetch(API + '/cnvt/shipment/list', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok, 'x-api-version': '1', Origin: 'https://in.app.zippyy.ai', Referer: 'https://in.app.zippyy.ai/', 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36' },
+    body: JSON.stringify({ status: null, filterType: 'SHIPMENT_PURCHASED_AT', isAscending: false, subStatuses: null, manifestStatuses: null, carriers: null, carrierServices: null, storeIds: null, awbs: null, startTimestamp: now - 30 * 864e5, endTimestamp: now, orderNumbers: null, orderSources: null, orderTypes: null, orderTags: null, productNames: null, skuIds: null, excludeOrderTags: null, warehouseId: null, pageSize: 5, startOffset: null }) });
+  const t = await r.text();
+  console.log('shipment/list', r.status, t.length);
+  try { const j = JSON.parse(t); console.log('top keys', Object.keys(j)); const s = (j.shipments || [])[0]; if (s) console.log('shipment keys', Object.keys(s).join(','), '\nsample', JSON.stringify({ orderNumber: s.orderNumber, awbNumber: s.awbNumber, courierName: s.courierName, carrier: s.carrier, status: s.status, subStatus: s.subStatus })); console.log('count', (j.shipments || []).length, 'total', j.total || j.totalCount); } catch (e) { console.log(t.slice(0, 300)); }
+})().catch((e) => { console.error('ERR', e.message); process.exit(1); });
