@@ -397,3 +397,24 @@
     .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
     .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
 } catch (e) {} })();
+
+/* ===== AIKM LINK GUARD — Amazon links + file downloads skip the "Are you sure you want to leave Dal Bhaat?" page.
+   Runs first (window, capture phase) so nothing else can catch the click. Also covers the Label Printer frame. ===== */
+(function () { try {
+  if (window.__aikmLinkGuard) return; window.__aikmLinkGuard = true;
+  function isExt(a, w) { try { var u = new URL(a.href, w.location.href); return /^https?:$/.test(u.protocol) && u.host !== location.host; } catch (e) { return false; } }
+  function guard(w) {
+    try {
+      if (!w || w.__aikmLG) return; w.__aikmLG = true;
+      w.addEventListener("click", function (e) {
+        var a = e.target && e.target.closest && e.target.closest("a[href]"); if (!a) return;
+        var h = a.getAttribute("href") || "";
+        if (a.hasAttribute("download") || /^(blob|data):/i.test(h)) { e.stopImmediatePropagation(); return; } // file download: let the browser save it
+        if (isExt(a, w) && !e.defaultPrevented && e.button === 0) { e.preventDefault(); e.stopImmediatePropagation(); window.open(a.href, "_blank", "noopener"); }
+      }, true);
+    } catch (x) {}
+  }
+  guard(window);
+  function frames() { var f = document.getElementsByTagName("iframe"); for (var i = 0; i < f.length; i++) { try { guard(f[i].contentWindow); } catch (e) {} } }
+  frames(); setInterval(frames, 1500);
+} catch (e) {} })();
