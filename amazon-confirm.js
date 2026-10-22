@@ -101,9 +101,12 @@ async function main() {
   });
   const logRef = db.collection('aikm_admin').doc('amazonConfirm');
   const logDoc = await logRef.get();
-  const done = (logDoc.exists && logDoc.get('ids')) || {};
+  // full confirmed list = JSON text (a big map field hits Firestore's "too many index entries" limit);
+  // 'ids' keeps only the failed ones, which the console shows
+  let done = {};
+  if (logDoc.exists) { try { done = logDoc.get('idsJson') ? JSON.parse(logDoc.get('idsJson')) : (logDoc.get('ids') || {}); } catch (e) { done = logDoc.get('ids') || {}; } }
   const now = Date.now();
-  const update = { ids: done };
+  const update = {};
 
   for (const a of ACCOUNTS) {
     const byOrder = {};
@@ -145,7 +148,7 @@ async function main() {
     const sp = client(a.token);
     let ok = 0, bad = 0, n = 0; const reasons = {};
     for (const p of picks) {
-      if (++n % 25 === 0 && !DRY) await logRef.set({ ids: done }, { merge: true });   // save progress as we go
+      if (++n % 25 === 0 && !DRY) await logRef.set({ idsJson: JSON.stringify(done) }, { merge: true });   // save progress as we go
       try {
         await confirm(sp, p.id, p.awb, p.courier, p.items);
         done[p.id] = { ok: true, a: p.awb, t: now, acct: a.key };
@@ -173,7 +176,13 @@ async function main() {
     return u && !u.count && !u.failed && p && p.message === u.message && now - at < 30 * 60e3;
   });
   if (quiet) { console.log('Nothing new - status note not re-saved.'); return; }
-  if (!DRY) await logRef.set(update, { merge: true });
+  if (!DRY) {
+    const failedOnly = {}; Object.keys(done).forEach((k) => { if (!done[k].ok) failedOnly[k] = done[k]; });
+    update.idsJson = JSON.stringify(done);
+    if (logDoc.exists) await logRef.update({ ids: failedOnly });   // replace (not merge) the old big list with just the failed ones
+    else update.ids = failedOnly;
+    await logRef.set(update, { merge: true });
+  }
 }
 
 main().catch(async (e) => {

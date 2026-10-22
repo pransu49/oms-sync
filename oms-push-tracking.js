@@ -80,7 +80,9 @@ async function main() {
   });
   const logRef = db.collection('aikm_admin').doc('omsTrackingPush');
   const logDoc = await logRef.get();
-  const pushed = (logDoc.exists && logDoc.get('ids')) || {};
+  // the pushed list is kept as JSON text: a big map field hits Firestore's "too many index entries" limit
+  let pushed = {};
+  if (logDoc.exists) { try { pushed = logDoc.get('idsJson') ? JSON.parse(logDoc.get('idsJson')) : (logDoc.get('ids') || {}); } catch (e) { pushed = logDoc.get('ids') || {}; } }
   console.log(`OMS orders: ${oms.length} · NimbusPost + Zippy AWBs: ${Object.keys(nimbus).length} (Zippy ${fromZippy}) · previously pushed: ${Object.keys(pushed).length}`);
 
   // 2) pick orders
@@ -221,7 +223,7 @@ async function main() {
 
   rows.forEach((r) => { pushed[r.id] = { a: r.awb, t: now, e: failed[r.id] || '' }; });
   Object.keys(pushed).forEach((k) => { if (now - pushed[k].t > 20 * 864e5) delete pushed[k]; });
-  await logRef.set({ ids: pushed, last: result, stuck });
+  await logRef.set({ idsJson: JSON.stringify(pushed), last: result, stuck });
   console.log(`Done: ${result.count} AWB(s) updated in OMS Guru.`);
 }
 
