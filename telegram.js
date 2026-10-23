@@ -3,7 +3,11 @@
 // Never throws - an alert problem must never break a sync.
 async function notify(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chat || !text) return false;
+  if (!text) return false;
+  if (!token || !chat) {
+    console.log(`Telegram alert not sent: GitHub secret missing (${!token ? 'TELEGRAM_BOT_TOKEN ' : ''}${!chat ? 'TELEGRAM_CHAT_ID' : ''}).`);
+    return false;
+  }
   const body = String(text).slice(0, 4000);
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {

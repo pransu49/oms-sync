@@ -30,7 +30,7 @@ const { notify, istNow } = require('./telegram');
   out.push(`🔁 Listings relisted: ${c.relist || 0}`);
   out.push(`💸 Refunds: ${c.refundOk || 0} done${c.refundFail ? `, ${c.refundFail} failed` : ''}`);
   if (c.slaDue != null) out.push(`📦 Unshipped orders due (last check): ${c.slaDue}`);
-  await notify(out.join('\n'));
+  if (!(await notify(out.join('\n')))) throw new Error('Telegram message was not delivered (see the line above).');
 
   // keep only the last 30 days of counts
   const days = Object.keys((a.data() || {}).day || {}).sort();
