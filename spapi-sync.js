@@ -689,6 +689,13 @@ async function syncCompetitivePricing(asinList) {
   if (changedCount > 0) await batch.commit();
   console.log(`Competitive pricing synced: ${changedCount} changed, ${skippedCount} unchanged of ${asinList.length} ASINs`);
   console.log(`Buy box summary — Held: ${buyBoxHeld} | Lost: ${buyBoxLost} | No offer: ${buyBoxNone} | Duplicates: ${duplicatesFound}`);
+  // Daily numbers for the 9 pm Telegram summary (owner, 24 Oct 2026): latest Buy Box counts + today's orders (IST)
+  try {
+    const ist = (t) => new Date(t + 5.5 * 3600e3).toISOString().slice(0, 10), today = ist(Date.now());
+    const orders = Object.values(SNAP.orders).filter((o) => o && (!o.account || o.account === ACCOUNT_LABEL) && !o.isCanceled
+      && !/^cancel/i.test(o.status || '') && o.purchaseDate && ist(Date.parse(o.purchaseDate)) === today).length;
+    await dbMain.collection('aikm_admin').doc('bbDaily').set({ [ACCOUNT_LABEL]: { [today]: { held: buyBoxHeld, lost: buyBoxLost, none: buyBoxNone, orders, at: Date.now() } } }, { merge: true });
+  } catch (e) { console.warn('Daily Buy Box numbers not saved:', e.message || e); }
 }
 
 // ── RELIST ROBOT: "Not selling" listings are relisted under a new SKU ────────────────────
@@ -1221,7 +1228,9 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     const msg = `Buy Box forecast (listings checked this run): holding ${raise.length} · ${lower.length} lost on price -> ${fc.win} can be won within ${RULE_TXT} (robot cuts up to ${BB_MAX_PER_RUN} per run), ` +
       `${fc.rule} only below ${RULE_TXT} / cost (kept), ${fc.cut} need a cut over ${BB_MAX_CUT * 100}% (check cost), ${fc.nocost} have no cost (map them), ${fc.owner} your own price · possible ${raise.length + fc.win}.`;
     console.log(msg);
-    await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_bbForecast`).set({ at: Date.now(), held: raise.length, lostOnPrice: lower.length, ...fc, possible: raise.length + fc.win, ruleText: RULE_TXT }).catch(() => {});
+    const att = await buildAttentionLists(units30).catch((e) => { console.warn('Attention lists skipped:', e.message || e); return null; });
+    await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_bbForecast`).set({ at: Date.now(), held: raise.length, lostOnPrice: lower.length, ...fc, possible: raise.length + fc.win, ruleText: RULE_TXT,
+      ...(att || {}) }).catch((e) => console.warn('Forecast not saved:', e.message || e));
   } catch (e) { console.warn('Buy Box forecast skipped:', e.message || e); }
   const patchPrice = async (i, target) => {
     const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
@@ -1305,6 +1314,44 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   console.log(`Buy Box pricer: ${guarded} loss-guard raises, ${lowered} lowered, ${raised} raised, ${skipped} kept (loss / no cost / big cut / your own price).`);
 }
 
+
+// ── ATTENTION LISTS for the Amazon page (owner, 24 Oct 2026: "more sales with profit") ─────────
+// noCost : in-stock self-ship listings the robot cannot price because no cost is known (Map them on the page).
+// noOffer: listings with no live offer from us, with the reason:
+//   restock_lots - Amazon stock 0 but LOTS has 10+ in stock -> update stock in OMS Guru (easy sale)
+//   not_selling  - in stock but Amazon hides the offer (the relist robot works on these)
+//   hidden_price - in stock, behind 20 cheaper offers (price problem)
+//   no_sellers   - nobody has a live offer (listing inactive / suppressed - check Seller Central)
+//   out_of_stock - Amazon stock 0 and LOTS low / unknown
+//   fba          - Amazon-fulfilled (Amazon controls it)
+// Uses data already loaded this run (no extra reads).
+async function buildAttentionLists(units30) {
+  const c = await loadCostData();
+  const lotsQ = (asin) => { const m = c.map[asin]; if (!m || (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS')) return null;
+    const code = m.code || (Array.isArray(m.parts) && m.parts[0] && m.parts[0].code); const p = code && c.lots[String(code)];
+    const q = p ? parseFloat(p.qty) : NaN; return isNaN(q) ? null : q; };
+  const statusOf = (offers) => { const w = offers.find((o) => o.isBuyBoxWinner), mine = offers.find((o) => o.isMine); return w && w.isMine ? 'held' : mine ? 'lost' : 'none'; };
+  const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
+  const noCost = [], noOffer = [];
+  for (const i of inv) {
+    const offers = relistFresh.get(i.asin); if (!offers) continue;
+    const fba = (i.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT', qty = Number(i.quantity) || 0, u30 = units30[i.asin] || 0;
+    const base = { sku: i.sku, asin: i.asin, name: String(i.name || '').slice(0, 90), price: i.price || null, qty, u30 };
+    if (!fba && qty > 0 && !(await knownCost(i).catch(() => null))) noCost.push({ ...base, st: statusOf(offers) });
+    if (offers.some((o) => o.isMine)) continue;
+    const lq = lotsQ(i.asin);
+    const r = fba ? 'fba' : qty <= 0 ? (lq != null && lq >= STOCK_GUARD_MIN ? 'restock_lots' : 'out_of_stock')
+      : pricedOut(i, offers) ? 'hidden_price' : !offers.length ? 'no_sellers' : 'not_selling';
+    noOffer.push({ ...base, r, lq });
+  }
+  const stRank = { lost: 0, none: 1, held: 2 }, rRank = { restock_lots: 0, not_selling: 1, hidden_price: 2, no_sellers: 3, out_of_stock: 4, fba: 5 };
+  noCost.sort((a, b) => (stRank[a.st] - stRank[b.st]) || (b.u30 - a.u30));
+  noOffer.sort((a, b) => (rRank[a.r] - rRank[b.r]) || (b.u30 - a.u30));
+  const counts = {}; noOffer.forEach((x) => { counts[x.r] = (counts[x.r] || 0) + 1; });
+  console.log(`Attention: ${noCost.length} in-stock listings have no cost (map them) · no offer ${noOffer.length}: ` +
+    Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', '));
+  return { noCostCount: noCost.length, noCost: noCost.slice(0, 500), noOfferCount: noOffer.length, noOfferBy: counts, noOffer: noOffer.slice(0, 600) };
+}
 
 // ── RAISE UNDO (owner, 24 Oct 2026: "sales dipped since the robot") ─────────────────────────
 // For each listing whose latest robot change is a Buy Box raise made since 20 Oct:
