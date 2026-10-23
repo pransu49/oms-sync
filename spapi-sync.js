@@ -1116,6 +1116,11 @@ function noLossFloor(i, cost, price, ship = myShipCharge(i)) {
 }
 const OUR_SELLER_IDS = new Set(['AI66SST976WPS', 'A1KF1CBHR5UA1W', process.env.SPAPI_SELLER_ID].filter(Boolean));
 const BB_MAX_PER_RUN = 80, BB_MAX_RAISE_PER_RUN = 30, BB_MAX_CUT = 0.3, BB_MAX_RAISE = 0.2, BB_COOL_MS = 2 * 3600e3;   // re-check each price every 2 h for maximum Buy Box
+// Owner, 24 Oct 2026: sales dipped after the robot started raising prices while holding the Buy Box (20 Oct evening:
+// ~30 raises per run, up to +20% each; Sasta Store Buy Boxes 306 -> 241). Raising while holding is now OFF unless
+// the workflow sets BB_RAISE=on. Raised listings that then lost the Buy Box go back to their price before the raise.
+const BB_RAISE_ON = String(process.env.BB_RAISE || '').toLowerCase() === 'on';
+const RAISE_UNDO_FROM = Date.parse('2026-10-20T12:00:00Z'), RAISE_UNDO_PER_RUN = 40;
 async function setOfferPrice(sellerId, i, old, productType, price) {
   const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
   delete po.start_at; delete po.end_at;
@@ -1187,6 +1192,8 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     const productType = ((old.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, i.sku);
     await setOfferPrice(sellerId, i, old, productType, target);
   };
+  // ── UNDO: robot raises (since 20 Oct) that lost the Buy Box go back to the price before the raise ──
+  await undoLostRaises(eligible, st, log, patchPrice, manual).catch((e) => console.warn('Raise undo skipped:', e.message || e));
   // ── LEARNING: judge earlier price changes on real sales before making new ones ──
   await learnFromChanges(sellerId, eligible, st, log, patchPrice).catch((e) => console.warn('Robot learning skipped:', e.message || e));
 
@@ -1236,7 +1243,8 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await log(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
     await new Promise((r) => setTimeout(r, 800));
   }
-  for (const { i, mine, next } of raise) {
+  if (!BB_RAISE_ON && raise.length) console.log(`Buy Box pricer: raising while holding the Buy Box is OFF (${raise.length} held listings keep their price).`);
+  for (const { i, mine, next } of (BB_RAISE_ON ? raise : [])) {
     if (raised >= BB_MAX_RAISE_PER_RUN) break;
     if (guardDone.has(i.sku)) continue;
     const ship = Number(mine.shipping) || 0, mrp = Number(i.mrp) || Infinity;
@@ -1261,6 +1269,44 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   console.log(`Buy Box pricer: ${guarded} loss-guard raises, ${lowered} lowered, ${raised} raised, ${skipped} kept (loss / no cost / big cut / your own price).`);
 }
 
+
+// ── RAISE UNDO (owner, 24 Oct 2026: "sales dipped since the robot") ─────────────────────────
+// For each listing whose latest robot change is a Buy Box raise made since 20 Oct:
+//   • still holding the Buy Box at the higher price      -> keep (it works)
+//   • lost the Buy Box                                     -> back to the price before the raise(s), no raises for 14 days
+// Never touched: prices changed since (by hand or the page), owner-set prices (7-day rule), and loss-guard raises
+// (the old price earned under Rs MIN_PROFIT - the owner's minimum stays).
+async function undoLostRaises(eligible, st, log, patchPrice, manual) {
+  const now = Date.now();
+  let undone = 0, kept = 0, skipped = 0;
+  for (const i of eligible) {
+    if (undone >= RAISE_UNDO_PER_RUN) break;
+    const m = st.learn[i.sku]; if (!m || !m.ch || !m.ch.length || m.raiseUndo) continue;
+    const ch = m.ch, last = ch[ch.length - 1];
+    if (last.kind !== 'raise' || last.at < RAISE_UNDO_FROM) continue;
+    let k = ch.length - 1; while (k > 0 && ch[k - 1].kind === 'raise' && ch[k - 1].at >= RAISE_UNDO_FROM) k--;
+    if (Math.abs(i.price - last.to) >= 1) { m.raiseUndo = 'changed'; skipped++; continue; }   // changed since - leave it
+    if (manual.has(i.sku)) { m.raiseUndo = 'owner'; skipped++; continue; }
+    const offers = relistFresh.get(i.asin) || [], win = offers.find((o) => o.isBuyBoxWinner);
+    if (win && win.isMine) { kept++; continue; }   // still winning at the higher price - check again next run
+    // Go back to the earliest price in this run of raises that still earns the minimum (skips loss-guard steps)
+    const kc = await knownCost(i).catch(() => null);
+    let orig = null;
+    for (let j = k; j < ch.length; j++) { const f = Number(ch[j].from); if (f > 0 && (!kc || orderProfit(i, kc.cost, f) >= MIN_PROFIT)) { orig = f; break; } }
+    if (!orig || orig >= last.to) { m.raiseUndo = 'loss_guard'; skipped++; continue; }
+    try {
+      await patchPrice(i, orig); undone++;
+      m.raiseUndo = 'undone'; m.ceil = orig; m.ceilUntil = now + LEARN_REST_MS;
+      m.ch.push({ at: now, kind: 'revert', from: last.to, to: orig, judged: 'revert' });
+      st.bbCool[i.sku] = now + BB_COOL_MS;
+      console.log(`Raise undo ${i.sku}: Rs ${last.to} -> Rs ${orig} (robot raise lost the Buy Box)`);
+      await log(i, { status: 'learn_revert', oldPrice: last.to, newPrice: orig, profit: kc ? Math.round(orderProfit(i, kc.cost, orig)) : null,
+        basis: `Robot raised the price to ₹${last.to} and the Buy Box was lost - back to ₹${orig}. Raising while holding the Buy Box is now off.` });
+    } catch (e) { console.warn(`Raise undo failed for ${i.sku}:`, e.message || e); }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  console.log(`Raise undo: ${undone} put back to the price before the raise, ${kept} still winning at the higher price (kept), ${skipped} left alone (changed since / your price / ₹${MIN_PROFIT} minimum).`);
+}
 
 // ── ROBOT LEARNING (owner, 21 Oct 2026: "check trends and learn") ─────────────────────────
 // Every price change is remembered per SKU. 3 days later the robot compares real sales and profit
