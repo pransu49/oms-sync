@@ -245,8 +245,8 @@ def stamp(page, items, seq, total, dd=''):
     top, bot = top + pad, min(bot - pad, top + pad + (90 if dd else 74))
     if dd:  # Amazon "Deliver by" date: plain black text (no background, no border), above the product name
         if bot - top >= 36:
-            sh = 13
-            fs = 9
+            sh = 10
+            fs = 7
             while pymupdf.get_text_length(dd, 'hebo', fs) > W * 0.9 and fs > 5:
                 fs -= 0.5
             page.insert_text((W / 2 - pymupdf.get_text_length(dd, 'hebo', fs) / 2, top + sh - 3.5), dd, fontname='hebo', fontsize=fs, color=(0, 0, 0))
@@ -258,19 +258,18 @@ def stamp(page, items, seq, total, dd=''):
     band_h = bot - top
     multi = len(items) > 1
     total_q = sum(q for _, q in items)
-    # QTY box (right)
+    # QTY (right): plain black text, no box
     box_w = min(70 if multi else 58, W * 0.22)
     box_h = min(band_h, 46)
     bx = W * 0.96 - box_w
     by = top + (band_h - box_h) / 2
-    page.draw_rect(pymupdf.Rect(bx, by, bx + box_w, by + box_h), color=(0, 0, 0), fill=(0, 0, 0))
     lab = 'TOTAL PCS' if multi else 'QTY'
     ls = 7 if multi else 8
-    page.insert_text((bx + (box_w - pymupdf.get_text_length(lab, 'hebo', ls)) / 2, by + ls + 3), lab, fontname='hebo', fontsize=ls, color=(1, 1, 1))
-    qs = str(total_q); ns = max(8, min(26, box_h - ls - 8))
+    page.insert_text((bx + (box_w - pymupdf.get_text_length(lab, 'hebo', ls)) / 2, by + ls + 3), lab, fontname='hebo', fontsize=ls, color=(0, 0, 0))
+    qs = str(total_q); ns = max(8, min(20, box_h - ls - 8))
     while pymupdf.get_text_length(qs, 'hebo', ns) > box_w - 6:
         ns -= 1
-    page.insert_text((bx + (box_w - pymupdf.get_text_length(qs, 'hebo', ns)) / 2, by + box_h - 5), qs, fontname='hebo', fontsize=ns, color=(1, 1, 1))
+    page.insert_text((bx + (box_w - pymupdf.get_text_length(qs, 'hebo', ns)) / 2, by + box_h - 5), qs, fontname='hebo', fontsize=ns, color=(0, 0, 0))
     # product text (left)
     x0, x1 = W * 0.04, bx - 8
     entries = [((f'{i + 1}. ' if multi else '') + clean(n), q) for i, (n, q) in enumerate(items)]
@@ -293,7 +292,6 @@ def stamp(page, items, seq, total, dd=''):
             page.insert_text((x0, y), t, fontname='hebo', fontsize=size, color=(0, 0, 0))
             if multi and li == len(ln) - 1:
                 qt = f'QTY {q}'; s2 = size * 0.8; w2 = pymupdf.get_text_length(qt, 'hebo', s2) + 6
-                page.draw_rect(pymupdf.Rect(x1 - w2, y - s2, x1, y + 2), color=(0, 0, 0), width=0.8)
                 page.insert_text((x1 - w2 + 3, y), qt, fontname='hebo', fontsize=s2, color=(0, 0, 0))
             y += size * 1.15
         y += size * 0.3
