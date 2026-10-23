@@ -273,7 +273,7 @@ def stamp(page, items, seq, total, dd=''):
     # product text (left)
     x0, x1 = W * 0.04, bx - 8
     entries = [((f'{i + 1}. ' if multi else '') + clean(n), q) for i, (n, q) in enumerate(items)]
-    for size in [x / 2 for x in range(32, 9, -1)]:  # 16pt .. 5pt
+    for size in [x / 2 for x in range(20, 9, -1)]:  # 10pt .. 5pt
         qw = pymupdf.get_text_length('QTY 999', 'hebo', size * 0.8) + 8 if multi else 0
         blocks, ok, hh = [], True, 0
         for name, q in entries:
