@@ -1709,6 +1709,13 @@ async function applyAddAsinRequests(sellerId) {
         else { price = p20 && p20 <= mrp ? p20 : p15; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} is too cheap to match with profit - listed at the ₹${price === p20 ? TARGET_PROFIT : MIN_PROFIT}/order price`; }
       }
       price = Math.min(price, Math.floor(mrp));
+      // Owner's own price from the page (name search "Your price"): used as is (capped at MRP), but never below Rs MIN_PROFIT/order.
+      const want = Number(r.wantPrice);
+      if (want > 0) {
+        const wp = Math.min(Math.floor(want), Math.floor(mrp)), wpProfit = Math.round(orderProfit(i, kc.cost, wp, ship));
+        if (wpProfit < MIN_PROFIT) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Your price ₹${wp} earns only ₹${wpProfit}/order (minimum ₹${MIN_PROFIT}, needs ₹${p15}+). Change the price or clear it for auto price, then Retry.` }); continue; }
+        basis = `Your price ₹${wp}${wp < want ? ` (capped at MRP)` : ''} · robot's auto price would be ₹${price}`; price = wp;
+      }
       const profit = Math.round(orderProfit(i, kc.cost, price, ship));
       // 5) list it (dry run first)
       const qty = Math.max(1, Math.min(999, parseInt(r.qty) || 10));
