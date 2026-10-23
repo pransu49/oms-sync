@@ -86,7 +86,7 @@
       $("aaHelp").onclick = function () { var o = rule.style.display === "none"; rule.style.display = o ? "" : "none"; $("aaHelpA").textContent = o ? "▴" : "▾"; };
     }
 
-    var pick = new Map(), hits = [], hi = -1, sT = null, lastQ = "";
+    var pick = new Map(), hits = [], hi = -1, sT = null, lastQ = "", nav = false;   // nav: moving with arrows -> Space selects
     var bcRe = /^\d{8}$|^\d{12,14}$/, isBc = function (t) { return bcRe.test(t); };
     var keyOf = function (p) { return p.barcode ? String(p.barcode).replace(/\D/g, "") : (p.asin ? String(p.asin).toUpperCase() : ""); };
     var okKey = function (k) { return isBc(k) || /^[A-Z0-9]{10}$/.test(k); };
@@ -129,7 +129,7 @@
         (pick.size ? "<span><b>" + pick.size + "</b> selected</span>" : "") +
         (ok.length ? '<button type="button" class="aa-lnk" id="aaSelAll">' + (all ? "Unselect all" : "Select all") + "</button>" : "") +
         (pick.size ? '<button type="button" class="aa-lnk" id="aaClr">Clear</button>' : "") +
-        '<span class="aa-keys"><span>' + K("↑") + K("↓") + " move</span><span>" + K("Enter") + " select</span><span>" + K("Tab") + " price</span><span>" + K(isMac ? "⌘" : "Ctrl") + K("A") + " all</span><span>" +
+        '<span class="aa-keys"><span>' + K("↑") + K("↓") + " move</span><span>" + K("Space") + "/" + K("Enter") + " select</span><span>" + K("Tab") + " price</span><span>" + K(isMac ? "⌘" : "Ctrl") + K("A") + " all</span><span>" +
         K(isMac ? "⌘" : "Ctrl") + K("↵") + " list</span><span>" + K("Esc") + " clear</span></span>";
     }
     function setHi(i, scroll) {
@@ -206,6 +206,11 @@
     inp.addEventListener("input", function () { clearTimeout(sT); sT = setTimeout(search, 150); });
     inp.addEventListener("keydown", function (e) {
       var mod = e.ctrlKey || e.metaKey;
+      // Space selects the highlighted product once you are moving with the arrows; while typing it is a normal space
+      if (e.key === " " && !mod && nav && hi >= 0 && hits.length) { e.preventDefault(); toggle(hi); return; }
+      if (e.key.length === 1 && e.key !== " " && !mod) nav = false;   // typing letters -> back to typing mode
+      if (e.key === "Backspace" || e.key === "Delete") nav = false;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { nav = true; }
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         if (!hits.length) return; e.preventDefault();
         var d = e.key === "ArrowDown" ? 1 : -1;
@@ -229,7 +234,7 @@
       if ((e.key === "/" && !typing) || ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K"))) { e.preventDefault(); inp.focus(); inp.select(); }
     });
     $("aaRl").addEventListener("mousedown", function (e) { if (e.target.closest(".aa-yp")) return; if (e.target.closest(".aa-ri")) e.preventDefault(); });   // keep focus in the search box
-    $("aaRl").addEventListener("click", function (e) { if (e.target.closest(".aa-yp")) return; var r = e.target.closest(".aa-ri"); if (!r) return; var i = +r.dataset.i; setHi(i, false); toggle(i); inp.focus(); });
+    $("aaRl").addEventListener("click", function (e) { if (e.target.closest(".aa-yp")) return; var r = e.target.closest(".aa-ri"); if (!r) return; var i = +r.dataset.i; setHi(i, false); toggle(i); nav = true; inp.focus(); });
     $("aaRl").addEventListener("mousemove", function (e) { var r = e.target.closest(".aa-ri"); if (r && +r.dataset.i !== hi) setHi(+r.dataset.i, false); });
     // "Your price" box: live profit check; Enter / Esc goes back to the search box
     $("aaRl").addEventListener("input", function (e) {
