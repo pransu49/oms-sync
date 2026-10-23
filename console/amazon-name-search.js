@@ -82,8 +82,8 @@
     if (rule) {
       // The page's own text still says Rs 15 / Rs 20 - the robot now wins the Buy Box down to Rs 5 profit (24 Oct 2026)
       rule.innerHTML = rule.innerHTML
-        .replace(/if that still earns <b>₹15\+ per order<\/b>, otherwise the price that earns <b>₹20 per order<\/b>/, "if that still earns <b>₹5+ per order</b> (never a loss), otherwise the lowest price that earns <b>₹5</b>")
-        .replace(/can't earn ₹15 are not listed/, "can't earn ₹5 are not listed");
+        .replace(/if that still earns <b>₹15\+ per order<\/b>, otherwise the price that earns <b>₹20 per order<\/b>/, "if that still earns <b>₹15 or 10% per order</b> (never below cost), otherwise the lowest price that does")
+        .replace(/can't earn ₹15 are not listed/, "can't earn ₹15 or 10% are not listed");
       rule.insertAdjacentHTML("beforeend", '<br><b>Already listed?</b> The robot <b>relists</b> it: a fresh listing with a new SKU, then the old SKU is deleted (FBA listings are never touched). ' +
         '<b>Product name</b>: search, select products (click or <b>Enter</b>), then <b>List selected</b> (<b>Ctrl + Enter</b>).');
       rule.style.display = "none";
@@ -102,13 +102,16 @@
     var K = function (t) { return '<span class="aa-kbd">' + t + "</span>"; };
 
     /* ---- Pricing: same maths as the robot (spapi-sync.js orderProfit), for a new 0.5 kg listing ---- */
-    var MIN_P = 5, TGT_P = 20;   // same as the robot: win the Buy Box down to Rs 5 profit/order
+    var TGT_P = 20, RULE = "₹15 or 10%";   // same as the robot: profit >= Rs 15 OR 10% of the order (price + shipping), never below cost
     var selfShip = function () { return acct() === "sastastore"; };
     var shipChg = function () { return selfShip() ? 74 : 80; };              // shipping charge the customer pays
     var shipCost = function () { return selfShip() ? 40 : 55; };             // our courier / Easy Ship cost
     var fee = function (p) { return (p > 1000 ? p * 0.08 : 0) + (p <= 300 ? 2 : p <= 500 ? 23 : p <= 1000 ? 48 : 79); };
     function profitAt(cost, p, gstPct) { var r = (gstPct != null && !isNaN(gstPct) ? +gstPct : 5) / 100;
       return Math.round(p + 0.85 * shipChg() - cost - shipCost() - fee(p) - (r > 0 ? (p - cost) * r / (1 + r) : 0) - 3); }
+    function minAt(p) { return Math.min(15, 0.10 * (p + shipChg())); }
+    function okAt(cost, p, gstPct) { return p >= cost && profitAt(cost, p, gstPct) >= minAt(p); }
+    function floorFor(cost, gstPct) { for (var p = Math.max(1, Math.ceil(cost)); p < cost * 4 + 500; p++) if (okAt(cost, p, gstPct)) return p; return null; }
     function priceFor(cost, gstPct, want) { for (var p = Math.max(1, Math.floor(cost)); p < cost * 4 + 500; p++) if (profitAt(cost, p, gstPct) >= want) return p; return null; }
     function costOf(p) { var pr = G.prices()[p.code] || {}, sl = (pr.slabs || p.slabs || []), b = null;
       sl.forEach(function (x) { var v = +x.price; if (v > 0 && (b == null || v < b)) b = v; }); return b; }
@@ -123,16 +126,16 @@
       var pr = G.prices()[p.code] || {}, cost = costOf(p), mrp = parseFloat(pr.mrp || p.mrp),
         gst = pr.gst != null && pr.gst !== "" ? +pr.gst : (p.gst != null && p.gst !== "" ? +p.gst : null);
       if (!(cost > 0)) return { cost: null, mrp: mrp > 0 ? mrp : null };
-      var mn = priceFor(cost, gst, MIN_P), tg = priceFor(cost, gst, TGT_P);
+      var mn = floorFor(cost, gst), tg = priceFor(cost, gst, TGT_P);
       return { cost: cost, mrp: mrp > 0 ? mrp : null, gst: gst, min: mn, tgt: tg, loss: mn == null || (mrp > 0 && mn > mrp) };
     }
-    // Check a typed price: below the Rs 5 floor -> red box + note (the robot would refuse it)
+    // Check a typed price: below the rule (Rs 15 or 10%, never below cost) -> red box + note (the robot would refuse it)
     function checkPrice(h, sel) {
       var v = parseFloat(sel.price); sel.bad = false; sel.note = "";
       if (!(v > 0)) return;
       var P = h.P || pricing(h.p);
       if (P.mrp && v > P.mrp) { sel.note = "Above MRP — robot uses ₹" + Math.floor(P.mrp); return; }
-      if (P.cost != null) { var pf = profitAt(P.cost, Math.floor(v), P.gst); sel.note = "Profit ₹" + pf + "/order"; if (pf < MIN_P) { sel.bad = true; sel.note = "Only ₹" + pf + "/order — min ₹" + P.min; } }
+      if (P.cost != null) { var pf = profitAt(P.cost, Math.floor(v), P.gst); sel.note = "Profit ₹" + pf + "/order"; if (!okAt(P.cost, Math.floor(v), P.gst)) { sel.bad = true; sel.note = (Math.floor(v) < P.cost ? "Below cost" : "Only ₹" + pf + "/order") + " — min ₹" + P.min; } }
     }
 
     function bulkBtn() { $("aaCnt").textContent = pick.size; $("aaBulk").classList.toggle("dim", !pick.size); drawBar(); }
@@ -164,7 +167,7 @@
       if (on && !yp) r.insertAdjacentHTML("beforeend", ypHtml(i, sel)); else if (!on && yp) yp.remove();
       var pr = r.querySelector(".aa-pr"); pr && (pr.innerHTML = priceHtml(h, sel));
     }
-    function ypHtml(i, sel) { return '<label class="aa-yp' + (sel.bad ? " bad" : "") + '" title="Your selling price. Empty = robot prices it (₹1 under Buy Box, never below ₹5 profit)">₹<input data-yp="' + i + '" inputmode="decimal" placeholder="auto" value="' + esc(sel.price || "") + '"></label>'; }
+    function ypHtml(i, sel) { return '<label class="aa-yp' + (sel.bad ? " bad" : "") + '" title="Your selling price. Empty = robot prices it (₹1 under Buy Box, never below ₹15 or 10% profit)">₹<input data-yp="' + i + '" inputmode="decimal" placeholder="auto" value="' + esc(sel.price || "") + '"></label>'; }
     function toggle(i) {
       var h = hits[i]; if (!h || !h.ok) return;
       if (pick.has(h.k)) pick.delete(h.k); else pick.set(h.k, { p: h.p, price: "" });
@@ -183,7 +186,7 @@
       if (P.cost == null) return "Cost —<br>from mapping";
       var tg = P.tgt && (!P.mrp || P.tgt <= P.mrp) ? P.tgt : (P.mrp ? Math.floor(P.mrp) : P.tgt);
       return "Cost <b>₹" + P.cost.toFixed(2) + "</b>" + (P.gst != null ? " · GST " + P.gst + "%" : "") + "<br>" +
-        (P.loss ? '<span class="lo">Can\'t earn ₹' + MIN_P + (P.mrp ? " under MRP" : "") + "</span>" :
+        (P.loss ? '<span class="lo">Can\'t earn ' + RULE + (P.mrp ? " under MRP" : "") + "</span>" :
           "Min <b>₹" + P.min + '</b> · Target <span class="gd">₹' + tg + "</span>");
     }
     // Re-render rows in place (keeps scroll + highlight) after selection changes
@@ -305,7 +308,7 @@
       if (!pick.size) return toast("Select one or more products first", true);
       var db = G.db(); if (!db) return toast("Not connected — reload the page", true);
       var items = Array.from(pick.entries()), bad = items.filter(function (e) { return e[1].bad; });
-      if (bad.length) return toast("⚠ " + bad.length + " price" + (bad.length > 1 ? "s are" : " is") + " below ₹" + MIN_P + " profit (red box) — raise it or clear it for auto price", true);
+      if (bad.length) return toast("⚠ " + bad.length + " price" + (bad.length > 1 ? "s are" : " is") + " below the " + RULE + " profit rule (red box) — raise it or clear it for auto price", true);
       var qty = Math.max(1, parseInt($("aaQty").value) || 10), b = $("aaBulk");
       b.classList.add("busy");
       try {
