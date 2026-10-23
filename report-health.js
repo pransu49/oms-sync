@@ -110,7 +110,12 @@ const short = (arr, n) => arr.slice(0, n).join('\n') + (arr.length > n ? `\n…a
           await alertRef.set({ slaSlot: slot }, { merge: true });
         }
       }
-      if (slaLine) { const n = slaLine.match(/(\d+) order/); if (n) await alertRef.set({ day: { [today.date]: { slaDue: +n[1] } } }, { merge: true }); }
+      if (slaLine) {
+        const n = slaLine.match(/(\d+) order/);
+        const o = slaLine.match(/(\d+) already overdue/);
+        const at = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(11, 16) + ' IST';
+        if (n) await alertRef.set({ day: { [today.date]: { slaDue: +n[1], slaOverdue: o ? +o[1] : 0, slaLabel: slaList.filter((x) => /label ready/.test(x)).length, slaAt: at } } }, { merge: true });
+      }
     }
   } catch (e) { console.log('Alert step skipped:', e.message); }
 
