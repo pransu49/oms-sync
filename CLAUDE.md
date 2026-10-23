@@ -12,5 +12,5 @@
   `console/refund-tab.js` (`aikmLossJs`). Keep that block when replacing `refund-tab.js`.
 - The RTO Check tab (`console/rto-tab.js`) is loaded by the block at the end of `console/refund-tab.js` (`aikmRtoJs`).
   Keep that block when replacing `refund-tab.js`. Its data comes from `rto-sync.js` (aikm_admin/rtoIndex).
-- The POS page (dalbhaat.in/pages/pos, Shopify template `page.counter-billing.liquid`) loads `console/pos-lots-fix.js`
-  with one `<script>` line just before `</body>`. It fixes LOTS live prices (GN/62 fallback + barcode match). Keep that line.
+- The POS page (dalbhaat.in/pages/pos, Shopify template `page.counter-billing.liquid`) has the LOTS price fix built into its `applyLotsCatalog` (copy kept in `console/pos-lots-fix.js`)
+  It fixes LOTS live prices (reads LOTS {l,p} rate format, GN/62 fallback, barcode match). Keep it when replacing the template.
