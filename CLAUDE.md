@@ -19,4 +19,5 @@
   latest bill per product; they only fill items LOTS does not have. Vendor stock = units bought on bills - counter sales.
   LOTS + vendor data refresh on page open, daily at 7:00 am, and on the "Refresh prices" button (no live LOTS watch).
   Top-bar "● Prices synced" pill shows sync health; click = details (per source, last success, next auto sync).
+  Sale price = purchase rate + flat 8% (MRP_GAP_RULES), never above MRP.
   Fully keyboard driven: F1 shortcut sheet, Alt+letter panels, ↑↓ pick line, +/− qty, *N qty, @N price, Del remove.
