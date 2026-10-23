@@ -13424,6 +13424,7 @@ window.loadSavedFilesList = loadSavedFilesList;
   #omGuide{display:none;margin:0 0 12px;padding:14px 16px;background:var(--x-surface,#fff);color:var(--x-text,#0F1E35);border:1px solid var(--x-line,#E6E2D8);
     border-left:4px solid #D4AF37;border-radius:14px;font-family:"Lexend","Inter",sans-serif}
   #omGuide.show{display:block}
+  #rpanel4 #l62Extract.om-side{position:absolute!important;left:-9999px!important;width:1px;height:1px;overflow:hidden}
   #omGuide .og-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
   #omGuide .og-h b{font-size:14.5px;font-weight:600}
   #omGuide .og-tag{font-size:11px;font-weight:700;padding:2px 9px;border-radius:6px;background:#0F1E35;color:#D4AF37}
@@ -13471,6 +13472,84 @@ window.loadSavedFilesList = loadSavedFilesList;
       remainingItems: d.remainingItems || [], remainingCount: (d.remainingItems || []).length })
       .catch((e) => { btn.disabled = false; alert("Could not send: " + (e.message || e)); });
   }
+  /* ----- not-added products → the other LOTS account (LOTS-GN ⇄ LOTS-62) -----
+     A separate cart order on the other account. Its time is set just before this order,
+     so the steps above keep following your main order. Picking List / Excel come from
+     the same "hand-filled cart" tools (it is saved as a standalone cart). */
+  let gList = [];
+  const otherStore = (d) => (d.store === "lots62" ? "lots" : "lots62");
+  const rootOf = (d, id) => d.batchOf || id;
+  function stockOther(store, code) {
+    if (store === "lots62") {
+      try {
+        if (!stockOther.c || stockOther.t < Date.now() - 60000) {
+          const c = JSON.parse(localStorage.getItem("aikmLots62Cache") || "null"); stockOther.c = {}; stockOther.t = Date.now();
+          ((c && c.products) || []).forEach((p) => (stockOther.c[keyCode(p.code)] = p));
+        }
+        const q = stockOther.c[keyCode(code)];
+        return !q ? 0 : q.qty == null ? 1 : Number(q.qty);
+      } catch (e) { return 1; }
+    }
+    const p = lotsItem(code); return !p ? 0 : p.qty == null ? 1 : Number(p.qty);
+  }
+  /* failed products (missing qty only) that the other account has in stock */
+  function sideItems(d) {
+    const o = otherStore(d);
+    return (d.failedItems || []).map((f) => ({ code: String(f.code), name: f.name || "", qty: Math.max(0, (Number(f.qty) || 0) - (Number(f.cartQty) || 0)) }))
+      .filter((x) => x.code && x.qty > 0 && stockOther(o, x.code) > 0);
+  }
+  /* side requests of this order: thisBatch=true → only for the batch on screen (for the Send button) */
+  function sideDocs(thisBatch) {
+    const d = gDoc; if (!d) return [];
+    const root = rootOf(d, gId), bn = d.batchNo || 1;
+    return gList.filter((x) => x.d.sideOf === root && (!thisBatch || (x.d.sideBatch || 1) === bn)).sort((a, b) => (b.d.createdAtMs || 0) - (a.d.createdAtMs || 0));
+  }
+  function sideDoc(thisBatch) { const l = sideDocs(thisBatch); return l.length ? l[0] : null; }
+  function sidePush() { return sideDocs(false).find((x) => x.d.type !== "readCart") || null; }
+  function sideHtml(d) {
+    const sd = sideDoc(); if (!sd) return "";
+    const x = sd.d, sp = sidePush(), o = sName(x.store), lines = (x.cartLines || []).length;
+    let t, sub = "", act = "", cls = "done";
+    if (busyS(x.status)) {
+      cls = "now";
+      t = x.type === "readCart" ? `${o}: saving your final cart…` : `${o}: robot is adding ${x.sentCount || 0} not-added products`;
+      sub = `<span class="w"></span>${esc(x.status === "processing" ? x.progress || "Logging into LOTS…" : "Starts within 2 minutes…")}`;
+    } else if (x.status === "failed") {
+      cls = "bad"; t = `${o}: ${x.type === "readCart" ? "final cart not saved" : "could not add the products"}`; sub = esc(x.error || "Unknown error");
+      act = x.type === "readCart" ? `<button type="button" class="go" data-g="sidesave">💾 Try again</button>` : `<button type="button" class="go" data-g="sideretry">↻ Try again</button>`;
+    } else {
+      const p = sp ? sp.d : x, nf = (p.failedItems || []).length;
+      t = x.type === "readCart" ? `${o} cart saved — ${lines} products` : `${o}: ${p.addedCount || 0} of ${p.sentCount || 0} added to your ${o} cart`;
+      sub = (x.type !== "readCart" && nf ? `${nf} not available there either. ` : "") + `Edit the ${o} cart if needed, save it, and place that order on ${o} too.`;
+      act = `<a href="https://www.lotswholesale.com/member/cart" target="_blank" rel="noopener">Open ${o} cart ↗</a>` +
+        `<button type="button" data-g="sidesave">💾 Save final ${o} cart</button>` +
+        (lines ? `<button type="button" class="go" data-g="sidepdf">📄 ${o} Picking List</button><button type="button" class="xl" data-g="sidexl">⬇ ${o} Excel</button>` : "");
+    }
+    return `<li class="${cls}" style="margin-left:36px"><span class="n">${cls === "done" ? "✓" : cls === "bad" ? "!" : "↪"}</span><div><div class="t">${t}</div><div class="s">${sub}</div>${act ? `<div class="a">${act}</div>` : ""}</div></li>`;
+  }
+  function sideAdd(data, btn) {
+    const d = gDoc, l = sideDocs();
+    /* just before this order (keeps the steps on your main order), after any earlier side request */
+    const base = (Number(d.createdAtMs) || Date.now()) - 2, at = l.length ? Math.max(base, (Number(l[0].d.createdAtMs) || base) + 0.01) : base;
+    btn && (btn.disabled = true);
+    return fbDb.collection("lotsCartQueue").add(Object.assign({ vendor: "LOTS", standalone: true, sideOf: rootOf(d, gId), sideBatch: d.batchNo || 1,
+      batchNo: 1, batchTotal: 1, createdAtMs: at, createdAt: firebase.firestore.FieldValue.serverTimestamp() }, data))
+      .catch((e) => { btn && (btn.disabled = false); alert("Could not send: " + (e.message || e)); });
+  }
+  function gSide(btn, retry) {
+    const d = gDoc, o = otherStore(d), items = retry && sidePush() ? sidePush().d.items || [] : sideItems(d);
+    if (!items.length) return alert(`None of the not-added products are in stock at ${sName(o)}.`);
+    const units = items.reduce((t, x) => t + x.qty, 0);
+    if (!confirm(`Send ${items.length} not-added products (${units} units) to your ${sName(o)} cart?\n\n• Only products ${sName(o)} has in stock (from the last stock update)\n• Your ${sName(o)} cart is emptied first\n• Takes about 1–4 minutes\n• Your ${sName(d.store)} order is not changed`)) return;
+    sideAdd({ status: "pending", store: o, items, sentCount: items.length }, btn);
+  }
+  function gSideSave(btn) {
+    const sd = sideDoc(); if (!sd) return;
+    if (busyS(sd.d.status)) return alert("The LOTS robot is still busy — wait for it to finish.");
+    const o = sd.d.store;
+    if (!confirm(`Finished editing your ${sName(o)} cart?\n\n• The robot reads it and saves it — nothing is changed\n• Takes about 1–3 minutes\n• Do this BEFORE placing the ${sName(o)} order`)) return;
+    sideAdd({ status: "pending", type: "readCart", store: o, items: [], sentCount: 0 }, btn);
+  }
   function gNext(btn) {
     const d = gDoc, rem = d.remainingItems || [], nm = sName(d.store), n = (d.batchNo || 1) + 1;
     if (!rem.length || busyS(d.status)) return;
@@ -13504,10 +13583,12 @@ window.loadSavedFilesList = loadSavedFilesList;
     else if (st === "failed") s1 = step(1, "bad", "Could not fill the LOTS cart", esc(d.error || "Unknown error"), `<button type="button" class="go" data-g="retry">↻ Try again</button>`);
     else {
       const f = (d.failedItems || []).length;
+      const o = otherStore(d), av = f ? sideItems(d) : [];
       s1 = step(1, "done", `Robot filled your ${nm} cart — ${d.addedCount || 0} of ${d.sentCount || 0} added`,
-        f ? `${f} product${f > 1 ? "s" : ""} not added (out of stock / limit) — add a substitute on LOTS if needed` : "",
-        f ? `<button type="button" data-g="failxl">⬇ Not-added list</button>` : "");
+        f ? `${f} product${f > 1 ? "s" : ""} not added (out of stock / limit)` + (sideDoc(true) ? "" : av.length ? ` — <b>${av.length}</b> of them in stock at ${sName(o)}` : ` — none in stock at ${sName(o)} either`) : "",
+        f ? `<button type="button" data-g="failxl">⬇ Not-added list</button>` + (!sideDoc(true) && av.length ? `<button type="button" class="go" data-g="side">🛒 Send ${av.length} to ${sName(o)} cart</button>` : "") : "");
     }
+    s1 += sideHtml(d);
     /* step 2: edit on LOTS */
     const s2 = step(2, pushDone && !saved && !(isSave && busyS(st)) && st !== "failed" ? "now" : pushDone ? "done" : "todo",
       "Check &amp; edit the cart on LOTS", "Change quantities, add or remove products — whatever you need.",
@@ -13545,6 +13626,13 @@ window.loadSavedFilesList = loadSavedFilesList;
     if (g === "hide") { try { localStorage.setItem(GHIDE, gId); } catch (x) {} paintGuide(); return; }
     if (g === "save") return gSave(b);
     if (g === "next") return gNext(b);
+    if (g === "side") return gSide(b, false);
+    if (g === "sideretry") return gSide(b, true);
+    if (g === "sidesave") return gSideSave(b);
+    if (g === "sidepdf" || g === "sidexl") {
+      const h = document.querySelector(`#l62Extract [data-x="${g === "sidepdf" ? "pdf" : "xl"}"]`);
+      return h ? h.click() : alert("Still loading — try again in a few seconds.");
+    }
     const map = { retry: '[data-lc="retry"]', failxl: '[data-lc="xls"]', waitxl: '[data-l62="xlrem"]', pdf: '[data-l62="pdf"], .lc-pdf', xl: '[data-l62="xlcart"]' };
     const h = hiddenBtn(map[g]);
     if (h) h.click(); else alert("Still loading — try again in a few seconds.");
@@ -13555,6 +13643,13 @@ window.loadSavedFilesList = loadSavedFilesList;
       gDoc = snap.empty ? null : snap.docs[0].data();
       gId = snap.empty ? null : snap.docs[0].id;
       setTimeout(paintGuide, 150); /* let the old panel add its buttons first */
+    }, () => {});
+    fbDb.collection("lotsCartQueue").orderBy("createdAtMs", "desc").limit(15).onSnapshot((snap) => {
+      gList = snap.docs.map((x) => ({ id: x.id, d: x.data() }));
+      /* the hand-filled cart box would show the same side cart again — hide it then */
+      const sa = gList.find((x) => x.d.standalone), ex = byId("l62Extract");
+      if (ex) ex.classList.toggle("om-side", !!(sa && sa.d.sideOf));
+      setTimeout(paintGuide, 150);
     }, () => {});
     /* the old panel adds its buttons (PDF, Excel, change summary) a moment later — repaint then */
     const cp = byId("lotsCartPanel");
