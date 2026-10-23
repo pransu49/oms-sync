@@ -35,7 +35,8 @@
     var x = skus[sku]; if (!x) return null;
     return { acct: ak, sku: sku, asin: x.a || "", price: x.p, mrp: x.m, img: x.i || "", f: x.f, t: x.t, e: x.e, c: x.c, k: x.k, g: x.g, fp: x.fp };
   }
-  var MIN_PROFIT = 5;   // same as the price robot (owner, 24 Oct 2026: max Buy Box, never a loss)
+  var MIN_PROFIT = 15, MIN_PCT = 0.10;   // same as the price robot: a loss order earns under Rs 15 AND under 10% of the order value
+  function minFor(o) { return Math.min(MIN_PROFIT, MIN_PCT * (num(o.total) || 0)); }
   // Same maths as the price robot, per order: price + 85% of the buyer's shipping charge - product cost - courier
   // - Amazon fees (Amazon's own estimate) - GST on the margin - Rs 3 kept for returns. null = not enough data.
   function ourProfit(o, L) {
@@ -111,11 +112,11 @@
     p.innerHTML =
       '<div class="lx-head"><div><h2>Fix loss-making products</h2>' +
       '<div class="lx-sub">Each row is one product that sold with low or negative profit. Set a new price and press <strong>Push</strong> — Amazon updates within about 15 minutes. ' +
-      'Profit = price + buyer\'s shipping charge − product cost − courier − Amazon fees − GST (same maths as the price robot). A loss order earns under ₹5. Where an account isn\'t linked or a cost isn\'t mapped, OMS Guru\'s profit is used and marked <b>OMS</b>.</div></div>' +
+      'Profit = price + buyer\'s shipping charge − product cost − courier − Amazon fees − GST (same maths as the price robot). A loss order earns under ₹15 and under 10% of the order value. Where an account isn\'t linked or a cost isn\'t mapped, OMS Guru\'s profit is used and marked <b>OMS</b>.</div></div>' +
       '<div class="lx-chips" id="lxDays"><span class="lx-chip" data-d="1">Today</span><span class="lx-chip on" data-d="7">7 days</span><span class="lx-chip" data-d="30">30 days</span><span class="lx-chip" data-d="0">All</span></div></div>' +
       '<div class="lx-kpis" id="lxKpis"></div>' +
       '<div class="lx-bar"><span class="lx-chips" id="lxView"><span class="lx-chip on" data-v="fix">Ready to fix</span><span class="lx-chip" data-v="all">All products</span></span><input id="lxQ" placeholder="Search product, SKU or ASIN…">' +
-      '<span style="font-size:12px;color:var(--x-muted)">Never below ₹5 / order — same rule as the price robot</span>' +
+      '<span style="font-size:12px;color:var(--x-muted)">At least ₹15 or 10% of the order — same rule as the price robot</span>' +
       '<button type="button" id="lxPushAll">Push all suggested prices</button></div>' +
       '<div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>Account</th><th class="num">Loss orders</th><th class="num">Profit / order</th><th class="num">Total profit</th>' +
       '<th class="num">Amazon price</th><th class="num">MRP</th><th class="num">Suggested</th><th class="num">New price</th><th>Status</th></tr></thead><tbody id="lxBody"></tbody></table></div>' +
@@ -147,7 +148,7 @@
       var t = when(o); if (cut && (!t || t < cut)) return;
       var L = isAmazon(o.channel) ? listing(o) : null, mine = ourProfit(o, L);
       // our own maths (cost mapping + Amazon fees + courier + GST) where we have it, else OMS Guru's profit
-      if (mine != null ? mine >= MIN_PROFIT : !isLoss(o)) return;
+      if (mine != null ? mine >= minFor(o) : !isLoss(o)) return;
       var pr = mine != null ? mine : num(o.profit), qty = Math.max(1, num(o.qty) || 1);
       totals.n++; if (mine != null) totals.ours++; if (pr < 0) { totals.real++; totals.lost += -pr; }
       var key = (L ? L.acct + "|" + L.sku : acctName(o.channel) + "|" + (o.sku || o.productName));
@@ -200,7 +201,7 @@
     if (!force && sig === S.lastSig) return; S.lastSig = sig;
     var t = build(), fix = LIST.filter(function (r) { return r.sug; }).length;
     $("lxKpis").innerHTML =
-      kpi(t.n, "Loss orders (under ₹5 profit)", "red") + kpi(t.real, "Sold below cost (profit under ₹0)", t.real ? "red" : "") +
+      kpi(t.n, "Loss orders (under ₹15 / 10%)", "red") + kpi(t.real, "Sold below cost (profit under ₹0)", t.real ? "red" : "") +
       kpi(inr(t.lost), "Money lost on those orders", t.lost ? "red" : "") + kpi(fix, "Amazon prices ready to fix", "gold");
     var rows = LIST.filter(function (r) { return (S.view === "all" || r.sug || isQueued(r)) && (!S.q || (r.name + " " + r.sku + " " + (r.L ? r.L.asin : "") + " " + r.acct).toLowerCase().indexOf(S.q) > -1); });
     $("lxView").children[0].textContent = "Ready to fix (" + LIST.filter(function (r) { return r.sug || isQueued(r); }).length + ")";

@@ -768,8 +768,8 @@ function pricedOut(i, o) {
 }
 async function fixSuppressedPrice(sellerId, i, old, productType, why) {
   // Owner, 21 Oct 2026: blocked listings must come back live at a profitable price.
-  // Target = ₹1 under the Buy Box (landed, incl. shipping). If that earns under ₹5/order (MIN_PROFIT), go live at the lowest
-  // price that earns ₹5 instead (listed and earning beats suppressed). The listing's own min/max price limits are
+  // Target = ₹1 under the Buy Box (landed, incl. shipping). If that earns under the rule (₹15 or 10%), go live at the lowest
+  // price that meets it instead (listed and earning beats suppressed). The listing's own min/max price limits are
   // moved to fit (Amazon error 18155 "below your minimum price threshold" was blocking 4 listings).
   const L = (o) => (o.price || 0) + (o.shipping || 0);
   const offers = (relistFresh.get(i.asin) || []).filter((o) => !o.isMine && o.price > 0).sort((x, y) => L(x) - L(y));
@@ -781,10 +781,10 @@ async function fixSuppressedPrice(sellerId, i, old, productType, why) {
   const floor = Math.ceil(noLossFloor(i, kc.cost, i.price, ship));
   let target = ref ? Math.floor(L(ref) - 1 - ship) : Math.max(i.price, floor);
   let basis = ref ? `${bb ? 'Buy Box' : 'lowest seller'} ₹${Math.round(L(ref))} incl. shipping − ₹1` : 'no other seller';
-  if (orderProfit(i, kc.cost, target, ship) < MIN_PROFIT) { target = floor; basis = `lowest price that earns ₹${MIN_PROFIT}/order (Buy Box too cheap to match)`; }
+  if (!priceOk(i, kc.cost, target, ship)) { target = floor; basis = `lowest price that earns ${RULE_TXT}/order (Buy Box too cheap to match)`; }
   if (/low pricing error/i.test(why || '') && target <= i.price) { target = Math.ceil(i.price) + 1; basis = 'Amazon flagged the price as too low - re-submitted ₹1 higher'; }
   if (mrp && target > mrp) {
-    if (floor > mrp) return { done: false, note: `Earning ₹${MIN_PROFIT}/order needs ₹${floor}, above MRP ₹${mrp} - check the cost (${kc.src} ₹${kc.cost}).` };
+    if (floor > mrp) return { done: false, note: `Earning ${RULE_TXT}/order needs ₹${floor}, above MRP ₹${mrp} - check the cost (${kc.src} ₹${kc.cost}).` };
     target = Math.floor(mrp);
   }
   await setOfferPrice(sellerId, i, old, productType, target);   // also moves min/max limits so the price fits
@@ -1051,11 +1051,29 @@ function closingFee(p) { return p <= 300 ? 2 : p <= 500 ? 23 : p <= 1000 ? 48 : 
 //   Praso ships mostly Easy Ship -> Amazon's Easy Ship weight fee. Rs 3 per order kept aside for returns (RTO ~3%).
 const SELF_SHIP_ACCOUNTS = new Set(['sastastore']);
 // Owner, 21 Oct 2026: reseller of branded goods - margin comes mostly from the shipping charge.
-// (21 Oct: Rs 15 minimum / Rs 20 target - changed 24 Oct to Rs 5 minimum for maximum Buy Box, see MIN_PROFIT.)
+// (21 Oct: Rs 15 minimum / Rs 20 target; 24 Oct: Rs 5; 24 Oct later: Rs 15 OR 10% of price - see profitOk.)
 // Owner, 24 Oct 2026: "maximum Buy Box with profit, never a loss - more Buy Boxes bring more sales".
-// The robot matches the Buy Box down to the price that still earns MIN_PROFIT (Rs 5 safety margin over cost, fees,
-// courier, GST and returns). TARGET_PROFIT is only a label now (was the loss-guard target).
+// TARGET_PROFIT is only a label now (was the loss-guard target).
 const MIN_PROFIT = 5, TARGET_PROFIT = 20;
+// Owner, 24 Oct 2026 (later the same day): "minimum 15 per order or 10% profit per order".
+// An order price is OK when its profit is at least Rs 15 OR at least 10% of the order value (price + the shipping
+// charge the buyer pays) - whichever is lower, so cheap items can still win the Buy Box at 10%, never at a loss.
+// Also never below the product's own cost (owner sees that as a loss even when the shipping charge covers it).
+// (MIN_PROFIT above is no longer the floor; it stays only for old log wording.)
+const FLOOR_RS = 15, FLOOR_PCT = 0.10;
+const RULE_TXT = `₹${FLOOR_RS} or ${FLOOR_PCT * 100}%`;
+function minProfitAt(price, ship) { return Math.min(FLOOR_RS, FLOOR_PCT * ((Number(price) || 0) + (Number(ship) || 0))); }
+function profitOk(i, cost, price, ship) {
+  const sh = ship == null ? myShipCharge(i) : ship;
+  return orderProfit(i, cost, price, sh) >= minProfitAt(price, sh) - 1e-9;
+}
+// lowest price whose profit meets the rule (null if none up to the limit) - never below the product's own cost
+function floorPrice(i, cost, ship, limit) {
+  const lim = limit || cost * 4 + 500;
+  for (let p = Math.max(1, Math.ceil(cost)); p <= lim; p++) if (profitOk(i, cost, p, ship)) return p;
+  return null;
+}
+function priceOk(i, cost, price, ship) { return price >= cost && profitOk(i, cost, price, ship); }
 function courierCost(kg) { const n = Math.max(Number(kg) || 0.5, 0.5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
 function shipCostFor(i) { return SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? courierCost(i.weightKg) : Math.max(easyShipFee(i.weightKg), 45); }
 function myShipCharge(i) { const m = (relistFresh.get(i.asin) || []).find((o) => o.isMine); return m && m.shipping != null ? Number(m.shipping) : (SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? 74 : 80); }
@@ -1113,9 +1131,9 @@ async function refreshFeeEstimates() {
   await dbMain.collection('aikm_admin').doc(`spapiFees_${ACCOUNT_LABEL}`).set({ fees: FEES, updatedAt: now });
   console.log(`Fee estimates: ${got} of ${todo.length} refreshed from Amazon (${Object.keys(FEES).length} stored).`);
 }
-// lowest price that still earns MIN_PROFIT per order
+// lowest price that meets the profit rule (Rs 15 or 10% of price)
 function noLossFloor(i, cost, price, ship = myShipCharge(i)) {
-  return Math.ceil(price - orderProfit(i, cost, price, ship) + MIN_PROFIT);
+  return floorPrice(i, cost, ship, Math.max(price * 4, cost * 4) + 500) || Math.ceil(price - orderProfit(i, cost, price, ship) + FLOOR_RS);
 }
 const OUR_SELLER_IDS = new Set(['AI66SST976WPS', 'A1KF1CBHR5UA1W', process.env.SPAPI_SELLER_ID].filter(Boolean));
 const BB_MAX_PER_RUN = 80, BB_MAX_RAISE_PER_RUN = 30, BB_MAX_CUT = 0.3, BB_MAX_RAISE = 0.2, BB_COOL_MS = 2 * 3600e3;   // re-check each price every 2 h for maximum Buy Box
@@ -1163,8 +1181,8 @@ async function loadManualPrices() {
   return out;
 }
 async function runBuyBoxPricer(sellerId, eligible, st, log) {
-  // Owner, 24 Oct 2026: win the Buy Box at ANY gap as long as each order still earns MIN_PROFIT (Rs 5),
-  // never lower a price the owner set himself in the last 7 days, and lift loss-making prices just to MIN_PROFIT.
+  // Owner, 24 Oct 2026: win the Buy Box at ANY gap as long as each order still earns Rs 15 or 10% of the price,
+  // never lower a price the owner set himself in the last 7 days, and lift prices under that rule just up to it.
   // and raise the price when we hold the Buy Box and the next seller is Rs 3+ above us.
   const now = Date.now(), L = (o) => (o.price || 0) + (o.shipping || 0), lower = [], raise = [];
   for (const i of eligible) {
@@ -1201,29 +1219,29 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   await learnFromChanges(sellerId, eligible, st, log, patchPrice).catch((e) => console.warn('Robot learning skipped:', e.message || e));
 
   // LOSS GUARD (owner, 21 Oct 2026: "make the business profitable"): a listing whose current price earns under
-  // MIN_PROFIT per order is moved up to the lowest price that earns MIN_PROFIT - never above MRP, never more than +30% in one step.
+  // the rule (Rs 15 or 10%) is moved up to the lowest price that meets it - never above MRP, never more than +30% in one step.
   const guardDone = new Set();
   for (const i of eligible) {
     if (guarded >= BB_MAX_RAISE_PER_RUN) break;
     if (st.bbCool[i.sku] > now || manual.has(i.sku)) continue;
     const kc = await knownCost(i).catch(() => null); if (!kc) continue;
     const ship = myShipCharge(i), profit = orderProfit(i, kc.cost, i.price, ship);
-    if (profit >= MIN_PROFIT) continue;
+    if (priceOk(i, kc.cost, i.price, ship)) continue;
     guardDone.add(i.sku); st.bbCool[i.sku] = now + BB_COOL_MS;
     // Search the real price (fees and GST change with price: closing fee jumps at Rs 300 / 500 / 1000).
     const mrp = Number(i.mrp) || Infinity, cap = Math.floor(Math.min(mrp, i.price * 1.3));
     let target = null, okMin = null;
     for (let pz = Math.ceil(i.price) + 1; pz <= cap; pz++) {
       const pf = orderProfit(i, kc.cost, pz, ship);
-      if (pf >= MIN_PROFIT) { okMin = pz; break; }   // smallest raise that stops the loss - keeps the Buy Box chance
+      if (pz >= kc.cost && pf >= minProfitAt(pz, ship)) { okMin = pz; break; }   // smallest raise that stops the loss - keeps the Buy Box chance
     }
     target = okMin;
-    if (!target) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. No price up to ₹${cap} (${cap === Math.floor(mrp) ? 'MRP' : '+30%'}) earns ₹${MIN_PROFIT}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
+    if (!target) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. No price up to ₹${cap} (${cap === Math.floor(mrp) ? 'MRP' : '+30%'}) earns ${RULE_TXT}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
     try {
       const was = i.price; await patchPrice(i, target); guarded++; noteChange(st, i, 'raise', target, was);
       const np = orderProfit(i, kc.cost, target, ship);
       console.log(`Loss guard RAISE ${i.sku}: Rs ${was} -> Rs ${target} (was Rs ${profit}/order, now Rs ${np})`);
-      await log(i, { status: 'bb_raise', change: 'loss_guard', oldPrice: was, newPrice: target, profit: np, basis: `Was earning ₹${profit}/order (under ₹${MIN_PROFIT} minimum) · cost ₹${kc.cost} (${kc.src}) · now ₹${np}/order` });
+      await log(i, { status: 'bb_raise', change: 'loss_guard', oldPrice: was, newPrice: target, profit: np, basis: `Was earning ₹${profit}/order (under the ${RULE_TXT} minimum) · cost ₹${kc.cost} (${kc.src}) · now ₹${np}/order` });
     } catch (e) { console.warn(`Loss guard FAILED for ${i.sku}:`, e.message || e); }
     await new Promise((r) => setTimeout(r, 800));
   }
@@ -1237,11 +1255,11 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
       const kc = await knownCost(i), ship = Number(mine.shipping) || 0;
       if (!kc) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no cost known. Map it on the Amazon page so the robot can price it.` }); continue; }
       const target = Math.floor(L(win) - 1 - ship), profit = orderProfit(i, kc.cost, target, ship), floor = noLossFloor(i, kc.cost, target, ship);
-      if (profit < MIN_PROFIT) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ₹${MIN_PROFIT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
+      if (!priceOk(i, kc.cost, target, ship)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ${RULE_TXT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
       if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
       const was = i.price; await patchPrice(i, target); lowered++; noteChange(st, i, 'lower', target, was);
       console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${was} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order)`);
-      await log(i, { status: 'bb_price', change: 'lower', oldPrice: was, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, above ₹${MIN_PROFIT} minimum)` : ''}` });
+      await log(i, { status: 'bb_price', change: 'lower', oldPrice: was, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, meets the ${RULE_TXT} minimum)` : ''}` });
     } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await log(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
     await new Promise((r) => setTimeout(r, 800));
   }
@@ -1277,7 +1295,7 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
 //   • still holding the Buy Box at the higher price      -> keep (it works)
 //   • lost the Buy Box                                     -> back to the price before the raise(s), no raises for 14 days
 // Never touched: prices changed since (by hand or the page), owner-set prices (7-day rule), and loss-guard raises
-// (the old price earned under Rs MIN_PROFIT - the owner's minimum stays).
+// (the old price earned under the rule Rs 15 or 10% - the owner's minimum stays).
 async function undoLostRaises(eligible, st, log, patchPrice, manual) {
   const now = Date.now();
   let undone = 0, kept = 0, skipped = 0;
@@ -1294,7 +1312,7 @@ async function undoLostRaises(eligible, st, log, patchPrice, manual) {
     // Go back to the earliest price in this run of raises that still earns the minimum (skips loss-guard steps)
     const kc = await knownCost(i).catch(() => null);
     let orig = null;
-    for (let j = k; j < ch.length; j++) { const f = Number(ch[j].from); if (f > 0 && (!kc || orderProfit(i, kc.cost, f) >= MIN_PROFIT)) { orig = f; break; } }
+    for (let j = k; j < ch.length; j++) { const f = Number(ch[j].from); if (f > 0 && (!kc || priceOk(i, kc.cost, f))) { orig = f; break; } }
     if (!orig || orig >= last.to) { m.raiseUndo = 'loss_guard'; skipped++; continue; }
     try {
       await patchPrice(i, orig); undone++;
@@ -1307,7 +1325,7 @@ async function undoLostRaises(eligible, st, log, patchPrice, manual) {
     } catch (e) { console.warn(`Raise undo failed for ${i.sku}:`, e.message || e); }
     await new Promise((r) => setTimeout(r, 800));
   }
-  console.log(`Raise undo: ${undone} put back to the price before the raise, ${kept} still winning at the higher price (kept), ${skipped} left alone (changed since / your price / ₹${MIN_PROFIT} minimum).`);
+  console.log(`Raise undo: ${undone} put back to the price before the raise, ${kept} still winning at the higher price (kept), ${skipped} left alone (changed since / your price / ${RULE_TXT} minimum).`);
 }
 
 // ── ROBOT LEARNING (owner, 21 Oct 2026: "check trends and learn") ─────────────────────────
@@ -1641,7 +1659,7 @@ async function applyPendingHsnUpdates(sellerId) {
 // ── ADD ASIN (owner, 21 Oct 2026: "if we add an ASIN in the robot it should list on Amazon, making profit") ──
 // The Amazon page writes spapiAddAsin/{account_asin} = { account, asin, qty, cost?, mrp?, gst?, status:'pending' }.
 // Every sync (quick or full): check the ASIN, cost and competition, pick a PROFITABLE price, list it as a new offer.
-//   price = ₹1 under the Buy Box (incl. shipping) if that still earns ₹5+/order (MIN_PROFIT), else the lowest price that earns ₹5;
+//   price = ₹1 under the Buy Box (incl. shipping) if that still earns ₹15 or 10%, else the lowest price that does;
 //           no other seller -> MRP. Never above MRP. No cost known -> waits for a cost (Map it on the page).
 // Result statuses: listed | exists | needs_cost | needs_mrp | blocked | loss | failed  (the page shows each, with Retry).
 const GST_CODE = { 0: 'A_GEN_EXEMPT', 0.25: 'A_GEN_MINIMUM', 3: 'A_GEN_JEWELLERY', 5: 'A_GEN_SUPERREDUCED', 18: 'A_GEN_STANDARD', 40: 'A_GEN_HIGHPEAK' };
@@ -1747,21 +1765,21 @@ async function applyAddAsinRequests(sellerId) {
       } catch (e) { console.warn(`Add ASIN offers failed for ${asin}:`, e.message || e); }
       const L = (o) => o.price + o.shipping, ship = myUsualShip();
       const ref = offers.find((o) => o.bb) || offers.slice().sort((a, b) => L(a) - L(b))[0];
-      const p15 = priceForProfit(i, kc.cost, ship, MIN_PROFIT), p20 = priceForProfit(i, kc.cost, ship, TARGET_PROFIT);
-      if (p15 == null || p15 > mrp) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Earning ₹${MIN_PROFIT}/order needs ₹${p15 || '?'}, above MRP ₹${mrp} (cost ₹${kc.cost}). Not listed.` }); continue; }
+      const p15 = floorPrice(i, kc.cost, ship);
+      if (p15 == null || p15 > mrp) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Earning ${RULE_TXT}/order needs ₹${p15 || '?'}, above MRP ₹${mrp} (cost ₹${kc.cost}). Not listed.` }); continue; }
       let price, basis;
       if (!ref) { price = Math.floor(mrp); basis = 'No other seller - listed at MRP'; }
       else {
         const win = Math.floor(L(ref) - 1 - ship);
-        if (orderProfit(i, kc.cost, win, ship) >= MIN_PROFIT) { price = win; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} incl. shipping − ₹1`; }
-        else { price = p15; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} is too cheap to match without loss - listed at the lowest price that earns ₹${MIN_PROFIT}/order`; }
+        if (priceOk(i, kc.cost, win, ship)) { price = win; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} incl. shipping − ₹1`; }
+        else { price = p15; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} is too cheap to match without loss - listed at the lowest price that earns ${RULE_TXT}/order`; }
       }
       price = Math.min(price, Math.floor(mrp));
-      // Owner's own price from the page (name search "Your price"): used as is (capped at MRP), but never below Rs MIN_PROFIT/order.
+      // Owner's own price from the page (name search "Your price"): used as is (capped at MRP), but never below the rule (Rs 15 or 10%).
       const want = Number(r.wantPrice);
       if (want > 0) {
         const wp = Math.min(Math.floor(want), Math.floor(mrp)), wpProfit = Math.round(orderProfit(i, kc.cost, wp, ship));
-        if (wpProfit < MIN_PROFIT) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Your price ₹${wp} earns only ₹${wpProfit}/order (minimum ₹${MIN_PROFIT}, needs ₹${p15}+). Change the price or clear it for auto price, then Retry.` }); continue; }
+        if (!priceOk(i, kc.cost, wp, ship)) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Your price ₹${wp} earns only ₹${wpProfit}/order (minimum ${RULE_TXT}, needs ₹${p15}+). Change the price or clear it for auto price, then Retry.` }); continue; }
         basis = `Your price ₹${wp}${wp < want ? ` (capped at MRP)` : ''} · robot's auto price would be ₹${price}`; price = wp;
       }
       const profit = Math.round(orderProfit(i, kc.cost, price, ship));
@@ -2111,7 +2129,7 @@ async function publishListingIndex() {
     if (!i || i.account !== ACCOUNT_LABEL || !i.sku) return;
     skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null, i: i.img || '' };
   });
-  // f = lowest price that still earns MIN_PROFIT, t = price that earns TARGET_PROFIT (same maths as the robot)
+  // f = lowest price that meets the rule (Rs 15 or 10%), t = price that earns TARGET_PROFIT (same maths as the robot)
   try {
     await loadCostData();
     for (const i of Object.values(SNAP.inventory)) {
@@ -2120,7 +2138,7 @@ async function publishListingIndex() {
       const pr = orderProfit(i, kc.cost, i.price);
       const lim = Math.floor(Math.max(Number(i.mrp) || 0, i.price * 1.5));
       const first = (goal) => { for (let pz = 1; pz <= lim; pz++) if (orderProfit(i, kc.cost, pz) >= goal) return pz; return Math.ceil(i.price - pr + goal); };
-      skus[i.sku].f = first(MIN_PROFIT); skus[i.sku].t = first(TARGET_PROFIT); skus[i.sku].e = Math.round(pr);
+      skus[i.sku].f = (() => { for (let pz = 1; pz <= lim; pz++) if (profitOk(i, kc.cost, pz)) return pz; return first(FLOOR_RS); })(); skus[i.sku].t = first(TARGET_PROFIT); skus[i.sku].e = Math.round(pr);
       // per-unit numbers so the console can work out each ORDER's profit with the same maths
       skus[i.sku].c = Math.round(kc.cost * 100) / 100; skus[i.sku].k = shipCostFor(i); skus[i.sku].g = gstRate(i);
       skus[i.sku].fp = Math.round(feeFor(i, i.price) * 100) / 100;
