@@ -15,3 +15,5 @@
 - The POS page (dalbhaat.in/pages/pos) = Shopify template `page.counter-billing.liquid`. Latest copy: `shopify/page.counter-billing.liquid`
   (pasted into Shopify by hand - the live theme can't be written from here). LOTS is the source for price, MRP, name, unit,
   GST, HSN, barcode and stock (LOTS GN). LOTS rates are saved as `{l:"1-5",p:56.9}` - `applyLotsCatalog` must keep reading that.
+  Other vendors (Pawan, Rana, Nav Durga...) come from the Purchase Bills Supabase `docs` table (`loadVendorCatalog`):
+  latest bill per product; they only fill items LOTS does not have. Vendor stock = units bought on bills - counter sales.
