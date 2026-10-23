@@ -1,11 +1,32 @@
 /* AIKM Admin Console — LOTS Products: "Price mismatch" button.
    Loaded by refund-tab.js (no Shopify edit needed).
-   Shows only the products whose best price differs between LOTS-GN and LOTS-62, biggest gap first.
+   Shows only the products whose best price differs between LOTS-GN and LOTS-62.
+   Order: mapped on Amazon (SP-API page) first, out of stock last, biggest gap first inside each group.
    LOTS-62 prices come from the copy the LOTS-62 add-on already keeps in this browser
-   (localStorage "aikmLots62Cache"), so this costs no extra Firebase reads. */
+   (localStorage "aikmLots62Cache"). Amazon mapping = aikm_admin/spapiAsinLotsMap, which the page
+   already listens to; listening to the same doc again shares that listener (no extra reads). */
 (function () {
   if (window.__aikmPriceMismatch) return; window.__aikmPriceMismatch = true;
-  var CACHE_KEY = "aikmLots62Cache", by62 = {}, savedAt = null, on = false, btn = null;
+  var CACHE_KEY = "aikmLots62Cache", by62 = {}, savedAt = null, on = false, btn = null, mapped = {};
+
+  // LOTS item codes that are mapped to an Amazon ASIN (same rules as the page's own "Mapped on Amazon")
+  (function watchMap() {
+    if (typeof fbDb === "undefined" || !fbDb) return void setTimeout(watchMap, 2000);
+    fbDb.collection("aikm_admin").doc("spapiAsinLotsMap").onSnapshot(function (d) {
+      var map = (d.exists && d.data().map) || {}, m = {};
+      Object.keys(map).forEach(function (asin) {
+        var r = map[asin]; if (!r) return;
+        if (r.vendorName && String(r.vendorName).toUpperCase() !== "LOTS") return;
+        var parts = Array.isArray(r.parts) && r.parts.length ? r.parts : (r.code ? [{ code: r.code }] : []);
+        parts.forEach(function (x) { if (x && x.code) m[String(x.code)] = 1; });
+      });
+      mapped = m;
+      if (on) redraw();
+    }, function (e) { console.warn("Price mismatch: Amazon mapping read failed", e); });
+  })();
+  function isMapped(p) { return !!mapped[String(p.code)]; }
+  function isOos(p) { return !p.removedAt && p.qty != null && Number(p.qty) <= 0; }
+  function rank(p) { return (isOos(p) ? 2 : 0) + (isMapped(p) ? 0 : 1); }
 
   function keyOf(c) { return String(c == null ? "" : c).trim().replace(/^0+(?=\d)/, ""); }
   function best(slabs) { return slabs && slabs.length ? Math.min.apply(null, slabs.map(function (s) { return Number(s.price); })) : null; }
@@ -43,7 +64,7 @@
     if (!btn) return;
     var ready = Object.keys(by62).length && products().length;
     btn.classList.toggle("on", on);
-    btn.title = on ? "Showing price mismatches (biggest gap first). Click to show all." : "Show products priced differently at LOTS-GN and LOTS-62";
+    btn.title = on ? "Showing price mismatches: Amazon-mapped first, then biggest gap. Click to show all." : "Show products priced differently at LOTS-GN and LOTS-62";
     btn.innerHTML = "<i></i>Price mismatch" + (ready ? "<b>" + count().toLocaleString("en-IN") + "</b>" : "") + (on ? " ✕" : "");
   }
   function redraw() {
@@ -59,7 +80,7 @@
     getFilteredLotsProducts = function () {
       var list = orig.apply(this, arguments);
       if (!on) return list;
-      return list.filter(function (p) { return gap(p) != null; }).sort(function (a, b) { return gap(b) - gap(a); });
+      return list.filter(function (p) { return gap(p) != null; }).sort(function (a, b) { return rank(a) - rank(b) || gap(b) - gap(a); });
     };
     getFilteredLotsProducts.__pm = true;
   }
