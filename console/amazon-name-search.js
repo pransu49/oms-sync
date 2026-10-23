@@ -318,7 +318,140 @@
         pick.clear(); bulkBtn(); inp.value = ""; search(); inp.focus();
       } catch (e) { toast("⚠ Not saved: " + (e.message || e), true); } finally { b.classList.remove("busy"); }
     };
+    initList(ov);
     return true;
+  }
+
+  /* ===== Robot requests list (drawn by the page): status filter, text filter, bulk select / delete / retry =====
+     Works on the rows the page already draws (no extra database reads). Doc id = account_bc_<barcode> or account_<ASIN>. */
+  function initList(ov) {
+    var list = $("aaList"); if (!list || $("aaLbar")) return;
+    var css = document.createElement("style");
+    css.textContent = [
+      ".aa-lbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 22px;border-bottom:1px solid var(--line-2);background:#fff}",
+      ".aa-chip{all:unset;cursor:pointer;height:30px;padding:0 12px;border-radius:15px;border:1px solid var(--line);font:600 12px 'Inter',sans-serif;color:var(--ink-2,#555);display:inline-flex;align-items:center;gap:6px;white-space:nowrap;transition:background .12s,border-color .12s}",
+      ".aa-chip:hover{border-color:var(--gold)}",
+      ".aa-chip i{font-style:normal;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:#F1F0EC;font-size:11px;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}",
+      ".aa-chip.on{background:var(--navy);border-color:var(--navy);color:#fff}.aa-chip.on i{background:rgba(255,255,255,.18);color:#fff}",
+      ".aa-chip.bad i{background:#FBE9E7;color:var(--red,#B4382F)}.aa-chip.on.bad i{background:rgba(255,255,255,.18);color:#fff}",
+      ".aa-lf{margin-left:auto;position:relative}.aa-lf input{height:30px;width:200px;box-sizing:border-box;border:1px solid var(--line);border-radius:15px;padding:0 12px;font:12.5px 'Inter',sans-serif;color:var(--ink);outline:none}",
+      ".aa-lf input:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,162,75,.14)}",
+      ".aa-bbar{display:none;align-items:center;gap:10px;padding:8px 22px;background:var(--navy);color:#fff;font:500 12.5px 'Inter',sans-serif}",
+      ".aa-bbar b{font-weight:700}.aa-bbar .sp{flex:1}",
+      ".aa-bb{all:unset;cursor:pointer;height:30px;padding:0 14px;border-radius:8px;font:600 12px 'Inter',sans-serif;display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.12);color:#fff}",
+      ".aa-bb:hover{background:rgba(255,255,255,.22)}.aa-bb.del{background:#C0392B}.aa-bb.del:hover{background:#A93226}.aa-bb.busy{opacity:.6;pointer-events:none}",
+      ".aa-tbl td.aa-cc,.aa-tbl th.aa-cc{width:34px;padding-right:0!important}",
+      ".aa-lck{width:17px;height:17px;accent-color:var(--navy);cursor:pointer;margin:2px 0 0}",
+      ".aa-tbl tr.aa-sel td{background:var(--gold-soft)}",
+      ".aa-lnone{padding:30px 20px;text-align:center;color:var(--muted);font:13px 'Inter',sans-serif}",
+      "@media(max-width:860px){.aa-lf{margin-left:0;flex-basis:100%}.aa-lf input{width:100%}}"
+    ].join("");
+    document.head.appendChild(css);
+
+    var GROUPS = [
+      { k: "all", t: "All" }, { k: "pending", t: "Waiting" }, { k: "listed", t: "Listed" },
+      { k: "failed", t: "Failed", bad: 1 }, { k: "needs", t: "Needs cost / MRP", bad: 1 }, { k: "loss", t: "Not profitable", bad: 1 },
+      { k: "blocked", t: "Brand approval", bad: 1 }, { k: "exists", t: "Already listed" }
+    ];
+    var PILL = { "waiting for robot": "pending", "listed": "listed", "already listed": "exists", "needs cost": "needs_cost", "needs mrp": "needs_mrp",
+      "needs brand approval": "blocked", "not profitable": "loss", "failed": "failed" };
+    var groupOf = function (st) { return st === "needs_cost" || st === "needs_mrp" ? "needs" : st; };
+    var filt = "all", ftxt = "", sel = new Set(), busy = false;
+
+    list.insertAdjacentHTML("beforebegin",
+      '<div class="aa-lbar" id="aaLbar"></div>' +
+      '<div class="aa-bbar" id="aaBbar"><span><b id="aaBn">0</b> selected</span><span class="sp"></span>' +
+      '<button type="button" class="aa-bb" id="aaBretry" title="Send the selected failed / needs-cost / not-profitable rows to the robot again">↻ Retry</button>' +
+      '<button type="button" class="aa-bb del" id="aaBdel" title="Remove from this list (does not touch Amazon)">🗑 Delete</button>' +
+      '<button type="button" class="aa-bb" id="aaBclr">Clear</button></div>');
+
+    function rowInfo(tr) {
+      var pill = tr.querySelector(".pill"), st = pill ? PILL[pill.textContent.trim().toLowerCase()] || "other" : "other";
+      var bc = "", asin = "";
+      tr.querySelectorAll(".t-mono").forEach(function (m) { var t = m.textContent.trim(); if (t.charAt(0) === "▥") bc = t.replace(/\D/g, ""); });
+      var a = tr.querySelector('a[href*="/dp/"]'); if (a) asin = (a.getAttribute("href").split("/dp/")[1] || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+      var btn = tr.querySelector("[data-aa][data-asin]"), id = btn ? btn.getAttribute("data-asin") : (bc ? acct() + "_bc_" + bc : asin ? acct() + "_" + asin : "");
+      return { id: id, st: st, g: groupOf(st), text: tr.textContent.toLowerCase() };
+    }
+
+    var obs = new MutationObserver(function () { if (!decorating) schedule(); }), decorating = false, rq = 0;
+    function schedule() { if (rq) return; rq = requestAnimationFrame(function () { rq = 0; decorate(); }); }
+    function decorate() {
+      decorating = true;
+      try {
+        var tbl = list.querySelector("table.aa-tbl"), counts = {}, ids = new Set(), shown = 0;
+        GROUPS.forEach(function (g) { counts[g.k] = 0; });
+        if (tbl) {
+          var hr = tbl.querySelector("thead tr");
+          if (hr && !hr.querySelector(".aa-cc")) hr.insertAdjacentHTML("afterbegin", '<th class="aa-cc"><input type="checkbox" class="aa-lck" id="aaLall" title="Select all shown"></th>');
+          var nm = tbl.querySelector(".aa-lnone"); nm && nm.parentNode.removeChild(nm);
+          tbl.querySelectorAll("tbody tr").forEach(function (tr) {
+            if (!tr.dataset.aaid) { var inf = rowInfo(tr); tr.dataset.aaid = inf.id; tr.dataset.aag = inf.g; tr.dataset.aat = inf.text;
+              tr.insertAdjacentHTML("afterbegin", '<td class="aa-cc"><input type="checkbox" class="aa-lck" ' + (inf.id ? "" : "disabled") + "></td>"); }
+            var id = tr.dataset.aaid, g = tr.dataset.aag; ids.add(id); counts.all++; if (counts[g] != null) counts[g]++;
+            var vis = (filt === "all" || g === filt) && (!ftxt || tr.dataset.aat.indexOf(ftxt) >= 0);
+            tr.style.display = vis ? "" : "none"; if (vis) shown++;
+            var on = sel.has(id); tr.classList.toggle("aa-sel", on); var c = tr.querySelector(".aa-lck"); if (c) c.checked = on;
+          });
+          sel.forEach(function (id) { if (!ids.has(id)) sel.delete(id); });   // rows that are gone
+          var all = $("aaLall"); if (all) { var vis = visibleIds(); all.checked = vis.length > 0 && vis.every(function (id) { return sel.has(id); }); }
+          if (!shown && counts.all) tbl.querySelector("tbody").insertAdjacentHTML("beforeend", '<tr class="aa-lnone"><td colspan="9" class="aa-lnone">Nothing matches this filter.</td></tr>');
+        } else sel.clear();
+        drawChips(counts); drawBulk();
+      } finally { obs.takeRecords(); decorating = false; }
+    }
+    function visibleIds() { var out = []; list.querySelectorAll("tbody tr[data-aaid]").forEach(function (tr) { if (tr.style.display !== "none" && tr.dataset.aaid) out.push(tr.dataset.aaid); }); return out; }
+    function drawChips(c) {
+      var bar = $("aaLbar"), keepFocus = document.activeElement && document.activeElement.id === "aaLf";
+      var chips = GROUPS.filter(function (g) { return g.k === "all" || c[g.k] || filt === g.k; }).map(function (g) {
+        return '<button type="button" class="aa-chip' + (filt === g.k ? " on" : "") + (g.bad && c[g.k] ? " bad" : "") + '" data-f="' + g.k + '">' + g.t + " <i>" + (c[g.k] || 0) + "</i></button>"; }).join("");
+      var chipBox = $("aaChips");
+      if (!chipBox) { bar.innerHTML = '<span id="aaChips" style="display:contents"></span><span class="aa-lf"><input id="aaLf" type="text" placeholder="Filter by name, barcode, ASIN…" autocomplete="off"></span>'; chipBox = $("aaChips"); }
+      chipBox.innerHTML = chips;
+      if (keepFocus) $("aaLf").focus();
+    }
+    function drawBulk() { $("aaBn").textContent = sel.size; $("aaBbar").style.display = sel.size ? "flex" : "none"; resetDel(); }
+    var delT = null;
+    function resetDel() { clearTimeout(delT); var d = $("aaBdel"); if (d && !busy) { d.dataset.arm = ""; d.textContent = "🗑 Delete"; } }
+
+    $("aaLbar").addEventListener("click", function (e) { var c = e.target.closest("[data-f]"); if (!c) return; filt = c.dataset.f; sel.clear(); decorate(); });
+    $("aaLbar").addEventListener("input", function (e) { if (e.target.id !== "aaLf") return; ftxt = e.target.value.trim().toLowerCase(); decorate(); });
+    $("aaLbar").addEventListener("keydown", function (e) { if (e.target.id === "aaLf" && e.key === "Escape" && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = ""; ftxt = ""; decorate(); } });
+    list.addEventListener("change", function (e) {
+      if (!e.target.classList.contains("aa-lck")) return;
+      if (e.target.id === "aaLall") { var v = visibleIds(), on = e.target.checked; v.forEach(function (id) { on ? sel.add(id) : sel.delete(id); }); }
+      else { var tr = e.target.closest("tr"), id = tr && tr.dataset.aaid; if (!id) return; e.target.checked ? sel.add(id) : sel.delete(id); }
+      decorate();
+    });
+    $("aaBclr").onclick = function () { sel.clear(); decorate(); };
+    function col() { var db = G.db(); return db ? db.collection("spapiAddAsin") : null; }
+    async function runBatch(ids, fn) {
+      var db = G.db(); for (var i = 0; i < ids.length; i += 400) { var b = db.batch(); ids.slice(i, i + 400).forEach(function (id) { fn(b, col().doc(id)); }); await b.commit(); }
+    }
+    $("aaBdel").onclick = async function () {
+      var d = this, ids = Array.from(sel); if (!ids.length || !G.db()) return;
+      if (!d.dataset.arm) { d.dataset.arm = "1"; d.textContent = "Click again to delete " + ids.length; clearTimeout(delT); delT = setTimeout(resetDel, 3500); return; }
+      busy = true; d.classList.add("busy"); d.textContent = "Deleting…";
+      try { await runBatch(ids, function (b, ref) { b.delete(ref); }); sel.clear(); toast("✓ " + ids.length + " row" + (ids.length > 1 ? "s" : "") + " removed from the list (Amazon not touched)"); }
+      catch (e) { toast("⚠ Not deleted: " + (e.message || e), true); }
+      finally { busy = false; d.classList.remove("busy"); decorate(); }
+    };
+    $("aaBretry").onclick = async function () {
+      var b = this, rows = [];
+      list.querySelectorAll("tbody tr[data-aaid]").forEach(function (tr) { if (sel.has(tr.dataset.aaid)) rows.push(tr.dataset); });
+      var ids = rows.filter(function (r) { return r.aag !== "pending" && r.aag !== "listed"; }).map(function (r) { return r.aaid; });
+      if (!ids.length) return toast("Nothing to retry — Waiting and Listed rows are skipped", true);
+      b.classList.add("busy");
+      try { await runBatch(ids, function (bt, ref) { bt.set(ref, { status: "pending", error: null, requestedAt: Date.now() }, { merge: true }); }); sel.clear();
+        toast("✓ " + ids.length + " sent to the robot again" + (ids.length < rows.length ? " (" + (rows.length - ids.length) + " Waiting/Listed skipped)" : "")); }
+      catch (e) { toast("⚠ Not saved: " + (e.message || e), true); }
+      finally { b.classList.remove("busy"); decorate(); }
+    };
+    // Reset filters each time the window opens / account changes; then follow every redraw of the list
+    new MutationObserver(function () { if (ov.style.display === "flex") { filt = "all"; ftxt = ""; sel.clear(); var f = $("aaLf"); f && (f.value = ""); decorate(); } })
+      .observe(ov, { attributes: true, attributeFilter: ["style"] });
+    obs.observe(list, { childList: true, subtree: true });
+    decorate();
   }
   if (!init()) { var n = 0, t = setInterval(function () { if (init() || ++n > 60) clearInterval(t); }, 500); }
 })();
