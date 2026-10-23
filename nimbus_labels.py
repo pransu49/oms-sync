@@ -243,20 +243,18 @@ def stamp(page, items, seq, total, dd=''):
     if bot - top < 18:  # no room: thin strip at the very bottom
         top, bot = H - 30, H - 2
     top, bot = top + pad, min(bot - pad, top + pad + (90 if dd else 74))
-    if dd:  # Amazon "Deliver by" date: white text on a black strip, above the product name
+    if dd:  # Amazon "Deliver by" date: plain black text (no background, no border), above the product name
         if bot - top >= 36:
             sh = 13
-            page.draw_rect(pymupdf.Rect(W * 0.04, top, W * 0.96, top + sh), color=(0, 0, 0), fill=(0, 0, 0))
             fs = 9
             while pymupdf.get_text_length(dd, 'hebo', fs) > W * 0.9 and fs > 5:
                 fs -= 0.5
-            page.insert_text((W / 2 - pymupdf.get_text_length(dd, 'hebo', fs) / 2, top + sh - 3.5), dd, fontname='hebo', fontsize=fs, color=(1, 1, 1))
+            page.insert_text((W / 2 - pymupdf.get_text_length(dd, 'hebo', fs) / 2, top + sh - 3.5), dd, fontname='hebo', fontsize=fs, color=(0, 0, 0))
             top += sh + 3
         else:  # label too full: small tag in the top-left corner
             fs = 6
             tw = pymupdf.get_text_length(dd, 'hebo', fs) + 6
-            page.draw_rect(pymupdf.Rect(2, 1, 2 + tw, 10), color=(0, 0, 0), fill=(0, 0, 0))
-            page.insert_text((5, 8), dd, fontname='hebo', fontsize=fs, color=(1, 1, 1))
+            page.insert_text((5, 8), dd, fontname='hebo', fontsize=fs, color=(0, 0, 0))
     band_h = bot - top
     multi = len(items) > 1
     total_q = sum(q for _, q in items)
