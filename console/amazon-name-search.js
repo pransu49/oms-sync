@@ -23,6 +23,7 @@
     if (!form || $("aaName")) return !!form;
     var css = document.createElement("style");
     css.textContent = [
+      "#aaOv{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(15,30,53,.55)!important}",
       ".aa-srch{display:flex;gap:10px;align-items:center;padding:14px 22px;border-bottom:1px solid var(--line-2);background:#fff}",
       ".aa-sbox{position:relative;flex:1;min-width:0}",
       ".aa-sbox svg{position:absolute;left:14px;top:50%;transform:translateY(-50%);width:17px;height:17px;color:var(--muted);pointer-events:none}",
@@ -90,7 +91,9 @@
     var bcRe = /^\d{8}$|^\d{12,14}$/, isBc = function (t) { return bcRe.test(t); };
     var keyOf = function (p) { return p.barcode ? String(p.barcode).replace(/\D/g, "") : (p.asin ? String(p.asin).toUpperCase() : ""); };
     var okKey = function (k) { return isBc(k) || /^[A-Z0-9]{10}$/.test(k); };
-    var listed = function () { var s = new Set(); (G.inv() || []).forEach(function (x) { x && x.asin && s.add(String(x.asin).toUpperCase()); }); return s; };
+    var listedFor = null, listedSet = new Set();
+    var listed = function () { var inv = G.inv() || []; if (listedFor === inv) return listedSet; listedFor = inv; listedSet = new Set();
+      inv.forEach(function (x) { x && x.asin && listedSet.add(String(x.asin).toUpperCase()); }); return listedSet; };
     var isMac = /Mac|iPhone|iPad/.test(navigator.platform || "");
     var K = function (t) { return '<span class="aa-kbd">' + t + "</span>"; };
 
@@ -105,7 +108,14 @@
     function priceFor(cost, gstPct, want) { for (var p = Math.max(1, Math.floor(cost)); p < cost * 4 + 500; p++) if (profitAt(cost, p, gstPct) >= want) return p; return null; }
     function costOf(p) { var pr = G.prices()[p.code] || {}, sl = (pr.slabs || p.slabs || []), b = null;
       sl.forEach(function (x) { var v = +x.price; if (v > 0 && (b == null || v < b)) b = v; }); return b; }
+    var priceCache = new Map(), priceCacheFor = null;
     function pricing(p) {
+      var key = acct() + "|" + p.code;
+      if (priceCacheFor !== G.prices()) { priceCache.clear(); priceCacheFor = G.prices(); }
+      if (!priceCache.has(key)) priceCache.set(key, pricingRaw(p));
+      return priceCache.get(key);
+    }
+    function pricingRaw(p) {
       var pr = G.prices()[p.code] || {}, cost = costOf(p), mrp = parseFloat(pr.mrp || p.mrp),
         gst = pr.gst != null && pr.gst !== "" ? +pr.gst : (p.gst != null && p.gst !== "" ? +p.gst : null);
       if (!(cost > 0)) return { cost: null, mrp: mrp > 0 ? mrp : null };
@@ -125,29 +135,42 @@
     function drawBar() {
       var bar = $("aaBar"); if (!bar || !hits.length) return;
       var ok = hits.filter(function (h) { return h.ok; }), all = ok.length && ok.every(function (h) { return pick.has(h.k); });
-      bar.innerHTML = "<span><b>" + hits.length + "</b> result" + (hits.length > 1 ? "s" : "") + (hits.length >= 80 ? " (top 80)" : "") + "</span>" +
+      bar.innerHTML = "<span><b>" + hits.length + "</b> result" + (hits.length > 1 ? "s" : "") + ((hits.total || 0) > hits.length ? " of " + hits.total + " — type more to narrow" : "") + "</span>" +
         (pick.size ? "<span><b>" + pick.size + "</b> selected</span>" : "") +
         (ok.length ? '<button type="button" class="aa-lnk" id="aaSelAll">' + (all ? "Unselect all" : "Select all") + "</button>" : "") +
         (pick.size ? '<button type="button" class="aa-lnk" id="aaClr">Clear</button>' : "") +
         '<span class="aa-keys"><span>' + K("↑") + K("↓") + " move</span><span>" + K("Space") + "/" + K("Enter") + " select</span><span>" + K("Tab") + " price</span><span>" + K(isMac ? "⌘" : "Ctrl") + K("A") + " all</span><span>" +
         K(isMac ? "⌘" : "Ctrl") + K("↵") + " list</span><span>" + K("Esc") + " clear</span></span>";
     }
+    var rowEls = [];   // row elements of the current results (filled by renderRows)
     function setHi(i, scroll) {
-      var rows = $("aaRl").querySelectorAll(".aa-ri"); if (!rows.length) { hi = -1; return; }
-      hi = Math.max(0, Math.min(rows.length - 1, i));
-      rows.forEach(function (r, j) { r.classList.toggle("hi", j === hi); });
-      if (scroll !== false) rows[hi].scrollIntoView({ block: "nearest" });
+      if (!rowEls.length) { hi = -1; return; }
+      if (i >= rowEls.length - 3) moreRows();
+      var old = rowEls[hi]; hi = Math.max(0, Math.min(rowEls.length - 1, i));
+      if (old && old !== rowEls[hi]) old.classList.remove("hi");
+      rowEls[hi].classList.add("hi");
+      if (scroll !== false) rowEls[hi].scrollIntoView({ block: "nearest" });
     }
+    // Update ONE row after (un)selecting: tick, price box, price text - the photo is not touched
+    function updateRow(i) {
+      var r = rowEls[i], h = hits[i]; if (!r || !h) return;
+      var sel = pick.get(h.k), on = !!sel; if (r.classList.contains("on") === on && !on) return;
+      r.classList.toggle("on", on);
+      var yp = r.querySelector(".aa-yp");
+      if (on && !yp) r.insertAdjacentHTML("beforeend", ypHtml(i, sel)); else if (!on && yp) yp.remove();
+      var pr = r.querySelector(".aa-pr"); pr && (pr.innerHTML = priceHtml(h, sel));
+    }
+    function ypHtml(i, sel) { return '<label class="aa-yp' + (sel.bad ? " bad" : "") + '" title="Your selling price. Empty = robot prices it (₹1 under Buy Box, ₹15+ profit)">₹<input data-yp="' + i + '" inputmode="decimal" placeholder="auto" value="' + esc(sel.price || "") + '"></label>'; }
     function toggle(i) {
       var h = hits[i]; if (!h || !h.ok) return;
       if (pick.has(h.k)) pick.delete(h.k); else pick.set(h.k, { p: h.p, price: "" });
-      redrawRows(); bulkBtn();
+      updateRow(i); bulkBtn();
     }
     function selectAll() {
       var ok = hits.filter(function (h) { return h.ok; }); if (!ok.length) return;
       var all = ok.every(function (h) { return pick.has(h.k); });
       ok.forEach(function (h) { all ? pick.delete(h.k) : (pick.has(h.k) || pick.set(h.k, { p: h.p, price: "" })); });
-      redrawRows(); bulkBtn();
+      hits.forEach(function (h, i) { updateRow(i); }); bulkBtn();
     }
 
     function priceHtml(h, sel) {
@@ -160,9 +183,19 @@
           "Min <b>₹" + P.min + '</b> · Target <span class="gd">₹' + tg + "</span>");
     }
     // Re-render rows in place (keeps scroll + highlight) after selection changes
-    function redrawRows() { var rl = $("aaRl"); if (!hits.length) return; var top = rl.scrollTop, keep = hi; renderRows(); rl.scrollTop = top; setHi(keep, false); }
+    function redrawRows() { hits.forEach(function (h, i) { updateRow(i); }); }
+    // Search index: each product's lowercase text + key, built once per catalogue (not on every keystroke)
+    var ixFor = null, ixList = [];
+    function index(products) {
+      if (ixFor === products && ixList.length) return ixList;
+      ixFor = products; ixList = [];
+      products.forEach(function (p) { if (!p || !p.name) return; var k = keyOf(p);
+        ixList.push({ p: p, k: k, ok: okKey(k), t: (p.name + " " + (p.brand || "") + " " + (p.code || "") + " " + (p.barcode || "")).toLowerCase() }); });
+      return ixList;
+    }
     async function search() {
       var q = $("aaName").value.trim().toLowerCase(), box = $("aaRes"), rl = $("aaRl");
+      rowEls = [];
       if (q.length < 2) { box.style.display = "none"; rl.innerHTML = ""; hits = []; hi = -1; lastQ = ""; return; }
       box.style.display = "block";
       var lv = G.lots();
@@ -172,21 +205,30 @@
         try { var ld = G.load(); ld && await ld(); } catch (e) {}
         if (!lv.products) { rl.innerHTML = '<div class="aa-msg">Could not load the LOTS catalogue — check internet.</div>'; return; }
       }
-      var qt = q.split(/\s+/).filter(Boolean), L = listed(), prices = G.prices() || {};
-      hits = lv.products.filter(function (p) {
-        if (!p || !p.name) return false;
-        var t = (p.name + " " + (p.brand || "") + " " + (p.code || "") + " " + (p.barcode || "")).toLowerCase();
-        return qt.every(function (w) { return t.indexOf(w) >= 0; });
-      }).map(function (p) { var k = keyOf(p); return { p: p, k: k, ok: okKey(k), listed: !!(p.asin && L.has(String(p.asin).toUpperCase())) }; })
-        .sort(function (a, b) { return (b.ok - a.ok) || a.p.name.localeCompare(b.p.name); }).slice(0, 80);
+      var qt = q.split(/\s+/).filter(Boolean), L = listed(), ix = index(lv.products), found = [];
+      for (var n = 0; n < ix.length; n++) { var t = ix[n].t, ok = true; for (var w = 0; w < qt.length; w++) if (t.indexOf(qt[w]) < 0) { ok = false; break; } if (ok) found.push(ix[n]); }
+      // Sort only what is shown: listable first, names starting with the search first, then A-Z (plain compare - fast)
+      var q0 = qt[0], rank = function (x) { return (x.ok ? 0 : 2) + (x.t.indexOf(q0) === 0 ? 0 : 1); };
+      var total = found.length, cmp = function (a, b) { return rank(a) - rank(b) || (a.t < b.t ? -1 : a.t > b.t ? 1 : 0); };
+      if (total > 400) {   // many matches: pick the best 80 by rank without sorting everything
+        var bk = [[], [], [], []]; found.forEach(function (x) { var r = rank(x); bk[r].length < 80 && bk[r].push(x); });
+        found = bk[0].concat(bk[1], bk[2], bk[3]).slice(0, 80);
+      }
+      found.sort(cmp);
+      hits = found.slice(0, 80).map(function (x) { var p = x.p; return { p: p, k: x.k, ok: x.ok, listed: !!(p.asin && L.has(String(p.asin).toUpperCase())) }; });
+      hits.total = total;
       if (!hits.length) { $("aaBar").innerHTML = ""; rl.innerHTML = '<div class="aa-msg">No product matches “' + esc(q) + '” — try fewer words.</div>'; hi = -1; return; }
       renderRows();
       drawBar();
       setHi(q === lastQ && hi >= 0 ? hi : 0, false); lastQ = q;
     }
-    function renderRows() {
-      var prices = G.prices() || {};
-      $("aaRl").innerHTML = hits.map(function (h, i) {
+    // Draw rows in chunks of 30: the first chunk at once, more when you scroll / arrow near the end (keeps typing smooth)
+    var CHUNK = 30;
+    function renderRows() { $("aaRl").innerHTML = ""; rowEls = []; moreRows(); }
+    function moreRows() {
+      var from = rowEls.length; if (from >= hits.length) return false;
+      var prices = G.prices() || {}, rl = $("aaRl");
+      rl.insertAdjacentHTML("beforeend", hits.slice(from, from + CHUNK).map(function (h, j) { var i = from + j;
         var pr = prices[h.p.code] || {}, mrp = parseFloat(pr.mrp || h.p.mrp), st = parseFloat(pr.qty), im = pr.img || h.p.img;
         var img = '<span class="aa-im">' + (im ? '<img src="' + esc(im) + '" loading="lazy" alt="" onerror="this.remove()">' : "") + "</span>";
         var meta = [mrp > 0 ? '<span class="mrp">MRP ₹' + mrp + "</span>" : "",
@@ -196,13 +238,16 @@
         var tag = !h.ok ? '<span class="aa-tag no">No barcode / ASIN</span>' : h.listed ? '<span class="aa-tag re">Listed · will relist</span>' : "";
         h.P = pricing(h.p); var sel = pick.get(h.k);
         var prc = '<div class="aa-pr" data-pr="' + i + '">' + priceHtml(h, sel) + "</div>";
-        var yp = sel ? '<label class="aa-yp' + (sel.bad ? " bad" : "") + '" title="Your selling price. Empty = robot prices it (₹1 under Buy Box, ₹15+ profit)">₹<input data-yp="' + i + '" inputmode="decimal" placeholder="auto" value="' + esc(sel.price || "") + '"></label>' : "";
+        var yp = sel ? ypHtml(i, sel) : "";
         return '<div class="aa-ri' + (h.ok ? "" : " off") + (pick.has(h.k) ? " on" : "") + '" data-i="' + i + '"><span class="aa-ck">' + CHECK + "</span>" + img +
           '<div class="aa-rn"><b>' + esc(h.p.name) + '</b><div class="aa-meta">' + meta + "</div></div>" + tag + prc + yp + "</div>";
-      }).join("");
+      }).join(""));
+      rowEls = Array.prototype.slice.call(rl.children);
+      return true;
     }
 
     var inp = $("aaName");
+    inp.addEventListener("focus", function () { var lv = G.lots(); if (lv && lv.products && ixFor !== lv.products) setTimeout(function () { index(lv.products); }, 0); });
     inp.addEventListener("input", function () { clearTimeout(sT); sT = setTimeout(search, 150); });
     inp.addEventListener("keydown", function (e) {
       var mod = e.ctrlKey || e.metaKey;
@@ -235,7 +280,8 @@
     });
     $("aaRl").addEventListener("mousedown", function (e) { if (e.target.closest(".aa-yp")) return; if (e.target.closest(".aa-ri")) e.preventDefault(); });   // keep focus in the search box
     $("aaRl").addEventListener("click", function (e) { if (e.target.closest(".aa-yp")) return; var r = e.target.closest(".aa-ri"); if (!r) return; var i = +r.dataset.i; setHi(i, false); toggle(i); nav = true; inp.focus(); });
-    $("aaRl").addEventListener("mousemove", function (e) { var r = e.target.closest(".aa-ri"); if (r && +r.dataset.i !== hi) setHi(+r.dataset.i, false); });
+    $("aaRl").addEventListener("scroll", function () { var rl = this; if (rl.scrollTop + rl.clientHeight > rl.scrollHeight - 200) moreRows(); }, { passive: true });
+    $("aaRl").addEventListener("mouseover", function (e) { var r = e.target.closest(".aa-ri"); if (r && +r.dataset.i !== hi) setHi(+r.dataset.i, false); });
     // "Your price" box: live profit check; Enter / Esc goes back to the search box
     $("aaRl").addEventListener("input", function (e) {
       var i = e.target.dataset.yp; if (i == null) return; var h = hits[+i], sel = h && pick.get(h.k); if (!sel) return;
