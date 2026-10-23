@@ -1654,8 +1654,11 @@ async function applyAddAsinRequests(sellerId) {
         lotsHit = await mapByBarcode(asin, barcode);
       }
       if (!/^[A-Z0-9]{10}$/.test(asin)) { await done({ status: 'failed', error: 'Not a valid ASIN (10 letters/digits) or barcode (8, 12, 13 or 14 digits).' }); continue; }
-      const mine = Object.values(SNAP.inventory).filter((x) => x && x.account === ACCOUNT_LABEL && x.asin === asin);
-      if (mine.length) { await done({ status: 'exists', sku: mine[0].sku, error: `Already listed as ${mine.map((x) => x.sku).join(', ')} (stock ${mine.map((x) => x.quantity || 0).join(', ')}). Update stock in OMS Guru instead.` }); continue; }
+      // Already listed (self-ship)? Owner's rule: RELIST - create a fresh listing under a new SKU, then delete the old one(s).
+      // FBA listings are never touched (Amazon holds that stock).
+      const mine = Object.values(SNAP.inventory).filter((x) => x && x.account === ACCOUNT_LABEL && x.asin === asin && x.sku);
+      const oldOnes = mine.filter((x) => (x.fulfillmentChannel || 'DEFAULT') === 'DEFAULT');
+      const fbaOnes = mine.filter((x) => (x.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT');
       // 1) catalogue: name, product type, MRP hint
       const cat = await spClient.callAPI({ operation: 'getCatalogItem', endpoint: 'catalogItems', path: { asin }, options: { version: '2022-04-01' },
         query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['summaries', 'productTypes', 'attributes', 'images'] } });
@@ -1673,12 +1676,16 @@ async function applyAddAsinRequests(sellerId) {
       if (restricted) { await done({ status: 'blocked', name, img: img ? img.link : null, error: restricted.slice(0, 300) }); continue; }
       // 3) cost (typed on the page, or the ASIN's LOTS / vendor mapping) and MRP
       let sku = 'N-' + asin; for (let n = 2; SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`]; n++) sku = `N-${asin}-${n}`;
+      // Relist: a time-based SKU, so it can never clash with an old SKU the listings report still shows.
+      if (oldOnes.length) sku = `N-${asin}-R${Date.now().toString(36).toUpperCase()}`;
       const i = { sku, asin, name, account: ACCOUNT_LABEL, amazonProductType: productType, weightKg: 0.5, price: 0, taxCode: null };
-      const kc = Number(r.cost) > 0 ? { cost: Number(r.cost), src: 'typed' } : await knownCost(i);
+      let kc = Number(r.cost) > 0 ? { cost: Number(r.cost), src: 'typed' } : await knownCost(i);
+      for (const o of oldOnes) { if (kc) break; kc = await knownCost({ ...i, sku: o.sku }); if (kc) kc.src += ' (old SKU)'; }
       if (kc && lotsHit && !(Number(r.cost) > 0)) kc.src = 'LOTS barcode match';
       if (!kc) { await done({ status: 'needs_cost', name, img: img ? img.link : null, error: 'No cost known. Click Map (or type the cost) and press Retry.' }); continue; }
       const mrpCat = Number(((((ca.maximum_retail_price || [])[0] || {}).value) ?? (((ca.list_price || [])[0] || {}).value)) || 0) || null;
-      const mrp = Number(r.mrp) > 0 ? Number(r.mrp) : (await knownMrp(i)) || mrpCat;
+      const oldMrp = (oldOnes.find((o) => Number(o.mrp) > 0) || {}).mrp;
+      const mrp = Number(r.mrp) > 0 ? Number(r.mrp) : (await knownMrp(i)) || mrpCat || (Number(oldMrp) > 0 ? Number(oldMrp) : null);
       if (!mrp) { await done({ status: 'needs_mrp', name, img: img ? img.link : null, error: 'No MRP found. Type the MRP and press Retry.' }); continue; }
       let gst = Number.isFinite(Number(r.gst)) && r.gst !== '' && r.gst != null ? Number(r.gst) : null;
       if (gst == null) { const c = await loadCostData(), m = c.map[asin]; const p = m && m.code && c.lots[String(m.code)]; const g = p ? Number(p.gst) : (m && m.vendor ? Number(m.vendor.gst) : NaN); if (Number.isFinite(g)) gst = g; }
@@ -1720,12 +1727,30 @@ async function applyAddAsinRequests(sellerId) {
       if (missing.length) { missing.forEach((k) => { attributes[k] = ca[k]; }); pre = await put('VALIDATION_PREVIEW'); }
       assertListingsOk(pre);
       assertListingsOk(await put(null));
-      if (r.cost && Number(r.cost) > 0) await dbMain.collection('aikm_admin').doc('spapiManualCosts').set({ costs: { [sku]: Number(r.cost) } }, { merge: true }).catch(() => {});
-      console.log(`Relist [new ASIN] ${sku} (ASIN ${asin}) at Rs ${price}, MRP ${mrp}, qty ${qty}, profit Rs ${profit}/order: ACCEPTED`);
-      await done({ status: 'listed', sku, name, img: img ? img.link : null, price, mrp, qty, cost: kc.cost, costSrc: kc.src, profit, basis, ship });
+      const costToKeep = Number(r.cost) > 0 ? Number(r.cost) : (/old SKU|manual/.test(kc.src) ? kc.cost : null);
+      if (costToKeep) await dbMain.collection('aikm_admin').doc('spapiManualCosts').set({ costs: { [sku]: costToKeep } }, { merge: true }).catch(() => {});
+      console.log(`Relist [${oldOnes.length ? 'replace' : 'new ASIN'}] ${sku} (ASIN ${asin}) at Rs ${price}, MRP ${mrp}, qty ${qty}, profit Rs ${profit}/order: ACCEPTED`);
+      // New listing is accepted - now delete the old SKU(s). A failed delete never undoes the new listing.
+      const replaced = [], notDeleted = [];
+      for (const o of oldOnes) {
+        try {
+          await spClient.callAPI({ operation: 'deleteListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: o.sku }, query: { marketplaceIds: [MARKETPLACE_ID] } });
+        } catch (e) {
+          if (!/not found/i.test(e.message || '')) { notDeleted.push(o.sku); console.warn(`Relist: old SKU ${o.sku} NOT deleted:`, e.message || e); continue; }
+        }
+        replaced.push(o.sku);
+        console.log(`Relist: old SKU ${o.sku} deleted (replaced by ${sku}).`);
+        await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${o.sku}_${Date.now()}`).set({ account: ACCOUNT_LABEL, sku: o.sku, name: o.name || name, asin,
+          price: o.price || null, quantity: o.quantity || null, reason: 'relist (Add ASIN)', newSku: sku, deletedAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
+        await new Promise((res) => setTimeout(res, 800));
+      }
+      if (replaced.length) basis = `Relisted - old ${replaced.join(', ')} deleted · ${basis}`;
+      if (notDeleted.length) basis = `⚠ Old ${notDeleted.join(', ')} could NOT be deleted - delete it in Seller Central · ${basis}`;
+      if (fbaOnes.length) basis += ` · FBA listing ${fbaOnes.map((x) => x.sku).join(', ')} left as is`;
+      await done({ status: 'listed', sku, name, img: img ? img.link : null, price, mrp, qty, cost: kc.cost, costSrc: kc.src, profit, basis, ship, replaced, notDeleted });
       const at = Date.now();
-      await dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${asin}_${at}`).set({ account: ACCOUNT_LABEL, asin, name, oldSku: sku, newSku: sku, price, mrp, qty, at,
-        status: 'new_listing', profit, basis: `${basis} · profit ₹${profit}/order · live in ~2 h · link ${sku} in OMS Guru` }).catch(() => {});
+      await dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${asin}_${at}`).set({ account: ACCOUNT_LABEL, asin, name, oldSku: replaced[0] || sku, newSku: sku, price, mrp, qty, at,
+        status: replaced.length ? 'relisted' : 'new_listing', profit, basis: `${basis} · profit ₹${profit}/order · live in ~2 h · link ${sku} in OMS Guru` }).catch(() => {});
     } catch (e) {
       const error = (e.message || String(e)).slice(0, 400);
       console.warn(`Add ASIN FAILED for ${asin}:`, error);
