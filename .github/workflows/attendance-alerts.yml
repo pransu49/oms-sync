@@ -1,20 +1,37 @@
 name: Attendance alerts (Telegram)
 
+# Saves Firebase reads: runs only every ~30 min, and only 8 am - 9 pm IST.
 on:
-  # main trigger: right after every OMS sync (started every 10 min by cron-job.org)
+  # main trigger: piggy-back on the OMS sync (started every 10 min by cron-job.org); the gate keeps 1 in 3
   workflow_run:
     workflows: ['Sync OMS Guru Orders']
     types: [completed]
   schedule:
-    - cron: '*/15 * * * *'   # backup only - GitHub's own timer often skips
-  workflow_dispatch: {}      # "Run workflow" button = check now
+    - cron: '45 2-15 * * *'   # backup only (8:15 am - 9:15 pm IST) - GitHub's own timer often skips
+  workflow_dispatch: {}       # "Run workflow" button = check now
 
 concurrency:
   group: attendance-alerts
   cancel-in-progress: false
 
 jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - id: g
+        shell: bash
+        run: |
+          m=$((10#$(date -u +%M))); h=$((10#$(TZ=Asia/Kolkata date +%H)))
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "go=1" >> $GITHUB_OUTPUT; exit 0; fi
+          if [ $h -lt 8 ] || [ $h -ge 21 ]; then echo "go=0" >> $GITHUB_OUTPUT; echo "skip: outside 8 am - 9 pm IST"; exit 0; fi
+          if [ "${{ github.event_name }}" = "workflow_run" ] && [ $((m % 30)) -ge 10 ]; then echo "go=0" >> $GITHUB_OUTPUT; echo "skip: not a 30-min slot"; exit 0; fi
+          echo "go=1" >> $GITHUB_OUTPUT
+
   attendance:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
