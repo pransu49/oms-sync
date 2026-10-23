@@ -12719,7 +12719,7 @@ window.loadSavedFilesList = loadSavedFilesList;
     const sw = byId("lots62Store");
     if (push && sw && sw.nextElementSibling !== push) push.before(sw);
     /* hand-filled cart result: inside Order Mapper (not above every tab) */
-    const ex = byId("l62Extract"), after = cp || need;
+    const ex = byId("l62Extract"), after = byId("omGuide") || cp || need;
     if (ex && ex.previousElementSibling !== after) after.after(ex);
     syncStores();
   }
@@ -13414,6 +13414,152 @@ window.loadSavedFilesList = loadSavedFilesList;
     }
     return saveL3.apply(this, arguments);
   };
+
+  /* ---------- 12. LOTS order guide: one clear step at a time (Oct 2026) ----------
+     Replaces the busy robot panel with 5 steps: robot fills cart → edit on LOTS → save final cart →
+     place order → next batch / Picking List. Uses the same robot requests as before. */
+  const gcss = document.createElement("style");
+  gcss.textContent = `
+  #rpanel4 #lotsCartPanel.om-guided{display:none!important}
+  #omGuide{display:none;margin:0 0 12px;padding:14px 16px;background:var(--x-surface,#fff);color:var(--x-text,#0F1E35);border:1px solid var(--x-line,#E6E2D8);
+    border-left:4px solid #D4AF37;border-radius:14px;font-family:"Lexend","Inter",sans-serif}
+  #omGuide.show{display:block}
+  #omGuide .og-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+  #omGuide .og-h b{font-size:14.5px;font-weight:600}
+  #omGuide .og-tag{font-size:11px;font-weight:700;padding:2px 9px;border-radius:6px;background:#0F1E35;color:#D4AF37}
+  html#aikm body #omGuide .og-x{margin-left:auto;background:none!important;border:0!important;box-shadow:none!important;min-height:0!important;padding:2px 6px!important;color:var(--x-muted)!important;font-size:12px!important;cursor:pointer}
+  #omGuide ol{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+  #omGuide li{display:grid;grid-template-columns:26px minmax(0,1fr);gap:10px;align-items:start;padding:8px 10px;border-radius:10px}
+  #omGuide li .n{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;
+    background:var(--x-surface-2,#F3F1EB);color:var(--x-muted);border:1px solid var(--x-line)}
+  #omGuide li.done .n{background:#2F8A4C;color:#fff;border-color:#2F8A4C}
+  #omGuide li.now{background:var(--x-gold-soft,#FBF4DF);box-shadow:inset 0 0 0 1px rgba(212,175,55,.55)}
+  #omGuide li.now .n{background:#D4AF37;color:#0F1E35;border-color:#D4AF37}
+  #omGuide li.bad{background:rgba(192,57,43,.08);box-shadow:inset 0 0 0 1px rgba(192,57,43,.35)}
+  #omGuide li.bad .n{background:#C0392B;color:#fff;border-color:#C0392B}
+  #omGuide li.todo{opacity:.55}
+  #omGuide .t{font-size:13.5px;font-weight:600;line-height:24px}
+  #omGuide .s{font-size:12px;color:var(--x-muted);margin-top:1px}
+  #omGuide li.bad .s{color:#C0392B}
+  #omGuide .a{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  html#aikm body #omGuide .a button,html#aikm body #omGuide .a a{min-height:32px!important;padding:6px 14px!important;border-radius:8px!important;font-size:12.5px!important;
+    font-weight:600!important;cursor:pointer;text-decoration:none;border:1px solid var(--x-line-2,#D9D3C3)!important;background:var(--x-surface)!important;color:var(--x-text)!important;box-shadow:none!important}
+  html#aikm body #omGuide .a .go{background:#0F1E35!important;color:#D4AF37!important;border-color:#0F1E35!important}
+  html#aikm body #omGuide .a .xl{background:#1F7A4D!important;color:#fff!important;border-color:#1F7A4D!important}
+  html#aikm body #omGuide .a button:disabled{opacity:.55;cursor:wait}
+  #omGuide .w{display:inline-block;width:9px;height:9px;border-radius:50%;background:#E0B21E;margin-right:6px;animation:lcPulse 1.2s infinite}
+  @keyframes lcPulse{50%{opacity:.35}}`;
+  document.head.appendChild(gcss);
+  const guide = document.createElement("div");
+  guide.id = "omGuide";
+  need.after(guide);
+  let gDoc = null, gId = null;
+  const GHIDE = "aikm_om_guide_hidden";
+  const sName = (s) => (s === "lots62" ? "LOTS-62" : "LOTS-GN");
+  const busyS = (s) => s === "pending" || s === "processing";
+  const hiddenBtn = (sel) => document.querySelector("#lotsCartPanel " + sel);
+  function gAdd(data) {
+    return fbDb.collection("lotsCartQueue").add(Object.assign(data, { createdAtMs: Date.now(), createdAt: firebase.firestore.FieldValue.serverTimestamp() }));
+  }
+  function gSave(btn) {
+    const d = gDoc, nm = sName(d.store);
+    if (busyS(d.status)) return alert("The LOTS robot is still busy — wait for it to finish.");
+    if (!confirm(`Finished editing your ${nm} cart on LOTS?\n\n• The robot reads your cart and saves it — nothing is added, removed or ordered\n• Takes about 1–3 minutes\n• Do this BEFORE you place the order (after ordering, the cart is empty)`)) return;
+    btn.disabled = true;
+    gAdd({ status: "pending", type: "readCart", vendor: d.vendor || "LOTS", store: d.store || "lots", items: [], sentCount: 0,
+      batchOf: d.batchOf || gId, batchNo: d.batchNo || 1, batchTotal: d.batchTotal || 1, refreshOf: d.refreshOf || gId,
+      remainingItems: d.remainingItems || [], remainingCount: (d.remainingItems || []).length })
+      .catch((e) => { btn.disabled = false; alert("Could not send: " + (e.message || e)); });
+  }
+  function gNext(btn) {
+    const d = gDoc, rem = d.remainingItems || [], nm = sName(d.store), n = (d.batchNo || 1) + 1;
+    if (!rem.length || busyS(d.status)) return;
+    if (!confirm(`Send Batch ${n} (${Math.min(rem.length, 160)} products) to your ${nm} cart?\n\n⚠ Place the order for the products now in your ${nm} cart FIRST.\nThe robot empties the cart before adding this batch (it saves what was there first).\n\n• Takes about 1–4 minutes`)) return;
+    btn.disabled = true;
+    gAdd({ status: "pending", vendor: d.vendor || "LOTS", store: d.store || "lots", items: rem, sentCount: rem.length,
+      batchNo: n, batchTotal: d.batchTotal || n, batchOf: d.batchOf || gId })
+      .catch((e) => { btn.disabled = false; alert("Could not send: " + (e.message || e)); });
+  }
+  function step(n, state, title, sub, actions) {
+    return `<li class="${state}"><span class="n">${state === "done" ? "✓" : state === "bad" ? "!" : n}</span><div><div class="t">${title}</div>${sub ? `<div class="s">${sub}</div>` : ""}${actions ? `<div class="a">${actions}</div>` : ""}</div></li>`;
+  }
+  function paintGuide() {
+    const d = gDoc, cp = byId("lotsCartPanel");
+    let hid = ""; try { hid = localStorage.getItem(GHIDE) || ""; } catch (e) {}
+    const show = !!d && !d.standalone && (d.type !== "readCart" || !!d.refreshOf) && hid !== gId &&
+      (busyS(d.status) || Date.now() - (d.createdAtMs || 0) < 36 * 3600 * 1000);
+    guide.classList.toggle("show", show);
+    if (cp) cp.classList.toggle("om-guided", show);
+    if (!show) return;
+    const nm = sName(d.store), bn = d.batchNo || 1, bt = d.batchTotal || 1, rem = d.remainingItems || [];
+    const isSave = d.type === "readCart", st = d.status;
+    const pushDone = isSave || st === "done";
+    const saved = isSave && st === "done";
+    const lines = (d.cartLines || []).length;
+    const wait = (txt) => `<span class="w"></span>${esc(txt)}`;
+    /* step 1: robot fills the cart */
+    let s1;
+    if (isSave) s1 = step(1, "done", `Robot filled your ${nm} cart`, "");
+    else if (busyS(st)) s1 = step(1, "now", `Robot is filling your ${nm} cart — ${d.sentCount || 0} products`, wait(st === "processing" ? d.progress || "Logging into LOTS…" : "Starts within 2 minutes…"));
+    else if (st === "failed") s1 = step(1, "bad", "Could not fill the LOTS cart", esc(d.error || "Unknown error"), `<button type="button" class="go" data-g="retry">↻ Try again</button>`);
+    else {
+      const f = (d.failedItems || []).length;
+      s1 = step(1, "done", `Robot filled your ${nm} cart — ${d.addedCount || 0} of ${d.sentCount || 0} added`,
+        f ? `${f} product${f > 1 ? "s" : ""} not added (out of stock / limit) — add a substitute on LOTS if needed` : "",
+        f ? `<button type="button" data-g="failxl">⬇ Not-added list</button>` : "");
+    }
+    /* step 2: edit on LOTS */
+    const s2 = step(2, pushDone && !saved && !(isSave && busyS(st)) && st !== "failed" ? "now" : pushDone ? "done" : "todo",
+      "Check &amp; edit the cart on LOTS", "Change quantities, add or remove products — whatever you need.",
+      pushDone ? `<a href="https://www.lotswholesale.com/member/cart" target="_blank" rel="noopener">Open ${nm} cart ↗</a>` : "");
+    /* step 3: save final cart */
+    let s3;
+    if (isSave && busyS(st)) s3 = step(3, "now", "Saving your final cart…", wait("Robot is reading your cart — 1 to 3 minutes. Don't place the order yet."));
+    else if (isSave && st === "failed") s3 = step(3, "bad", "Final cart not saved", esc(d.error || "Unknown error"), `<button type="button" class="go" data-g="save">💾 Try again</button>`);
+    else if (saved) {
+      const chg = (cp && cp.querySelector(".l62-chg")) ? cp.querySelector(".l62-chg").textContent.replace(/^✔\s*/, "") : `${lines} products saved`;
+      s3 = step(3, "done", "Final cart saved", esc(chg), `<button type="button" data-g="save">↻ Save again</button>`);
+    } else s3 = step(3, pushDone && st !== "failed" ? "now" : "todo", "Save my final cart", "When you're done editing — so the Picking List matches your real cart.",
+      pushDone && st !== "failed" ? `<button type="button" class="go" data-g="save">💾 Save my final cart</button>` : "");
+    /* step 4: place order */
+    const s4 = step(4, saved ? "now" : "todo", "Place the order on LOTS", saved ? "Your final cart is saved — place the order for this cart on LOTS now." : "");
+    /* step 5: next batch or picking list */
+    let s5;
+    const canPdf = pushDone && st === "done" && lines > 0;
+    if (rem.length) {
+      s5 = step(5, saved ? "now" : "todo", `Send Batch ${bn + 1} of ${bt} — ${rem.length} products waiting`,
+        "LOTS takes max 160 products per cart. Place this order first, then send the next batch.",
+        pushDone && st === "done" ? `<button type="button" class="go" data-g="next">▶ Send Batch ${bn + 1}</button><button type="button" data-g="waitxl">⬇ Waiting list</button>` : "");
+    } else {
+      s5 = step(5, saved ? "now" : "todo", bt > 1 ? `All ${bt} batches done — download your picking list` : "Download your picking list",
+        bt > 1 ? "One PDF / Excel with every batch, including your edits." : "",
+        canPdf ? `<button type="button" class="go" data-g="pdf">📄 Picking List PDF</button><button type="button" class="xl" data-g="xl">⬇ Cart Excel</button>` : "");
+    }
+    guide.innerHTML = `<div class="og-h"><span class="og-tag">${nm}${bt > 1 ? ` · Batch ${bn} of ${bt}` : ""}</span><b>LOTS order — follow the steps</b>` +
+      `<button type="button" class="og-x" data-g="hide" title="Hide until the next order">Hide ✕</button></div><ol>${s1}${s2}${s3}${s4}${s5}</ol>`;
+  }
+  const esc = escH;
+  guide.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-g]"); if (!b || !gDoc) return;
+    const g = b.dataset.g;
+    if (g === "hide") { try { localStorage.setItem(GHIDE, gId); } catch (x) {} paintGuide(); return; }
+    if (g === "save") return gSave(b);
+    if (g === "next") return gNext(b);
+    const map = { retry: '[data-lc="retry"]', failxl: '[data-lc="xls"]', waitxl: '[data-l62="xlrem"]', pdf: '[data-l62="pdf"], .lc-pdf', xl: '[data-l62="xlcart"]' };
+    const h = hiddenBtn(map[g]);
+    if (h) h.click(); else alert("Still loading — try again in a few seconds.");
+  });
+  (function watchGuide() {
+    if (typeof fbDb === "undefined" || !fbDb) return void setTimeout(watchGuide, 2000);
+    fbDb.collection("lotsCartQueue").orderBy("createdAtMs", "desc").limit(1).onSnapshot((snap) => {
+      gDoc = snap.empty ? null : snap.docs[0].data();
+      gId = snap.empty ? null : snap.docs[0].id;
+      setTimeout(paintGuide, 150); /* let the old panel add its buttons first */
+    }, () => {});
+    /* the old panel adds its buttons (PDF, Excel, change summary) a moment later — repaint then */
+    const cp = byId("lotsCartPanel");
+    if (cp) { let t = null; new MutationObserver(() => { clearTimeout(t); t = setTimeout(paintGuide, 200); }).observe(cp, { childList: true, subtree: true }); }
+  })();
 
   view("orders");
   layout();
