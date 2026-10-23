@@ -768,8 +768,8 @@ function pricedOut(i, o) {
 }
 async function fixSuppressedPrice(sellerId, i, old, productType, why) {
   // Owner, 21 Oct 2026: blocked listings must come back live at a profitable price.
-  // Target = ₹1 under the Buy Box (landed, incl. shipping). If that earns under ₹15/order, go live at the lowest
-  // price that earns ₹15 instead (listed and earning beats suppressed). The listing's own min/max price limits are
+  // Target = ₹1 under the Buy Box (landed, incl. shipping). If that earns under ₹5/order (MIN_PROFIT), go live at the lowest
+  // price that earns ₹5 instead (listed and earning beats suppressed). The listing's own min/max price limits are
   // moved to fit (Amazon error 18155 "below your minimum price threshold" was blocking 4 listings).
   const L = (o) => (o.price || 0) + (o.shipping || 0);
   const offers = (relistFresh.get(i.asin) || []).filter((o) => !o.isMine && o.price > 0).sort((x, y) => L(x) - L(y));
@@ -1051,8 +1051,11 @@ function closingFee(p) { return p <= 300 ? 2 : p <= 500 ? 23 : p <= 1000 ? 48 : 
 //   Praso ships mostly Easy Ship -> Amazon's Easy Ship weight fee. Rs 3 per order kept aside for returns (RTO ~3%).
 const SELF_SHIP_ACCOUNTS = new Set(['sastastore']);
 // Owner, 21 Oct 2026: reseller of branded goods - margin comes mostly from the shipping charge.
-// Never go below Rs 15 profit per order; Rs 20 is the target (flagged in the log when a change lands between 15 and 20).
-const MIN_PROFIT = 15, TARGET_PROFIT = 20;
+// (21 Oct: Rs 15 minimum / Rs 20 target - changed 24 Oct to Rs 5 minimum for maximum Buy Box, see MIN_PROFIT.)
+// Owner, 24 Oct 2026: "maximum Buy Box with profit, never a loss - more Buy Boxes bring more sales".
+// The robot matches the Buy Box down to the price that still earns MIN_PROFIT (Rs 5 safety margin over cost, fees,
+// courier, GST and returns). TARGET_PROFIT is only a label now (was the loss-guard target).
+const MIN_PROFIT = 5, TARGET_PROFIT = 20;
 function courierCost(kg) { const n = Math.max(Number(kg) || 0.5, 0.5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
 function shipCostFor(i) { return SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? courierCost(i.weightKg) : Math.max(easyShipFee(i.weightKg), 45); }
 function myShipCharge(i) { const m = (relistFresh.get(i.asin) || []).find((o) => o.isMine); return m && m.shipping != null ? Number(m.shipping) : (SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? 74 : 80); }
@@ -1160,8 +1163,8 @@ async function loadManualPrices() {
   return out;
 }
 async function runBuyBoxPricer(sellerId, eligible, st, log) {
-  // Owner, 21 Oct 2026: win the Buy Box at ANY gap as long as each order still earns MIN_PROFIT,
-  // never lower a price the owner set himself in the last 7 days, and lift loss-making prices to TARGET_PROFIT.
+  // Owner, 24 Oct 2026: win the Buy Box at ANY gap as long as each order still earns MIN_PROFIT (Rs 5),
+  // never lower a price the owner set himself in the last 7 days, and lift loss-making prices just to MIN_PROFIT.
   // and raise the price when we hold the Buy Box and the next seller is Rs 3+ above us.
   const now = Date.now(), L = (o) => (o.price || 0) + (o.shipping || 0), lower = [], raise = [];
   for (const i of eligible) {
@@ -1198,7 +1201,7 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   await learnFromChanges(sellerId, eligible, st, log, patchPrice).catch((e) => console.warn('Robot learning skipped:', e.message || e));
 
   // LOSS GUARD (owner, 21 Oct 2026: "make the business profitable"): a listing whose current price earns under
-  // MIN_PROFIT per order is moved up to the TARGET_PROFIT price - never above MRP, never more than +30% in one step.
+  // MIN_PROFIT per order is moved up to the lowest price that earns MIN_PROFIT - never above MRP, never more than +30% in one step.
   const guardDone = new Set();
   for (const i of eligible) {
     if (guarded >= BB_MAX_RAISE_PER_RUN) break;
@@ -1212,10 +1215,9 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     let target = null, okMin = null;
     for (let pz = Math.ceil(i.price) + 1; pz <= cap; pz++) {
       const pf = orderProfit(i, kc.cost, pz, ship);
-      if (okMin == null && pf >= MIN_PROFIT) okMin = pz;
-      if (pf >= TARGET_PROFIT) { target = pz; break; }
+      if (pf >= MIN_PROFIT) { okMin = pz; break; }   // smallest raise that stops the loss - keeps the Buy Box chance
     }
-    target = target || okMin;
+    target = okMin;
     if (!target) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. No price up to ₹${cap} (${cap === Math.floor(mrp) ? 'MRP' : '+30%'}) earns ₹${MIN_PROFIT}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
     try {
       const was = i.price; await patchPrice(i, target); guarded++; noteChange(st, i, 'raise', target, was);
@@ -1238,7 +1240,7 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
       if (profit < MIN_PROFIT) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ₹${MIN_PROFIT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
       if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
       const was = i.price; await patchPrice(i, target); lowered++; noteChange(st, i, 'lower', target, was);
-      console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${was} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order${profit < TARGET_PROFIT ? ', below Rs 20 target' : ''})`);
+      console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${was} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order)`);
       await log(i, { status: 'bb_price', change: 'lower', oldPrice: was, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, above ₹${MIN_PROFIT} minimum)` : ''}` });
     } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await log(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
     await new Promise((r) => setTimeout(r, 800));
@@ -1281,7 +1283,7 @@ async function undoLostRaises(eligible, st, log, patchPrice, manual) {
   let undone = 0, kept = 0, skipped = 0;
   for (const i of eligible) {
     if (undone >= RAISE_UNDO_PER_RUN) break;
-    const m = st.learn[i.sku]; if (!m || !m.ch || !m.ch.length || m.raiseUndo) continue;
+    const m = st.learn[i.sku]; if (!m || !m.ch || !m.ch.length || (m.raiseUndo && m.raiseUndo !== 'loss_guard')) continue;
     const ch = m.ch, last = ch[ch.length - 1];
     if (last.kind !== 'raise' || last.at < RAISE_UNDO_FROM) continue;
     let k = ch.length - 1; while (k > 0 && ch[k - 1].kind === 'raise' && ch[k - 1].at >= RAISE_UNDO_FROM) k--;
@@ -1639,7 +1641,7 @@ async function applyPendingHsnUpdates(sellerId) {
 // ── ADD ASIN (owner, 21 Oct 2026: "if we add an ASIN in the robot it should list on Amazon, making profit") ──
 // The Amazon page writes spapiAddAsin/{account_asin} = { account, asin, qty, cost?, mrp?, gst?, status:'pending' }.
 // Every sync (quick or full): check the ASIN, cost and competition, pick a PROFITABLE price, list it as a new offer.
-//   price = ₹1 under the Buy Box (incl. shipping) if that still earns ₹15+/order, else the price that earns ₹20/order;
+//   price = ₹1 under the Buy Box (incl. shipping) if that still earns ₹5+/order (MIN_PROFIT), else the lowest price that earns ₹5;
 //           no other seller -> MRP. Never above MRP. No cost known -> waits for a cost (Map it on the page).
 // Result statuses: listed | exists | needs_cost | needs_mrp | blocked | loss | failed  (the page shows each, with Retry).
 const GST_CODE = { 0: 'A_GEN_EXEMPT', 0.25: 'A_GEN_MINIMUM', 3: 'A_GEN_JEWELLERY', 5: 'A_GEN_SUPERREDUCED', 18: 'A_GEN_STANDARD', 40: 'A_GEN_HIGHPEAK' };
@@ -1752,7 +1754,7 @@ async function applyAddAsinRequests(sellerId) {
       else {
         const win = Math.floor(L(ref) - 1 - ship);
         if (orderProfit(i, kc.cost, win, ship) >= MIN_PROFIT) { price = win; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} incl. shipping − ₹1`; }
-        else { price = p20 && p20 <= mrp ? p20 : p15; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} is too cheap to match with profit - listed at the ₹${price === p20 ? TARGET_PROFIT : MIN_PROFIT}/order price`; }
+        else { price = p15; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} is too cheap to match without loss - listed at the lowest price that earns ₹${MIN_PROFIT}/order`; }
       }
       price = Math.min(price, Math.floor(mrp));
       // Owner's own price from the page (name search "Your price"): used as is (capped at MRP), but never below Rs MIN_PROFIT/order.
