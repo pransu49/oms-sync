@@ -326,7 +326,118 @@
       } catch (e) { toast("⚠ Not saved: " + (e.message || e), true); } finally { b.classList.remove("busy"); }
     };
     initList(ov);
+    initAttention();
     return true;
+  }
+
+  /* ===== "Needs attention" panel: listings the robot can't price (no cost) and listings with no live offer =====
+     Data: spapiSnapshots/<account>_bbForecast, written by the robot after each full sync (1 read when opened). */
+  function initAttention() {
+    if ($("atOv")) return;
+    var css = document.createElement("style");
+    css.textContent = [
+      ".at-sum{display:flex;flex-wrap:wrap;gap:10px;padding:14px 22px;border-bottom:1px solid var(--line-2);background:var(--cream)}",
+      ".at-k{flex:1;min-width:140px;background:#fff;border:1px solid var(--line-2);border-radius:12px;padding:10px 14px}",
+      ".at-k b{display:block;font:700 22px 'Lexend',sans-serif;color:var(--ink)}.at-k span{font:500 11.5px 'Inter',sans-serif;color:var(--muted)}",
+      ".at-k.g b{color:var(--green,#2E7D4F)}.at-k.r b{color:var(--red,#B4382F)}",
+      ".at-tabs{display:flex;gap:6px;padding:12px 22px 0;border-bottom:1px solid var(--line-2)}",
+      ".at-tab{all:unset;cursor:pointer;padding:9px 14px;font:600 13px 'Inter',sans-serif;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}",
+      ".at-tab.on{color:var(--ink);border-color:var(--gold)}.at-tab i{font-style:normal;margin-left:6px;padding:1px 7px;border-radius:9px;background:#F1F0EC;font-size:11px}",
+      ".at-why{font:500 12px 'Inter',sans-serif;color:var(--ink-2,#555);line-height:1.45}.at-why b{color:var(--ink)}",
+      ".at-ok{color:var(--green,#2E7D4F);font-weight:700}",
+      ".at-hot td{background:#F2FAF4}"
+    ].join("");
+    document.head.appendChild(css);
+    document.body.insertAdjacentHTML("beforeend",
+      '<div class="aa-ov" id="atOv"><div class="aa-box">' +
+      '<div class="aa-head"><div><div class="aa-kick">Amazon robot</div><h3 id="atTitle">Needs attention</h3></div><button type="button" class="aa-x" id="atX" title="Close (Esc)">×</button></div>' +
+      '<div class="at-sum" id="atSum"></div>' +
+      '<div class="at-tabs"><button type="button" class="at-tab on" data-t="cost">Needs cost<i id="atNc">0</i></button><button type="button" class="at-tab" data-t="offer">No offer<i id="atNo">0</i></button></div>' +
+      '<div class="aa-lbar" id="atBar"></div><div class="aa-list" id="atList"></div></div></div>');
+    var D = null, tab = "cost", rf = "all", q = "", reopen = null;
+    var R = { restock_lots: ["ok", "Restock — LOTS has stock"], not_selling: ["warn", "Hidden by Amazon"], hidden_price: ["warn", "Behind 20 cheaper offers"],
+      no_sellers: ["bad", "Listing inactive"], out_of_stock: ["na", "Out of stock"], fba: ["na", "FBA"] };
+    var ST = { lost: ["bad", "Lost Buy Box"], none: ["na", "No offer"], held: ["ok", "Holding Buy Box"] };
+    var acctName = function () { try { return (SPAPI_ACCOUNTS.find(function (a) { return a.label === acct(); }) || {}).name || acct(); } catch (e) { return acct(); } };
+    var mapped = function (x) { try { if (typeof getSpapiManualCost === "function" && getSpapiManualCost(x.sku) != null) return true; return !!(STORE && STORE.asinLotsMap && STORE.asinLotsMap[x.asin]); } catch (e) { return false; } };
+    var ago = function (t) { var m = (Date.now() - t) / 60000; return m < 90 ? Math.round(m) + " min ago" : Math.round(m / 60) + " h ago"; };
+    var SC = function (sku) { return "https://sellercentral.amazon.in/myinventory/inventory?searchTerm=" + encodeURIComponent(sku); };
+
+    function open() { $("atOv").style.display = "flex"; $("atTitle").textContent = "Needs attention · " + acctName(); load(); }
+    function close() { $("atOv").style.display = "none"; }
+    async function load() {
+      var db = G.db(); $("atList").innerHTML = '<div class="aa-empty">Loading…</div>'; $("atSum").innerHTML = "";
+      if (!db) { $("atList").innerHTML = '<div class="aa-empty">Not connected — reload the page.</div>'; return; }
+      try { var d = await db.collection("spapiSnapshots").doc(acct() + "_bbForecast").get(); D = d.exists ? d.data() : null; }
+      catch (e) { $("atList").innerHTML = '<div class="aa-empty">Could not load — check internet.</div>'; return; }
+      draw();
+    }
+    function draw() {
+      if (!D || !D.noCost) { $("atSum").innerHTML = ""; $("atBar").innerHTML = ""; $("atList").innerHTML = '<div class="aa-empty">No data yet — it appears after the next full robot sync (about 1 hour).</div>'; return; }
+      var nc = D.noCost.filter(function (x) { return !mapped(x); }).length;
+      $("atSum").innerHTML =
+        '<div class="at-k g"><b>' + (D.held || 0) + '</b><span>Holding Buy Box (checked)</span></div>' +
+        '<div class="at-k g"><b>+' + (D.win || 0) + '</b><span>Robot can win within ' + esc(D.ruleText || "the rule") + '</span></div>' +
+        '<div class="at-k r"><b>' + nc + '</b><span>Need a cost to be priced</span></div>' +
+        '<div class="at-k"><b>' + ((D.noOfferBy || {}).restock_lots || 0) + '</b><span>Out of stock on Amazon, in stock at LOTS</span></div>' +
+        '<div class="at-k"><b>' + (D.rule || 0) + '</b><span>Lost — competitor below your profit rule</span></div>';
+      $("atNc").textContent = nc; $("atNo").textContent = D.noOfferCount || 0;
+      document.querySelectorAll(".at-tab").forEach(function (b) { b.classList.toggle("on", b.dataset.t === tab); });
+      var list = tab === "cost" ? D.noCost : D.noOffer, counts = {};
+      if (tab === "offer") list.forEach(function (x) { counts[x.r] = (counts[x.r] || 0) + 1; });
+      var chips = tab === "offer" ? ['<button type="button" class="aa-chip' + (rf === "all" ? " on" : "") + '" data-rf="all">All <i>' + list.length + "</i></button>"].concat(
+        Object.keys(R).filter(function (k) { return counts[k]; }).map(function (k) { return '<button type="button" class="aa-chip' + (rf === k ? " on" : "") + '" data-rf="' + k + '">' + R[k][1] + " <i>" + counts[k] + "</i></button>"; })).join("") : "";
+      var hint = tab === "cost" ? '<span class="at-why">The robot skips these — no cost known. Press <b>Map</b> (link the LOTS / vendor product) or <b>Type cost</b>. Best sellers and lost Buy Boxes first.</span>' : "";
+      var kf = document.activeElement && document.activeElement.id === "atQ";
+      $("atBar").innerHTML = hint + chips + '<span class="aa-lf"><input id="atQ" type="text" placeholder="Filter by name, SKU, ASIN…" value="' + esc(q) + '" autocomplete="off"></span>';
+      if (kf) { var qi = $("atQ"); qi.focus(); qi.setSelectionRange(qi.value.length, qi.value.length); }
+      var ql = q.toLowerCase(), rows = list.filter(function (x) { return (tab === "cost" || rf === "all" || x.r === rf) && (!ql || (x.name + " " + x.sku + " " + x.asin).toLowerCase().indexOf(ql) >= 0); });
+      if (!rows.length) { $("atList").innerHTML = '<div class="aa-empty">' + (list.length ? "Nothing matches." : tab === "cost" ? "Every in-stock listing has a cost. 👍" : "Every listing has a live offer. 👍") + "</div>"; return; }
+      var head = tab === "cost" ? "<th>Product</th><th>Buy Box</th><th>Price</th><th>Sold 30 d</th><th></th>" : "<th>Product</th><th>Why no offer</th><th>Stock</th><th>Sold 30 d</th><th>What to do</th>";
+      $("atList").innerHTML = '<table class="aa-tbl"><thead><tr>' + head + "</tr></thead><tbody>" + rows.slice(0, 400).map(function (x) {
+        var prod = '<td><div class="t-name">' + esc(x.name || x.sku) + '</div><div class="t-sub"><a href="https://www.amazon.in/dp/' + esc(x.asin) + '" target="_blank" rel="noopener">' + esc(x.asin) + '</a> · <span class="t-mono">' + esc(x.sku) + "</span></div></td>";
+        if (tab === "cost") {
+          var s2 = ST[x.st] || ["na", x.st], done = mapped(x);
+          return "<tr>" + prod + '<td><span class="pill ' + s2[0] + '">' + s2[1] + '</span></td><td class="num">' + (x.price ? "₹" + x.price : "—") + '</td><td class="num">' + (x.u30 || 0) + "</td>" +
+            '<td style="white-space:nowrap">' + (done ? '<span class="at-ok">✓ Cost saved</span>' : '<button class="aa-mini" data-at="map" data-asin="' + esc(x.asin) + '">Map</button><button class="aa-mini" data-at="cost" data-sku="' + esc(x.sku) + '" data-name="' + esc(x.name) + '">Type cost</button>') + "</td></tr>";
+        }
+        var r = R[x.r] || ["na", x.r], stock = "Amazon " + (x.qty || 0) + (x.lq != null ? " · LOTS " + x.lq : "");
+        var todo = { restock_lots: "Update stock in <b>OMS Guru</b> — LOTS has " + x.lq + ". Easy sale.", not_selling: "The relist robot works on it (new SKU). Nothing to do.",
+          hidden_price: "Robot lowers it if it stays within your profit rule; otherwise check the cost.", no_sellers: 'Check it in <a href="' + SC(x.sku) + '" target="_blank" rel="noopener">Seller Central</a> (inactive / suppressed).',
+          out_of_stock: "Restock when LOTS has it (LOTS low or unknown).", fba: "Amazon-fulfilled — managed in Seller Central." }[x.r] || "";
+        return '<tr class="' + (x.r === "restock_lots" ? "at-hot" : "") + '">' + prod + '<td><span class="pill ' + r[0] + '">' + r[1] + '</span></td><td class="num">' + esc(stock) + '</td><td class="num">' + (x.u30 || 0) + '</td><td><div class="at-why">' + todo + "</div></td></tr>";
+      }).join("") + "</tbody></table>" + (rows.length > 400 ? '<div class="aa-empty">Showing 400 of ' + rows.length + " — filter to see more.</div>" : "") +
+      '<div class="aa-empty" style="padding:14px">Updated ' + ago(D.at) + " by the robot · refreshes every full sync</div>";
+    }
+    $("atX").onclick = close;
+    $("atOv").addEventListener("click", function (e) { if (e.target === $("atOv")) close(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && $("atOv").style.display === "flex") { if (e.target.id === "atQ" && q) { q = ""; draw(); } else close(); } });
+    document.querySelector("#atOv .at-tabs").addEventListener("click", function (e) { var b = e.target.closest(".at-tab"); if (!b) return; tab = b.dataset.t; rf = "all"; q = ""; draw(); });
+    $("atBar").addEventListener("click", function (e) { var c = e.target.closest("[data-rf]"); if (c) { rf = c.dataset.rf; draw(); } });
+    $("atBar").addEventListener("input", function (e) { if (e.target.id === "atQ") { q = e.target.value; draw(); } });
+    $("atList").addEventListener("click", async function (e) {
+      var b = e.target.closest("[data-at]"); if (!b) return;
+      if (b.dataset.at === "map") {
+        if (typeof openSpapiMatchModal !== "function") return toast("Map is not available on this page", true);
+        close(); openSpapiMatchModal(b.dataset.asin);
+        // reopen this panel when the Map window closes
+        var mm = $("spapiMatchModal"); if (mm && !reopen) { reopen = new MutationObserver(function () { if (mm.style.display === "none") { reopen.disconnect(); reopen = null; $("atOv").style.display = "flex"; draw(); } }); reopen.observe(mm, { attributes: true, attributeFilter: ["style"] }); }
+        return;
+      }
+      if (b.dataset.at === "cost") {
+        var v = typeof askTextPrompt === "function" ? await askTextPrompt({ kicker: "Cost per unit", title: esc(b.dataset.name || b.dataset.sku), message: "Cost of ONE Amazon unit incl. GST. The robot uses it from the next sync.", confirmLabel: "Save cost" }) : prompt("Cost of one unit incl. GST (₹)");
+        if (v == null) return; var n = parseFloat(String(v).replace(/[^0-9.]/g, ""));
+        if (!(n > 0)) return toast("Enter a number above 0", true);
+        if (typeof setSpapiManualCost !== "function") return toast("Saving cost is not available on this page", true);
+        setSpapiManualCost(b.dataset.sku, n); toast("✓ Cost ₹" + n + " saved — the robot prices it at the next sync"); draw();
+      }
+    });
+    function addBtn() {
+      var a = $("aaOpen"); if (!a) return false; if ($("atOpen")) return true;
+      var b = document.createElement("button"); b.type = "button"; b.id = "atOpen"; b.className = "aa-open"; b.title = "Listings the robot can't price, and listings with no live offer";
+      b.innerHTML = "⚠ Needs attention"; b.onclick = open; a.parentNode.insertBefore(b, a.nextSibling); return true;
+    }
+    if (!addBtn()) { var n2 = 0, t2 = setInterval(function () { if (addBtn() || ++n2 > 60) clearInterval(t2); }, 500); }
   }
 
   /* ===== Robot requests list (drawn by the page): status filter, text filter, bulk select / delete / retry =====
