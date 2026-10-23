@@ -18,3 +18,4 @@
   Other vendors (Pawan, Rana, Nav Durga...) come from the Purchase Bills Supabase `docs` table (`loadVendorCatalog`):
   latest bill per product; they only fill items LOTS does not have. Vendor stock = units bought on bills - counter sales.
   LOTS + vendor data refresh on page open, daily at 7:00 am, and on the "Refresh prices" button (no live LOTS watch).
+  Top-bar "● Prices synced" pill shows sync health; click = details (per source, last success, next auto sync).
