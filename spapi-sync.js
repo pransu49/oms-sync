@@ -1207,6 +1207,22 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   console.log(`Buy Box pricer: ${lower.length} lost on price, ${raise.length} held (raise check).`);
   let lowered = 0, raised = 0, skipped = 0, guarded = 0;
   const manual = await loadManualPrices().catch(() => new Map());
+  // ── FORECAST (owner, 24 Oct 2026: "how many Buy Boxes will I get"): every listing that lost on price, sorted by why ──
+  try {
+    const fc = { win: 0, rule: 0, cut: 0, nocost: 0, owner: 0 };
+    for (const { i, mine, win } of lower) {
+      if (manual.has(i.sku)) { fc.owner++; continue; }
+      const kc = await knownCost(i).catch(() => null); if (!kc) { fc.nocost++; continue; }
+      const ship = Number(mine.shipping) || 0, target = Math.floor(L(win) - 1 - ship);
+      if (!priceOk(i, kc.cost, target, ship)) fc.rule++;
+      else if (target < i.price * (1 - BB_MAX_CUT)) fc.cut++;
+      else fc.win++;
+    }
+    const msg = `Buy Box forecast (listings checked this run): holding ${raise.length} · ${lower.length} lost on price -> ${fc.win} can be won within ${RULE_TXT} (robot cuts up to ${BB_MAX_PER_RUN} per run), ` +
+      `${fc.rule} only below ${RULE_TXT} / cost (kept), ${fc.cut} need a cut over ${BB_MAX_CUT * 100}% (check cost), ${fc.nocost} have no cost (map them), ${fc.owner} your own price · possible ${raise.length + fc.win}.`;
+    console.log(msg);
+    await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_bbForecast`).set({ at: Date.now(), held: raise.length, lostOnPrice: lower.length, ...fc, possible: raise.length + fc.win, ruleText: RULE_TXT }).catch(() => {});
+  } catch (e) { console.warn('Buy Box forecast skipped:', e.message || e); }
   const patchPrice = async (i, target) => {
     const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
       query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries'] } });
