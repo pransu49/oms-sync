@@ -80,6 +80,10 @@
       '<div class="aa-res" id="aaRes"><div class="aa-rbar" id="aaBar"></div><div class="aa-rl" id="aaRl"></div></div>');
     var rule = ov.querySelector(".aa-rule");
     if (rule) {
+      // The page's own text still says Rs 15 / Rs 20 - the robot now wins the Buy Box down to Rs 5 profit (24 Oct 2026)
+      rule.innerHTML = rule.innerHTML
+        .replace(/if that still earns <b>₹15\+ per order<\/b>, otherwise the price that earns <b>₹20 per order<\/b>/, "if that still earns <b>₹5+ per order</b> (never a loss), otherwise the lowest price that earns <b>₹5</b>")
+        .replace(/can't earn ₹15 are not listed/, "can't earn ₹5 are not listed");
       rule.insertAdjacentHTML("beforeend", '<br><b>Already listed?</b> The robot <b>relists</b> it: a fresh listing with a new SKU, then the old SKU is deleted (FBA listings are never touched). ' +
         '<b>Product name</b>: search, select products (click or <b>Enter</b>), then <b>List selected</b> (<b>Ctrl + Enter</b>).');
       rule.style.display = "none";
@@ -98,7 +102,7 @@
     var K = function (t) { return '<span class="aa-kbd">' + t + "</span>"; };
 
     /* ---- Pricing: same maths as the robot (spapi-sync.js orderProfit), for a new 0.5 kg listing ---- */
-    var MIN_P = 15, TGT_P = 20;
+    var MIN_P = 5, TGT_P = 20;   // same as the robot: win the Buy Box down to Rs 5 profit/order
     var selfShip = function () { return acct() === "sastastore"; };
     var shipChg = function () { return selfShip() ? 74 : 80; };              // shipping charge the customer pays
     var shipCost = function () { return selfShip() ? 40 : 55; };             // our courier / Easy Ship cost
@@ -122,7 +126,7 @@
       var mn = priceFor(cost, gst, MIN_P), tg = priceFor(cost, gst, TGT_P);
       return { cost: cost, mrp: mrp > 0 ? mrp : null, gst: gst, min: mn, tgt: tg, loss: mn == null || (mrp > 0 && mn > mrp) };
     }
-    // Check a typed price: below the Rs 15 floor -> red box + note (the robot would refuse it)
+    // Check a typed price: below the Rs 5 floor -> red box + note (the robot would refuse it)
     function checkPrice(h, sel) {
       var v = parseFloat(sel.price); sel.bad = false; sel.note = "";
       if (!(v > 0)) return;
@@ -160,7 +164,7 @@
       if (on && !yp) r.insertAdjacentHTML("beforeend", ypHtml(i, sel)); else if (!on && yp) yp.remove();
       var pr = r.querySelector(".aa-pr"); pr && (pr.innerHTML = priceHtml(h, sel));
     }
-    function ypHtml(i, sel) { return '<label class="aa-yp' + (sel.bad ? " bad" : "") + '" title="Your selling price. Empty = robot prices it (₹1 under Buy Box, ₹15+ profit)">₹<input data-yp="' + i + '" inputmode="decimal" placeholder="auto" value="' + esc(sel.price || "") + '"></label>'; }
+    function ypHtml(i, sel) { return '<label class="aa-yp' + (sel.bad ? " bad" : "") + '" title="Your selling price. Empty = robot prices it (₹1 under Buy Box, never below ₹5 profit)">₹<input data-yp="' + i + '" inputmode="decimal" placeholder="auto" value="' + esc(sel.price || "") + '"></label>'; }
     function toggle(i) {
       var h = hits[i]; if (!h || !h.ok) return;
       if (pick.has(h.k)) pick.delete(h.k); else pick.set(h.k, { p: h.p, price: "" });
