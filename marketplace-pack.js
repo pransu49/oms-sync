@@ -144,7 +144,11 @@ async function readOrder(vid) {
       if (when >= lastFailAt) { lastFailAt = when; lastFail = clean($(tr).text()).slice(0, 500); }
     });
   });
+  const chKey = Object.keys(dd).find((k) => /channel/.test(k));
+  const txt = clean($('body').text());
   return {
+    channelText: (chKey ? dd[chKey] + ' ' : '') + ((txt.match(CH_RX) || [])[1] || ''),
+    ddKeys: Object.keys(dd),
     orderId: clean(dd['order'] || '').split(' ')[0] || vid,
     awb: ((dd['shipment tracker'] || '').match(/[A-Z0-9]{6,}/i) || [])[0] || '',
     sla: slaToIso(dd['sla date'] || ''),
@@ -279,10 +283,22 @@ async function main() {
 
   await status({ state: 'running', step: 'Reading New orders' });
   const all = await listNewOrders();
+  // the OMS list shows only account numbers -> open one order per account to learn its channel
+  const firstOf = {}; all.forEach((r) => { if (r.cc && !firstOf[r.cc]) firstOf[r.cc] = r; });
+  const ccs = Object.keys(firstOf);
+  const probe = await pool(ccs, (cc) => readOrder(firstOf[cc].vid));
+  const ccChannel = {};
+  ccs.forEach((cc, i) => {
+    const d = probe[i] || {};
+    const m = String(d.channelText || '').match(CH_RX);
+    ccChannel[cc] = m ? m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() : '';
+    if (i === 0) console.log('  order page fields:', (d.ddKeys || []).join(', ').slice(0, 300));
+  });
+  all.forEach((r) => { if (!r.channel) r.channel = ccChannel[r.cc] || ''; if (r.channel && !r.ccName) r.ccName = `${r.channel} ${r.cc}`; });
   const rows = all.filter((r) => r.channel);
-  const byCh = {}; all.forEach((r) => { const k = r.ccName || r.cc || '?'; byCh[k] = (byCh[k] || 0) + 1; });
+  const byCh = {}; all.forEach((r) => { const k = `${r.cc}${ccChannel[r.cc] ? ' (' + ccChannel[r.cc] + ')' : ''}`; byCh[k] = (byCh[k] || 0) + 1; });
   console.log(`New orders in OMS: ${all.length} · ${CHANNELS.join('/')}: ${rows.length}`);
-  Object.entries(byCh).forEach(([k, n]) => console.log(`  ${k}: ${n}${CH_RX.test(k) ? '  <- processed' : ''}`));
+  Object.entries(byCh).forEach(([k, n]) => console.log(`  ${k}: ${n}${/\(/.test(k) ? '  <- processed' : ''}`));
 
   const details = await pool(rows, (r) => readOrder(r.vid));
   const ready = [], check = [];
