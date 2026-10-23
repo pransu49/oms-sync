@@ -358,7 +358,7 @@ function slaCheck(orders) {
       if (!/^(new|ready to ship|packed|pending|confirmed)$/i.test(String(o.status || '').trim())) return;
       const d = toIso(o.slaDate); if (!d || d > today) return;
       const id = o.channelOrderId || o.invoiceNumber; if (!id || due[id]) return;
-      due[id] = { id, d, lbl: !!String(o.awb || '').trim(), ch: String(o.channel || '').slice(0, 22), p: String(o.productName || '').slice(0, 35) };
+      due[id] = { id, d, lbl: !!String(o.awb || '').trim(), ch: String(o.channel || '').slice(0, 40), p: String(o.productName || '').slice(0, 35) };
     });
     const list = Object.values(due).sort((a, b) => a.d.localeCompare(b.d));
     if (!list.length) { console.log('SLA check: nothing due today that is unshipped.'); return; }

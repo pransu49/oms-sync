@@ -2,7 +2,7 @@
 // robot health, and today's counts of price changes, relists, refunds and SLA-due orders.
 // Reads only 2 Firebase records (syncHealth + telegramAlerts) in the console project.
 const admin = require('firebase-admin');
-const { notify, istNow } = require('./telegram');
+const { notify, istNow, esc, LINE } = require('./telegram');
 
 (async () => {
   admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
@@ -25,20 +25,28 @@ const { notify, istNow } = require('./telegram');
     return lim && x && x.label && x.ok && x.at && x.at.toMillis && Date.now() - x.at.toMillis() > lim * 3600e3;
   }).map(([, x]) => x);
 
-  const d = new Date(Date.now() + 5.5 * 3600e3).toUTCString().slice(5, 16);
-  const out = [`📊 AIKM daily summary · ${d}`, ''];
-  out.push(bad.length ? `🔴 Robots stopped: ${bad.length}` : `✅ All ${robots.length} robots working`);
-  bad.forEach((x) => out.push(`  • ${x.label}: ${x.reason || 'failed'}`));
-  stale.forEach((x) => out.push(`  ⚠️ ${x.label}: last run ${ago(x.at)}`));
-  out.push('');
-  out.push(`💰 Price changes today: ${c.price || 0}`);
-  out.push(`🔁 Listings relisted: ${c.relist || 0}`);
-  out.push(`💸 Refunds: ${c.refundOk || 0} done${c.refundFail ? `, ${c.refundFail} failed` : ''}`);
+  const d = new Date(Date.now() + 5.5 * 3600e3).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+  const out = ['📊 <b>AIKM Daily Summary</b>', `<i>${esc(d)}</i>`, LINE];
+
+  out.push('<b>Robots</b>');
+  if (bad.length) {
+    out.push(`🔴 <b>${bad.length} stopped</b> · ${robots.length - bad.length} running`);
+    bad.forEach((x) => out.push(`   • ${esc(x.label)} — <i>${esc(x.reason || 'failed')}</i>`));
+  } else out.push(`🟢 All ${robots.length} running`);
+  stale.forEach((x) => out.push(`   ⚠️ ${esc(x.label)} — last run ${ago(x.at)}`));
+
+  out.push('', '<b>Today</b>');
+  out.push(`💰 Price updates   <b>${c.price || 0}</b>`);
+  out.push(`🔁 Relisted   <b>${c.relist || 0}</b>`);
+  out.push(`💸 Refunds   <b>${c.refundOk || 0}</b>${c.refundFail ? `   ❌ ${c.refundFail} failed` : ''}`);
+
   if (c.slaDue != null) {
-    const parts = [c.slaOverdue ? `${c.slaOverdue} overdue` : '', c.slaLabel != null ? `${c.slaLabel} have label, ${c.slaDue - c.slaLabel} no label` : ''].filter(Boolean);
-    out.push(`📦 Not shipped yet, due today${c.slaAt ? ` (checked ${c.slaAt})` : ''}: ${c.slaDue}${parts.length ? `\n   (${parts.join(' · ')})` : ''}`);
+    out.push('', `<b>Shipping</b>${c.slaAt ? `  <i>checked ${esc(c.slaAt)}</i>` : ''}`);
+    out.push(`📦 Due, not shipped   <b>${c.slaDue}</b>`);
+    const sub = [c.slaOverdue ? `⏰ ${c.slaOverdue} overdue` : '', c.slaLabel != null ? `🏷 ${c.slaLabel} label ready` : '', c.slaLabel != null ? `⚪ ${c.slaDue - c.slaLabel} no label` : ''].filter(Boolean);
+    if (sub.length) out.push(`   ${sub.join('   ')}`);
   }
-  if (!(await notify(out.join('\n')))) throw new Error('Telegram message was not delivered (see the line above).');
+  if (!(await notify(out.join('\n'), { html: true }))) throw new Error('Telegram message was not delivered (see the line above).');
 
   // keep only the last 30 days of counts
   const days = Object.keys((a.data() || {}).day || {}).sort();
