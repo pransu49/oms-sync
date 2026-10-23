@@ -1,15 +1,16 @@
 // daily-summary.js - one Telegram message every evening (~9 pm IST):
 // robot health, and today's counts of price changes, relists, refunds and SLA-due orders.
-// Reads only 2 Firebase records (syncHealth + telegramAlerts) in the console project.
+// Reads only 3 Firebase records (syncHealth + telegramAlerts + attendanceAlerts) in the console project.
 const admin = require('firebase-admin');
 const { notify, istNow, esc, LINE } = require('./telegram');
 
 (async () => {
   admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
   const db = admin.firestore();
-  const [h, a] = await Promise.all([
+  const [h, a, att] = await Promise.all([
     db.collection('aikm_admin').doc('syncHealth').get(),
     db.collection('aikm_admin').doc('telegramAlerts').get(),
+    db.collection('aikm_admin').doc('attendanceAlerts').get(),
   ]);
   const today = istNow().date;
   const health = h.data() || {};
@@ -45,6 +46,19 @@ const { notify, istNow, esc, LINE } = require('./telegram');
     out.push(`📦 Due, not shipped   <b>${c.slaDue}</b>`);
     const sub = [c.slaOverdue ? `⏰ ${c.slaOverdue} overdue` : '', c.slaLabel != null ? `🏷 ${c.slaLabel} label ready` : '', c.slaLabel != null ? `⚪ ${c.slaDue - c.slaLabel} no label` : ''].filter(Boolean);
     if (sub.length) out.push(`   ${sub.join('   ')}`);
+  }
+  const ad = ((att && att.data()) || {}).day || {};
+  const t = ad[today];
+  if (t) {
+    const list = (arr) => arr.map(esc).join(', ');
+    out.push('', `<b>Attendance</b>${t.at ? `  <i>checked ${esc(t.at)}</i>` : ''}`);
+    out.push(`👥 Present   <b>${t.present.length}</b> / ${t.total}${t.holiday ? '   🎉 Holiday' : ''}`);
+    if (t.late.length) out.push(`🔸 Late   <b>${t.late.length}</b>  <i>${list(t.late)}</i>`);
+    if (t.absent.length) out.push(`❌ Absent   <b>${t.absent.length}</b>  <i>${list(t.absent)}</i>`);
+    if (t.leave.length) out.push(`🌴 On leave   <b>${t.leave.length}</b>  <i>${list(t.leave)}</i>`);
+    if (t.stillIn.length) out.push(`⏳ No check-out yet   <b>${t.stillIn.length}</b>  <i>${list(t.stillIn)}</i>`);
+    const hrs = Object.entries(t.hours || {}).filter(([, v]) => v != null).sort((p, q) => q[1] - p[1]);
+    if (hrs.length) out.push(`⏱ Hours  <i>${hrs.map(([n, v]) => `${esc(n)} ${Math.floor(v)}h${String(Math.round((v % 1) * 60)).padStart(2, '0')}`).join(' · ')}</i>`);
   }
   if (!(await notify(out.join('\n'), { html: true }))) throw new Error('Telegram message was not delivered (see the line above).');
 
