@@ -1216,17 +1216,17 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   const manual = await loadManualPrices().catch(() => new Map());
   // ── FORECAST (owner, 24 Oct 2026: "how many Buy Boxes will I get"): every listing that lost on price, sorted by why ──
   try {
-    const fc = { win: 0, rule: 0, cut: 0, nocost: 0, owner: 0 };
+    const fc = { win: 0, rule: 0, costOnly: 0, cut: 0, nocost: 0, owner: 0 };
     for (const { i, mine, win } of lower) {
       if (manual.has(i.sku)) { fc.owner++; continue; }
       const kc = await knownCost(i).catch(() => null); if (!kc) { fc.nocost++; continue; }
       const ship = Number(mine.shipping) || 0, target = Math.floor(L(win) - 1 - ship);
-      if (!priceOk(i, kc.cost, target, ship)) fc.rule++;
+      if (!priceOk(i, kc.cost, target, ship)) { fc.rule++; if (profitOk(i, kc.cost, target, ship)) fc.costOnly++; }
       else if (target < i.price * (1 - BB_MAX_CUT)) fc.cut++;
       else fc.win++;
     }
     const msg = `Buy Box forecast (listings checked this run): holding ${raise.length} · ${lower.length} lost on price -> ${fc.win} can be won within ${RULE_TXT} (robot cuts up to ${BB_MAX_PER_RUN} per run), ` +
-      `${fc.rule} only below ${RULE_TXT} / cost (kept), ${fc.cut} need a cut over ${BB_MAX_CUT * 100}% (check cost), ${fc.nocost} have no cost (map them), ${fc.owner} your own price · possible ${raise.length + fc.win}.`;
+      `${fc.rule} only below ${RULE_TXT} / cost (kept; ${fc.costOnly} of them meet the profit rule but would sell under cost), ${fc.cut} need a cut over ${BB_MAX_CUT * 100}% (check cost), ${fc.nocost} have no cost (map them), ${fc.owner} your own price · possible ${raise.length + fc.win}.`;
     console.log(msg);
     const att = await buildAttentionLists(units30).catch((e) => { console.warn('Attention lists skipped:', e.message || e); return null; });
     await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_bbForecast`).set({ at: Date.now(), held: raise.length, lostOnPrice: lower.length, ...fc, possible: raise.length + fc.win, ruleText: RULE_TXT,
@@ -1251,14 +1251,14 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     if (st.bbCool[i.sku] > now || manual.has(i.sku)) continue;
     const kc = await knownCost(i).catch(() => null); if (!kc) continue;
     const ship = myShipCharge(i), profit = orderProfit(i, kc.cost, i.price, ship);
-    if (priceOk(i, kc.cost, i.price, ship)) continue;
+    if (profitOk(i, kc.cost, i.price, ship)) continue;   // profit rule met - never raise just because the price is under cost (shipping charge covers it)
     guardDone.add(i.sku); st.bbCool[i.sku] = now + BB_COOL_MS;
     // Search the real price (fees and GST change with price: closing fee jumps at Rs 300 / 500 / 1000).
     const mrp = Number(i.mrp) || Infinity, cap = Math.floor(Math.min(mrp, i.price * 1.3));
     let target = null, okMin = null;
     for (let pz = Math.ceil(i.price) + 1; pz <= cap; pz++) {
       const pf = orderProfit(i, kc.cost, pz, ship);
-      if (pz >= kc.cost && pf >= minProfitAt(pz, ship)) { okMin = pz; break; }   // smallest raise that stops the loss - keeps the Buy Box chance
+      if (pf >= minProfitAt(pz, ship)) { okMin = pz; break; }   // smallest raise that stops the loss - keeps the Buy Box chance
     }
     target = okMin;
     if (!target) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. No price up to ₹${cap} (${cap === Math.floor(mrp) ? 'MRP' : '+30%'}) earns ${RULE_TXT}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
@@ -1375,7 +1375,7 @@ async function undoLostRaises(eligible, st, log, patchPrice, manual) {
     // Go back to the earliest price in this run of raises that still earns the minimum (skips loss-guard steps)
     const kc = await knownCost(i).catch(() => null);
     let orig = null;
-    for (let j = k; j < ch.length; j++) { const f = Number(ch[j].from); if (f > 0 && (!kc || priceOk(i, kc.cost, f))) { orig = f; break; } }
+    for (let j = k; j < ch.length; j++) { const f = Number(ch[j].from); if (f > 0 && (!kc || profitOk(i, kc.cost, f))) { orig = f; break; } }
     if (!orig || orig >= last.to) { m.raiseUndo = 'loss_guard'; skipped++; continue; }
     try {
       await patchPrice(i, orig); undone++;
