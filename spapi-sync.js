@@ -732,12 +732,33 @@ const RELIST_OFFER_ATTRS = ['condition_type', 'condition_note', 'list_price', 'm
 // other-vendor bill cost, or a hand-entered cost) - never a name guess. No cost known = no change.
 const PRICE_FIX_MARGIN = 5;
 let costData = null;
+// Read saver (24 Oct 2026): the LOTS catalogue (~25 documents) only changes when the LOTS price sync
+// or a manual upload saves it, so it is kept in a file between runs (GitHub cache, see the workflow)
+// and re-read only when its "savedAt" stamp changed, or at least every 3 hours as a safety net.
+// Each run now costs 1 read for the stamp instead of ~25 for the whole catalogue.
+const LOTS_CACHE_FILE = '.cache/lots-catalog.json';
+const LOTS_CACHE_MAX_AGE = 3 * 3600e3;
+async function loadLotsCatalog(A) {
+  const fs = require('fs');
+  const parent = await A.doc('lotsCatalog').get();
+  const stamp = parent.exists ? JSON.stringify(parent.get('savedAt') ?? null) : null;
+  let cached = null;
+  try { cached = JSON.parse(fs.readFileSync(LOTS_CACHE_FILE, 'utf8')); } catch (e) { /* no cache yet */ }
+  if (cached && stamp && stamp !== 'null' && cached.stamp === stamp && Date.now() - (cached.readAt || 0) < LOTS_CACHE_MAX_AGE && cached.lots) {
+    console.log(`LOTS catalogue: unchanged since last read - used saved copy (${Object.keys(cached.lots).length} products, 1 read).`);
+    return cached.lots;
+  }
+  const chunks = await A.doc('lotsCatalog').collection('chunks').get();
+  const lots = {};
+  chunks.docs.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code) lots[String(p.code)] = p; }));
+  console.log(`LOTS catalogue: read fresh (${chunks.size} document(s), ${Object.keys(lots).length} products).`);
+  try { fs.mkdirSync('.cache', { recursive: true }); fs.writeFileSync(LOTS_CACHE_FILE, JSON.stringify({ stamp, readAt: Date.now(), lots })); } catch (e) { console.warn('LOTS cache not saved:', e.message || e); }
+  return lots;
+}
 async function loadCostData() {
   if (costData) return costData;
   const A = dbMain.collection('aikm_admin');
-  const [chunks, map, man] = await Promise.all([A.doc('lotsCatalog').collection('chunks').get(), A.doc('spapiAsinLotsMap').get(), A.doc('spapiManualCosts').get()]);
-  const lots = {};
-  chunks.docs.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code) lots[String(p.code)] = p; }));
+  const [lots, map, man] = await Promise.all([loadLotsCatalog(A), A.doc('spapiAsinLotsMap').get(), A.doc('spapiManualCosts').get()]);
   costData = { lots, map: (map.exists && map.data().map) || {}, manual: (man.exists && man.data().costs) || {} };
   return costData;
 }

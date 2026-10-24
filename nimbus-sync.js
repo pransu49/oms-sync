@@ -145,15 +145,18 @@ async function main() {
   //    shipments changed are rewritten (old fixed-size chunks shifted on every new order -> ~13 rewrites/run).
   //  - The dashboard is refreshed at most every 30 min (a manual "Sync now" always refreshes it).
   //  - The order index is rewritten only when it actually changed.
+  //  - Read saver (24 Oct 2026): only the small _meta document is read first (1 read). The whole
+  //    dashboard (~31 documents) is read only when it is due for its 30-min refresh.
   const col = db.collection('nimbusDash');
-  const snap = await col.get();
-  const old = {}; let meta = null;
-  snap.forEach((d) => { if (d.id === '_meta') meta = d.data(); else old[d.id] = d.get('hash'); });
+  const metaSnap = await col.doc('_meta').get();
+  const meta = metaSnap.exists ? metaSnap.data() : null;
   const manual = process.env.GITHUB_EVENT_NAME === 'workflow_dispatch';
   const lastDash = meta && meta.updatedAt && meta.updatedAt.toMillis ? meta.updatedAt.toMillis() : 0;
-  const migrate = Object.keys(old).some((id) => /^chunk_/.test(id));
   let written = 0, stale = [];
-  if (manual || migrate || Date.now() - lastDash >= 28 * 60e3) {
+  if (manual || Date.now() - lastDash >= 28 * 60e3) {
+    const snap = await col.get();
+    const old = {};
+    snap.forEach((d) => { if (d.id !== '_meta') old[d.id] = d.get('hash'); });
     const byDay = {};
     rows.forEach((r) => { const d = /^\d{4}-\d{2}-\d{2}/.test(r.cr) ? r.cr.slice(0, 10) : 'unknown'; (byDay[d] = byDay[d] || []).push(r); });
     const used = new Set(['_meta']);
