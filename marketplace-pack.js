@@ -46,6 +46,25 @@ function slaToIso(text) {
 admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
 const db = admin.firestore();
 const mainRef = db.collection('aikm_admin').doc('marketplacePack');
+const labelsCol = mainRef.collection('labels');
+const KEEP_RUNS = 3;                // label PDFs kept in Firestore for the last N runs
+const CHUNK = 900 * 1024;           // Firestore doc limit is 1 MB
+async function saveLabels(account, bytes) {
+  const ids = [], parts = Math.ceil(bytes.length / CHUNK);
+  for (let i = 0; i < parts; i++) {
+    const id = `${RUN_ID}_${account.replace(/\W+/g, '')}_${i}`;
+    await labelsCol.doc(id).set({ runId: RUN_ID, account, part: i, parts, data: bytes.subarray(i * CHUNK, (i + 1) * CHUNK) });
+    ids.push(id);
+  }
+  return ids;
+}
+async function pruneOldLabels(keepRunIds) {
+  const snap = await labelsCol.select('runId').get();
+  const batch = db.batch(); let n = 0;
+  snap.forEach((d) => { if (!keepRunIds.includes(d.get('runId'))) { batch.delete(d.ref); n++; } });
+  if (n) await batch.commit();
+  return n;
+}
 const RUN_ID = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
 async function status(patch) {
   try { await mainRef.set({ live: { runId: RUN_ID, updatedAt: new Date().toISOString(), ...patch } }, { merge: true }); } catch (e) { console.log('status write failed:', e.message); }
@@ -319,7 +338,7 @@ async function main() {
     Object.entries(acc).forEach(([k, n]) => console.log(`  would pack ${k}: ${n}`));
     toPack.slice(0, 20).forEach((o) => console.log(`  ${o.orderId} · ${o.account} · SLA ${o.sla} · ${sku(o)}${o.lastFail ? ' · earlier OMS error: ' + failReason(o.lastFail).slice(0, 120) : ''}`));
     await mainRef.set({ live: { runId: RUN_ID, state: 'done', step: 'Dry run finished', updatedAt: new Date().toISOString() },
-      lastDry: { runId: RUN_ID, at: new Date().toISOString(), wouldPack: toPack.length, byAccount: acc, check: check.map((c) => ({ orderId: c.orderId || c.vid, account: c.account || c.ccName, reason: c.reason })) } }, { merge: true });
+      lastDry: { runId: RUN_ID, at: new Date().toISOString(), wouldPack: toPack.length, byAccount: acc, preview: toPack.slice(0, 300).map((o) => ({ orderId: o.orderId, account: o.account, sla: o.sla, sku: sku(o) })), check: check.map((c) => ({ orderId: c.orderId || c.vid, account: c.account || c.ccName, reason: c.reason })) } }, { merge: true });
     console.log('Dry run done.');
     return;
   }
@@ -381,9 +400,14 @@ async function main() {
       cp.forEach((p) => merged.addPage(p)); pages += cp.length;
     }
     const fileName = `${acc.replace(/\W+/g, '_')}_${today}.pdf`;
-    let sent = false;
-    if (pages) { const bytes = Buffer.from(await merged.save({ useObjectStreams: true })); sent = await sendPdf(fileName, bytes, `${acc} — ${list.length} orders, ${pages} labels (${today})`); }
-    files[acc] = { orders: list.length, pages, missing, sentToTelegram: sent, fileName };
+    let sent = false, docIds = [], sizeKB = 0;
+    if (pages) {
+      const bytes = Buffer.from(await merged.save({ useObjectStreams: true }));
+      sizeKB = Math.round(bytes.length / 1024);
+      try { docIds = await saveLabels(acc, bytes); } catch (e) { console.log('Could not save labels for the console:', e.message); }
+      sent = await sendPdf(fileName, bytes, `${acc} — ${list.length} orders, ${pages} labels (${today})`);
+    }
+    files[acc] = { orders: list.length, pages, missing, sentToTelegram: sent, fileName, docIds, sizeKB };
     console.log(`${acc}: ${pages} label pages${missing.length ? ' · missing ' + missing.length : ''}${sent ? ' · sent to Telegram' : ''}`);
   }
 
@@ -403,7 +427,11 @@ async function main() {
     failed: failed.map((o) => ({ orderId: o.orderId, account: o.account, sku: sku(o), reason: o.packError })),
     check: check.map((c) => ({ orderId: c.orderId || c.vid, account: c.account || c.ccName, reason: c.reason })),
   };
-  await mainRef.set({ last: summary, live: { runId: RUN_ID, state: 'done', step: `Done — ${packed.length} packed, ${failed.length} failed`, updatedAt: summary.finishedAt } }, { merge: true });
+  const prev = await mainRef.get();
+  const history = ((prev.exists && prev.get('history')) || []).filter((h) => h.runId !== RUN_ID);
+  const keep = [{ runId: RUN_ID, date: today, packed: packed.length, failed: failed.length, finishedAt: summary.finishedAt, files }, ...history].slice(0, KEEP_RUNS);
+  await mainRef.set({ last: summary, history: keep, live: { runId: RUN_ID, state: 'done', step: `Done — ${packed.length} packed, ${failed.length} failed`, updatedAt: summary.finishedAt } }, { merge: true });
+  try { console.log('Old label parts removed:', await pruneOldLabels(keep.map((h) => h.runId))); } catch (e) { console.log('prune failed:', e.message); }
   console.log(`Done in ${Math.round((Date.now() - t0) / 1000)}s.`);
 }
 

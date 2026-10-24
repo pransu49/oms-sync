@@ -418,3 +418,15 @@
   function frames() { var f = document.getElementsByTagName("iframe"); for (var i = 0; i < f.length; i++) { try { guard(f[i].contentWindow); } catch (e) {} } }
   frames(); setInterval(frames, 1500);
 } catch (e) {} })();
+
+/* ===== DO NOT REMOVE — loads the Meesho + Snapdeal section of the Easy Ship tab (console/meesho-tab.js). =====
+   Keep this block at the end of this file when editing the Easy Ship tab. Loads the latest version (by commit); falls back to @main. */
+(function () { try { if (document.getElementById("aikmMeeshoJs")) return;
+  function add(ref) { if (document.getElementById("aikmMeeshoJs")) return; var s = document.createElement("script"); s.id = "aikmMeeshoJs"; s.defer = true;
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/meesho-tab.js"; document.head.appendChild(s); }
+  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
+  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/meesho-tab.js&per_page=1")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
+} catch (e) {} })();
