@@ -40,7 +40,7 @@ jobs:
           if [ "$EV" = "workflow_dispatch" ]; then echo "auto=false" >> $GITHUB_OUTPUT; echo "go=true" >> $GITHUB_OUTPUT; exit 0; fi
           echo "auto=true" >> $GITHUB_OUTPUT
           # Daily auto-run switch: off until the first test run is checked
-          AUTO_ON=false
+          AUTO_ON=true
           if [ "$AUTO_ON" != "true" ]; then echo "Daily auto-run is switched off"; echo "go=false" >> $GITHUB_OUTPUT; exit 0; fi
           if [ "$((10#$HM))" -lt 1000 ] || [ "$((10#$HM))" -gt 1800 ]; then
             echo "Outside 10:00 AM - 6:00 PM IST ($HM)"; echo "go=false" >> $GITHUB_OUTPUT; exit 0; fi
