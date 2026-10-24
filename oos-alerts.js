@@ -38,11 +38,11 @@ function ymd(x) {
   const force = process.env.FORCE === 'true' || !!slot;
   if (!force && st.stamp === stamp) { console.log('LOTS stock not re-uploaded since the last check - nothing to do (1 read).'); return; }
 
-  const [chunks, mapS, lixS] = await Promise.all([A.doc('lotsCatalog').collection('chunks').get(), A.doc('spapiAsinLotsMap').get(), db.collection('listingIndex').get()]);
+  const [chunks, mapS, lixS, map2S] = await Promise.all([A.doc('lotsCatalog').collection('chunks').get(), A.doc('spapiAsinLotsMap').get(), db.collection('listingIndex').get(), A.doc('spapiAsinLotsMap2').get().catch(() => null)]);
   const lots = {};
   chunks.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code != null) lots[String(p.code)] = p; }));
   if (Object.keys(lots).length < 500) { console.log(`LOTS catalogue looks incomplete (${Object.keys(lots).length} products) - no alerts.`); return; }
-  const map = (mapS.exists && mapS.data().map) || {};
+  const map = { ...((mapS.exists && mapS.data().map) || {}), ...((map2S && map2S.exists && map2S.data().map) || {}) };   // + overflow record (24 Oct 2026)
 
   // ASIN -> Amazon listings (account, SKU, Amazon stock)
   const byAsin = {};
