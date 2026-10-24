@@ -3,8 +3,8 @@
 //   1. Logs into OMS Guru and reads ALL "New" orders, keeps the Meesho and Snapdeal ones
 //   2. Packs them in OMS Guru ("Pack Orders"), confirming OMS's own box size / weight values
 //   3. Waits until OMS shows the shipping label for each order (that is the proof it was packed)
-//   4. Merges the labels into ONE PDF per account (sorted by product) and sends the PDFs,
-//      a picklist and the failed list to Telegram. A summary is saved in Firestore (aikm_admin/marketplacePack).
+//   4. Merges the labels: ONE combined PDF of all Meesho + Snapdeal accounts (sorted by product) goes
+//      to Telegram with a picklist and the failed list; one PDF per account is also kept for the console. A summary is saved in Firestore (aikm_admin/marketplacePack).
 //
 // Settings (workflow inputs / env):
 //   DRY_RUN=true  -> only lists what it WOULD pack (nothing is packed)
@@ -383,10 +383,11 @@ async function main() {
   const why = {}; failed.forEach((o) => { const k = (o.packError || 'unknown').slice(0, 160); why[k] = (why[k] || 0) + 1; });
   Object.entries(why).forEach(([k, n]) => console.log(`  failed ×${n}: ${k}`));
 
-  // ---- labels: one PDF per account, sorted by product → Telegram ----
+  // ---- labels: one PDF per account (console) + ONE combined PDF of all accounts → Telegram ----
   await status({ state: 'running', step: `Downloading ${packed.length} labels` });
   const byAcc = {}; packed.forEach((o) => { (byAcc[o.account] = byAcc[o.account] || []).push(o); });
   const files = {};
+  const labelPdf = {}; // orderId -> label PDF bytes (reused for the combined PDF)
   for (const [acc, list] of Object.entries(byAcc)) {
     list.sort((a, b) => ((a.items[0] || {}).sku || '').localeCompare((b.items[0] || {}).sku || '') || String(a.orderId).localeCompare(String(b.orderId)));
     const pdfs = await pool(list, (o) => downloadLabel(o.labelId));
@@ -395,20 +396,38 @@ async function main() {
     for (let i = 0; i < list.length; i++) {
       const b = pdfs[i];
       if (!b || b.error) { missing.push(list[i].orderId); continue; }
+      labelPdf[list[i].orderId] = b;
       const src = await PDFDocument.load(b, { ignoreEncryption: true });
       const cp = await merged.copyPages(src, src.getPageIndices());
       cp.forEach((p) => merged.addPage(p)); pages += cp.length;
     }
     const fileName = `${acc.replace(/\W+/g, '_')}_${today}.pdf`;
-    let sent = false, docIds = [], sizeKB = 0;
+    const sent = false; let docIds = [], sizeKB = 0;
     if (pages) {
       const bytes = Buffer.from(await merged.save({ useObjectStreams: true }));
       sizeKB = Math.round(bytes.length / 1024);
       try { docIds = await saveLabels(acc, bytes); } catch (e) { console.log('Could not save labels for the console:', e.message); }
-      sent = await sendPdf(fileName, bytes, `${acc} — ${list.length} orders, ${pages} labels (${today})`);
     }
     files[acc] = { orders: list.length, pages, missing, sentToTelegram: sent, fileName, docIds, sizeKB };
-    console.log(`${acc}: ${pages} label pages${missing.length ? ' · missing ' + missing.length : ''}${sent ? ' · sent to Telegram' : ''}`);
+    console.log(`${acc}: ${pages} label pages${missing.length ? ' · missing ' + missing.length : ''}`);
+  }
+
+  // one combined PDF (Meesho + Snapdeal, all accounts), sorted by product so packing is one pass
+  const allLabels = packed.filter((o) => labelPdf[o.orderId])
+    .sort((a, b) => ((a.items[0] || {}).sku || '').localeCompare((b.items[0] || {}).sku || '') || String(a.account).localeCompare(String(b.account)) || String(a.orderId).localeCompare(String(b.orderId)));
+  if (allLabels.length) {
+    const combined = await PDFDocument.create();
+    let cPages = 0;
+    for (const o of allLabels) {
+      const src = await PDFDocument.load(labelPdf[o.orderId], { ignoreEncryption: true });
+      const cp = await combined.copyPages(src, src.getPageIndices());
+      cp.forEach((p) => combined.addPage(p)); cPages += cp.length;
+    }
+    const bytes = Buffer.from(await combined.save({ useObjectStreams: true }));
+    const accs = Object.keys(files).filter((a) => files[a].pages).map((a) => `${a} ${files[a].orders}`).join(' · ');
+    const sent = await sendPdf(`Meesho_Snapdeal_Labels_${today}.pdf`, bytes, `🏷 Meesho + Snapdeal labels — ${today}\n${allLabels.length} orders · ${cPages} labels (sorted by product)\n${accs}`);
+    Object.values(files).forEach((f) => { if (f.pages) f.sentToTelegram = sent; });
+    console.log(`Combined PDF: ${allLabels.length} orders, ${cPages} pages, ${Math.round(bytes.length / 1024)} KB${sent ? ' · sent to Telegram' : ''}`);
   }
 
   const pick = {}; packed.forEach((o) => o.items.forEach((x) => { pick[x.sku] = (pick[x.sku] || 0) + x.qty; }));

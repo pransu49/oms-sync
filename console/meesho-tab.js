@@ -112,7 +112,7 @@
           "<b>Which orders:</b> all <b>New</b> orders of the Meesho and Snapdeal accounts in OMS Guru. Amazon orders are never touched.<br>" +
           "<b>Packing:</b> same as ticking the orders in OMS Guru's New tab and clicking <b>Pack Orders</b>; box size / weight come from OMS.<br>" +
           "<b>Check:</b> an order counts as packed only when OMS shows its shipping label (waits up to 15 min).<br>" +
-          "<b>Labels:</b> one PDF per account, sorted by product — here and on Telegram.</div></div>" +
+          "<b>Labels:</b> one PDF per account here; on Telegram all accounts come in ONE combined PDF, sorted by product.</div></div>" +
       "</div></div>";
     tab.insertAdjacentElement("afterend", p);
 
