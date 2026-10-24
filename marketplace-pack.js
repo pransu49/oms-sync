@@ -206,7 +206,7 @@ async function packBatch(vids) {
   p1.append('data[Click][command]', 'Pack Orders'); p1.append('data[Click][show_progress]', '1');
   vids.forEach((v) => p1.append('data[Invoice][][id]', v));
   const r1 = await ajaxPost('/orders/newOrders', p1);
-  const j1 = r1.json && r1.json.id ? await waitTask(r1.json, 120) : r1.json;
+  const j1 = r1.json && r1.json.id ? await waitTask(r1.json, 300) : r1.json;
   let html = bodyOf(j1, r1);
   const removed = [], notes = [];
   // step 1b — OMS may ask to confirm box size / weight (already filled from OMS product data)
@@ -352,11 +352,12 @@ async function main() {
     open.forEach((o, i) => {
       const d = res[i]; if (!d || d.error) return;
       if (d.labelId) { Object.assign(o, d, { final: 'packed' }); return; }
-      if (d.lastFailAt && d.lastFailAt >= t0 - 60000) Object.assign(o, d, { final: 'failed', packError: failReason(d.lastFail) });
+      // OMS may log an error and still finish (e.g. Meesho not READY_TO_SHIP yet) — remember it, keep waiting for the label
+      if (d.lastFailAt && d.lastFailAt >= t0 - 60000) o.packError = failReason(d.lastFail);
     });
     if (Date.now() - startStamp > 15 * 60000) break;
   }
-  pending.forEach((o) => { if (!o.final) { o.final = 'failed'; o.packError = o.packError || 'No label after 15 minutes — check this order in OMS'; } });
+  pending.forEach((o) => { if (!o.final) { o.final = 'failed'; o.packError = (o.packError ? o.packError + ' · ' : '') + 'no label after 15 minutes — check this order in OMS'; } });
   const packed = toPack.filter((o) => o.final === 'packed');
   const failed = toPack.filter((o) => o.final !== 'packed');
   console.log(`Packed with label: ${packed.length} · failed: ${failed.length}`);
