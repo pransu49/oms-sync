@@ -1270,22 +1270,27 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     } catch (e) { console.warn(`Loss guard FAILED for ${i.sku}:`, e.message || e); }
     await new Promise((r) => setTimeout(r, 800));
   }
-  for (const { i, mine, win, gap } of lower.filter((x) => !guardDone.has(x.i.sku)).slice(0, BB_MAX_PER_RUN)) {
-    if (manual.has(i.sku)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. You set ₹${manual.get(i.sku).price} yourself - the robot leaves it for 7 days.` }); continue; }
+  // Go through ALL listings that lost on price (best sellers first) and stop after BB_MAX_PER_RUN real price cuts -
+  // before, only the first 80 were looked at, and when all 80 were unwinnable nothing was cut (24 Oct 2026).
+  let examined = 0; const logSkip = (i, rec) => (examined <= BB_MAX_PER_RUN ? log(i, rec) : null);   // same number of log writes as before
+  for (const { i, mine, win, gap } of lower.filter((x) => !guardDone.has(x.i.sku))) {
+    if (lowered >= BB_MAX_PER_RUN) break;
+    examined++;
+    if (manual.has(i.sku)) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. You set ₹${manual.get(i.sku).price} yourself - the robot leaves it for 7 days.` }); continue; }
     st.bbCool[i.sku] = now + BB_COOL_MS;
     try {
       const m = mem(i.sku);
       if (m.noLowerUntil > now) { skipped++; continue; }   // learned: cutting this one did not pay - resting
       if (m.warUntil > now) { skipped++; continue; }       // learned: price war - resting
       const kc = await knownCost(i), ship = Number(mine.shipping) || 0;
-      if (!kc) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no cost known. Map it on the Amazon page so the robot can price it.` }); continue; }
+      if (!kc) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no cost known. Map it on the Amazon page so the robot can price it.` }); continue; }
       const target = Math.floor(L(win) - 1 - ship), profit = orderProfit(i, kc.cost, target, ship), floor = noLossFloor(i, kc.cost, target, ship);
-      if (!priceOk(i, kc.cost, target, ship)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ${RULE_TXT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
-      if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
+      if (!priceOk(i, kc.cost, target, ship)) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ${RULE_TXT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
+      if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
       const was = i.price; await patchPrice(i, target); lowered++; noteChange(st, i, 'lower', target, was);
       console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${was} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order)`);
       await log(i, { status: 'bb_price', change: 'lower', oldPrice: was, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, meets the ${RULE_TXT} minimum)` : ''}` });
-    } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await log(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
+    } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await logSkip(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
     await new Promise((r) => setTimeout(r, 800));
   }
   if (!BB_RAISE_ON && raise.length) console.log(`Buy Box pricer: raising while holding the Buy Box is OFF (${raise.length} held listings keep their price).`);
