@@ -2005,24 +2005,28 @@ async function applyPendingListingDeletions(sellerId) {
 
 // ── STOCK GUARD: follow LOTS stock on Amazon ────────────────────────────────────
 // Rule (asked for by the owner):
-//   • LOTS stock below STOCK_GUARD_MIN (10)  → set the Amazon listing to 0 (out of stock),
+//   • LOTS-GN stock below STOCK_GUARD_MIN (12) → set the Amazon listing to 0 (out of stock),
 //     remembering the Amazon stock it had.
-//   • LOTS stock back at 10 or more          → put that remembered Amazon stock back.
+//   • LOTS-GN stock back at 12 or more         → put that remembered Amazon stock back (only if Amazon is still 0).
 // Safety:
 //   • Only listings whose LOTS link is CONFIRMED (saved ASIN mapping or saved name mapping) -
 //     never on a name guess, so a wrong match can't switch off a good product.
 //   • Only self-ship / Easy Ship listings (FBA stock is controlled by Amazon, not us).
 //   • Only when this run's Amazon listings report was read (never on stale numbers).
-//   • Circuit breaker: if LOTS looks broken (catalogue missing, or it would switch off more than
-//     STOCK_GUARD_MAX_ZERO listings in one run) nothing is changed and the reason is logged.
+//   • Circuit breaker: if LOTS looks broken (catalogue missing, or 60%+ of linked in-stock listings would go
+//     to 0) nothing is changed and the reason is logged; at most STOCK_GUARD_MAX_ZERO changes per run.
 // State lives in spapiStockGuard/<account> (1 read + 1 write per run).
 // SWITCHED OFF (owner decision, 1 Oct 2026): OMS Guru also pushes stock to Amazon, so two systems
 // were fighting. OMS Guru owns Amazon stock. This tool now only reads LOTS stock for the page, and
 // one time puts back any listing it had set to 0 earlier. Set to true only if OMS Guru's Amazon
 // inventory sync is turned off.
-const STOCK_GUARD_ENABLED = false;
-const STOCK_GUARD_MIN = 10;
-const STOCK_GUARD_MAX_ZERO = 60;
+// SWITCHED ON again (owner, 24 Oct 2026): "when any product has less than 12 stock in LOTS-GN, the listing must be 0".
+// LOTS-GN = aikm_admin/lotsCatalog (LOTS-62 is lots62Catalog, not used here). OMS Guru may push stock back - the robot
+// sets it to 0 again at its next sync while LOTS-GN stays under 12. Set STOCK_GUARD=off in the workflow to switch off.
+const STOCK_GUARD_ENABLED = String(process.env.STOCK_GUARD || 'on').toLowerCase() !== 'off';
+const STOCK_GUARD_MIN = 12;
+const STOCK_GUARD_MAX_ZERO = 100;          // most listings set to 0 in one run (the rest follow next run)
+const STOCK_GUARD_BROKEN_SHARE = 0.6;      // if 60%+ of LOTS-linked in-stock listings would go to 0, LOTS data looks broken - stop
 function normalizeName(e) { return String(e).toLowerCase().replace(/[|/,_\-()]/g, ' ').replace(/[^a-z0-9. ]/g, ' ').replace(/\s+/g, ' ').trim(); }
 
 async function loadLotsForGuard() {
@@ -2118,11 +2122,16 @@ async function runStockGuard(sellerId) {
     return;
   }
 
-  if (toZero.length > STOCK_GUARD_MAX_ZERO) {
-    console.warn(`Stock guard STOPPED: would switch off ${toZero.length} listings at once (limit ${STOCK_GUARD_MAX_ZERO}). Check the LOTS stock upload; nothing was changed.`);
-    await guardRef.set({ items: guard, blocked: { at: Date.now(), wouldZero: toZero.length }, updatedAt: Date.now() });
+  // Circuit breaker: a broken LOTS upload (stock missing / all 0) must not switch off the whole shop
+  const linkedInStock = Object.values(SNAP.inventory).filter((it) => it && it.account === ACCOUNT_LABEL && reportSkus.has(it.sku)
+    && (it.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (parseInt(it.quantity, 10) || 0) > 0 && it.lotsQty != null).length;
+  if (toZero.length >= 20 && toZero.length > linkedInStock * STOCK_GUARD_BROKEN_SHARE) {
+    console.warn(`Stock guard STOPPED: ${toZero.length} of ${linkedInStock} LOTS-linked listings would go to 0 - the LOTS-GN stock looks broken. Nothing was changed.`);
+    await guardRef.set({ items: guard, blocked: { at: Date.now(), wouldZero: toZero.length, of: linkedInStock }, updatedAt: Date.now() });
     return;
   }
+  if (toZero.length > STOCK_GUARD_MAX_ZERO) console.log(`Stock guard: ${toZero.length} to set to 0 - doing ${STOCK_GUARD_MAX_ZERO} now, the rest next run.`);
+  toZero.splice(STOCK_GUARD_MAX_ZERO);
 
   let zeroed = 0, restored = 0, failed = 0;
   for (const z of toZero) {
@@ -2374,7 +2383,7 @@ async function run() {
     await syncCompetitivePricing(asinsFromInventory);
   } else console.log('Step 3: quick sync - competitor prices skipped (done in the full sync).');
 
-  console.log('Step 3a: stock guard (LOTS stock below 10 -> out of stock on Amazon)...');
+  console.log('Step 3a: stock guard (LOTS-GN stock below 12 -> out of stock on Amazon)...');
   if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
 
   console.log('Step 3a1: relist robot ("Not selling" -> new SKU, old SKU deleted)...');
