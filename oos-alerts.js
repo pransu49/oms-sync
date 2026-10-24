@@ -77,7 +77,7 @@ function ymd(x) {
   const back = Object.keys(prev).filter((c) => !(c in low) && used[c]);                      // recovered to 12+
 
 
-  if (fresh.length || back.length) {
+  if (fresh.length || back.length || force) {   // "Run workflow" with force = always send the full report
     const freshSet = new Set(fresh);
     const all = Object.keys(low).sort((a, b) => soldOf(b) - soldOf(a) || low[a] - low[b]);   // best sellers first
     const oos = Object.values(low).filter((q) => q === 0).length;
