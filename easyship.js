@@ -18,6 +18,7 @@
 const cheerio = require('cheerio');
 const { PDFDocument } = require('pdf-lib');
 const admin = require('firebase-admin');
+const { picklistPdf, sendTelegramPdf } = require('./picklist-pdf');
 
 const EMAIL = process.env.OMS_EMAIL, PASSWORD = process.env.OMS_PASSWORD;
 const DRY = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
@@ -486,6 +487,17 @@ async function finish(summary, packed, failed, batchNotes, t0) {
   const pick = {};
   packed.forEach((o) => o.items.forEach((x) => { pick[x.sku] = (pick[x.sku] || 0) + x.qty; }));
   summary.picklist = Object.entries(pick).sort((a, b) => b[1] - a[1]).map(([sku, qty]) => ({ sku, qty }));
+  // picklist as a premium PDF on Telegram (same design for every robot)
+  if (packed.length) {
+    const byAccSku = {};
+    packed.forEach((o) => o.items.forEach((x) => { const r = (byAccSku[x.sku] = byAccSku[x.sku] || {}); r[o.account] = (r[o.account] || 0) + x.qty; }));
+    try {
+      const pl = await picklistPdf({ title: 'Amazon Easy Ship', date: TARGET, orders: packed.length, rows: summary.picklist.map((x) => ({ name: x.sku, qty: x.qty, accounts: byAccSku[x.sku] })), note: `SLA date ${TARGET} - 2:00 PM pickup` });
+      const units = summary.picklist.reduce((a, x) => a + x.qty, 0);
+      const ok = await sendTelegramPdf(`Picklist_Amazon_EasyShip_SLA-${TARGET}.pdf`, pl, `🧾 Picklist — Amazon Easy Ship — SLA ${TARGET}\n${packed.length} orders · ${units} units · ${summary.picklist.length} products`);
+      console.log(`Picklist PDF ${ok ? 'sent to Telegram' : 'not sent'}.`);
+    } catch (e) { console.log('Picklist PDF failed:', e.message); }
+  }
   summary.packed = packed.length;
   summary.packedOrders = packed.map((o) => ({ orderId: o.orderId, account: o.account, sla: o.sla, awb: o.awb, invoice: o.invoice, sku: o.items.map((x) => `${x.sku} ×${x.qty}`).join(', ') }));
   summary.failed = failed.map((o) => ({ orderId: o.orderId, account: o.account, sla: o.sla, sku: (o.items || []).map((x) => `${x.sku} ×${x.qty}`).join(', '), reason: o.packError }));

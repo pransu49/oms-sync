@@ -17,6 +17,7 @@ const cheerio = require('cheerio');
 const { PDFDocument } = require('pdf-lib');
 const admin = require('firebase-admin');
 const { notify } = require('./telegram');
+const { picklistPdf } = require('./picklist-pdf');
 
 const EMAIL = process.env.OMS_EMAIL, PASSWORD = process.env.OMS_PASSWORD;
 const DRY = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
@@ -434,9 +435,18 @@ async function main() {
   const picklist = Object.entries(pick).sort((a, b) => b[1] - a[1]);
   const lines = [`📦 Meesho + Snapdeal — ${today}`, `Packed: ${packed.length} · Failed: ${failed.length} · Check: ${check.length}`];
   Object.entries(files).forEach(([a, f]) => lines.push(`• ${a}: ${f.orders} orders${f.missing.length ? ` (${f.missing.length} labels missing)` : ''}`));
-  if (picklist.length) { lines.push('', 'Picklist:'); picklist.slice(0, 60).forEach(([s, q]) => lines.push(`${q} × ${s}`)); }
   if (failed.length) { lines.push('', 'Not packed:'); failed.slice(0, 25).forEach((o) => lines.push(`${o.orderId} (${o.account}) — ${(o.packError || '').slice(0, 90)}`)); }
   if (check.length) { lines.push('', 'Check in OMS:'); check.slice(0, 15).forEach((o) => lines.push(`${o.orderId || o.vid} (${o.account || o.ccName}) — ${o.reason}`)); }
+  // picklist as a premium PDF (same design for every robot)
+  if (picklist.length) {
+    const byAccSku = {};
+    packed.forEach((o) => o.items.forEach((x) => { const r = (byAccSku[x.sku] = byAccSku[x.sku] || {}); r[o.account] = (r[o.account] || 0) + x.qty; }));
+    try {
+      const pl = await picklistPdf({ title: 'Meesho + Snapdeal', date: today, orders: packed.length, rows: picklist.map(([s2, q]) => ({ name: s2, qty: q, accounts: byAccSku[s2] })) });
+      const units = picklist.reduce((a, [, q]) => a + q, 0);
+      await sendPdf(`Picklist_Meesho_Snapdeal_${today}.pdf`, pl, `🧾 Picklist — Meesho + Snapdeal — ${today}\n${packed.length} orders · ${units} units · ${picklist.length} products`);
+    } catch (e) { console.log('Picklist PDF failed:', e.message); lines.push('', 'Picklist:'); picklist.slice(0, 60).forEach(([s2, q]) => lines.push(`${q} × ${s2}`)); }
+  }
   if (toPack.length || check.length) await notify(lines.join('\n'));
 
   const summary = {

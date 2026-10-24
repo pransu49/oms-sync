@@ -373,6 +373,25 @@ def main():
         keep[k] = now
     if JOB_ID:  # manual test runs don't count as printed
         printed_ref.set({'ids': keep})
+    # picklist (premium PDF made by picklist-pdf.js in the next workflow step -> Telegram)
+    try:
+        rows = {}
+        for k in final:
+            for n, q in orders[k]['items']:
+                nm = clean(n)
+                r = rows.setdefault(nm, {'name': nm, 'qty': 0, 'accounts': {}})
+                r['qty'] += q
+                ac = orders[k]['acct'] or 'Amazon'
+                r['accounts'][ac] = r['accounts'].get(ac, 0) + q
+        units = sum(r['qty'] for r in rows.values())
+        with open('picklist.json', 'w') as f:
+            json.dump({'title': 'Amazon Self-Ship (NimbusPost)' + (f' - {acct}' if acct else ''), 'date': sla, 'orders': len(final),
+                       'rows': list(rows.values()), 'note': f'SLA date {sla}' + (f' - account {acct}' if acct else ' - all accounts'),
+                       'fileName': f'Picklist_Amazon_SelfShip_SLA-{sla}.pdf',
+                       'caption': f'🧾 Picklist — Amazon Self-Ship — SLA {sla}\n{len(final)} orders · {units} units · {len(rows)} products'}, f)
+        print('picklist.json written:', len(rows), 'products')
+    except Exception as e:
+        print('Picklist skipped:', e)
     note('done', step=f'{len(final)} labels ready.', count=len(final), url=url, missing=missing[:300], missingCount=len(missing),
          noLabel=no_label[:300], skippedPrinted=skipped_old, sizeKb=round(len(data) / 1024))
 
