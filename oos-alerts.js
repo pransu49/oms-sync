@@ -32,7 +32,10 @@ function ymd(x) {
   const [parent, stS] = await Promise.all([A.doc('lotsCatalog').get(), A.doc('oosAlerts').get()]);
   const stamp = JSON.stringify(parent.exists ? parent.get('savedAt') ?? null : null);
   const st = stS.exists ? stS.data() : {};
-  const force = process.env.FORCE === 'true';
+  // daily report at 2 pm and 9 pm (SLOT = "YYYY-MM-DD-14" / "-21"): always the full report, once per slot
+  const slot = (process.env.SLOT || '').trim();
+  if (slot && st.slot === slot) { console.log(`Report for ${slot} already sent - nothing to do (1 read).`); return; }
+  const force = process.env.FORCE === 'true' || !!slot;
   if (!force && st.stamp === stamp) { console.log('LOTS stock not re-uploaded since the last check - nothing to do (1 read).'); return; }
 
   const [chunks, mapS, lixS] = await Promise.all([A.doc('lotsCatalog').collection('chunks').get(), A.doc('spapiAsinLotsMap').get(), db.collection('listingIndex').get()]);
@@ -92,7 +95,7 @@ function ymd(x) {
     };
     const msg = [
       '📦 <b>LOTS LOW STOCK ALERT</b>',
-      `<i>New LOTS stock checked · ${timeLbl(Date.now())}</i>`,
+      `<i>${slot ? 'Daily report' : 'Stock check'} · ${timeLbl(Date.now())}</i>`,
       BAR,
       `📉 Below ${LOW_QTY}   <b>${all.length}</b>   ·   ⛔ Out   <b>${oos}</b>`,
       `🆕 Newly low   <b>${fresh.length}</b>   ·   ✅ Back   <b>${back.length}</b>`,
@@ -110,6 +113,6 @@ function ymd(x) {
       await sendTelegramPdf(`LOTS_Low_Stock_${today}.pdf`, pdf, `📦 LOTS low stock — ${all.length} products below ${LOW_QTY} · ${oos} out of stock\nBest sellers (last ${SALES_DAYS} days) first`);
     } catch (e) { console.log('Low stock PDF failed:', e.message); }
   }
-  await A.doc('oosAlerts').set({ stamp, low, checkedAt: Date.now(), mapped: Object.keys(used).length });
+  await A.doc('oosAlerts').set({ stamp, low, checkedAt: Date.now(), mapped: Object.keys(used).length, slot: slot || st.slot || null });
   console.log(`LOTS: ${Object.keys(used).length} mapped products, ${Object.keys(low).length} below ${LOW_QTY} (${fresh.length} new, ${back.length} back in stock)${fresh.length || back.length ? ' - sent to Telegram' : ''}.`);
 })().catch((e) => { console.error('OOS ALERTS FAILED:', e.message); process.exit(1); });

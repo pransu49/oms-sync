@@ -1,19 +1,19 @@
 name: LOTS low stock alert (Telegram)
 
-# Every hour 9 am - 9 pm IST. Costs 1 Firebase read when LOTS stock was not re-uploaded;
-# reads the catalogue only after a new LOTS upload.
+# Daily full report at 2 pm and 9 pm IST: top-selling low-stock SKUs (text) + full list (PDF).
+# Sent once per slot (the robot remembers which slot it already sent).
 on:
-  # main trigger: piggy-back on the OMS sync (started every 10 min by cron-job.org) - the gate keeps 1 per hour
+  # main trigger: piggy-back on the OMS sync (started every 10 min by cron-job.org)
   workflow_run:
     workflows: ['Sync OMS Guru Orders']
     types: [completed]
   schedule:
-    - cron: '35 3-15 * * *'   # backup only - GitHub's own timer often skips
+    - cron: '45 8,15 * * *'   # backup only (2:15 pm and 9:15 pm IST) - GitHub's own timer often skips
   workflow_dispatch:
     inputs:
       force:
-        description: 'true = send the full low-stock check now even if LOTS was not re-uploaded'
-        default: 'false'
+        description: 'true = send the full report now'
+        default: 'true'
 
 concurrency:
   group: oos-alerts
@@ -24,15 +24,16 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       go: ${{ steps.g.outputs.go }}
+      slot: ${{ steps.g.outputs.slot }}
     steps:
       - id: g
         shell: bash
         run: |
-          h=$((10#$(TZ=Asia/Kolkata date +%H))); mi=$((10#$(TZ=Asia/Kolkata date +%M)))
+          h=$((10#$(TZ=Asia/Kolkata date +%H))); mi=$((10#$(TZ=Asia/Kolkata date +%M))); d=$(TZ=Asia/Kolkata date +%F)
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "go=1" >> $GITHUB_OUTPUT; exit 0; fi
-          if [ $h -lt 9 ] || [ $h -gt 21 ]; then echo "go=0" >> $GITHUB_OUTPUT; echo "skip: outside 9 am - 9 pm IST"; exit 0; fi
-          if [ "${{ github.event_name }}" = "workflow_run" ] && [ $mi -ge 10 ]; then echo "go=0" >> $GITHUB_OUTPUT; echo "skip: not the hourly slot"; exit 0; fi
-          echo "go=1" >> $GITHUB_OUTPUT
+          # 2 pm and 9 pm IST; the first hour after it also counts, so a late GitHub timer still sends (once)
+          if [ $h -eq 14 ] || [ $h -eq 21 ]; then echo "go=1" >> $GITHUB_OUTPUT; echo "slot=$d-$h" >> $GITHUB_OUTPUT; echo "report slot $d-$h"
+          else echo "go=0" >> $GITHUB_OUTPUT; echo "skip: reports go at 2 pm and 9 pm IST"; fi
 
   oos:
     needs: gate
@@ -51,4 +52,5 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}   # sales of the last 30 days
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLOT: ${{ needs.gate.outputs.slot || '' }}
           FORCE: ${{ inputs.force || 'false' }}
