@@ -327,7 +327,81 @@
     };
     initList(ov);
     initAttention();
+    initMapFix();
     return true;
+  }
+
+  /* ===== Mapping fix (owner, 24 Oct 2026: "when we map the product it is not getting saved, listing got stuck") =====
+     1. All Amazon -> LOTS / vendor mappings live in ONE Firestore document (aikm_admin/spapiAsinLotsMap, 1 MB limit).
+        When it is full every save fails. Saves now fall back to aikm_admin/spapiAsinLotsMap2 (the robot reads both).
+     2. The overflow mappings are loaded into the page once, so mapped products show as mapped.
+     3. Map from an Add ASIN row: when the Map window closes with a new mapping, the row goes back to the robot
+        (no Retry click) and the Add ASIN window opens again. */
+  function initMapFix() {
+    if (window.__aaMapFix) return; window.__aaMapFix = true;
+    var ADM = function () { try { return ADMIN(); } catch (e) { return typeof fbDb !== "undefined" && fbDb ? fbDb.collection("aikm_admin") : null; } };
+    var say = function (m, bad) { try { spToast(m, bad); } catch (e) { toast(m, bad); } };
+    var isRecord = function (v) { return v && typeof v === "object" && (v.savedAt || v.parts || v.code || v.vendorName); };
+    // 1. save with fallback
+    (function patch() {
+      if (typeof fsMerge !== "function") return void setTimeout(patch, 1000);
+      if (fsMerge.__aikm) return;
+      var orig = fsMerge;
+      var f = function (docId, field, patchObj) {
+        if (docId !== "spapiAsinLotsMap") return orig.apply(this, arguments);
+        var A = ADM(); if (!A) return orig.apply(this, arguments);
+        var stamp = new Date().toISOString();
+        var hasDeletes = Object.keys(patchObj || {}).some(function (k) { return !isRecord(patchObj[k]); });
+        return A.doc("spapiAsinLotsMap").set({ map: patchObj, savedAt: stamp }, { merge: true }).then(function () {
+          if (hasDeletes) A.doc("spapiAsinLotsMap2").set({ map: patchObj, savedAt: stamp }, { merge: true }).catch(function () {});
+          say("✓ Saved");
+        }).catch(function (e) {
+          console.warn("Main mapping record not saved - using the overflow record", e);
+          return A.doc("spapiAsinLotsMap2").set({ map: patchObj, savedAt: stamp }, { merge: true })
+            .then(function () { say("✓ Saved"); })
+            .catch(function (e2) { console.warn("Overflow mapping not saved", e2); say("⚠ Mapping not saved — " + (e2.message || e2), true); });
+        });
+      };
+      f.__aikm = true;
+      try { fsMerge = f; } catch (e) {} window.fsMerge = f;
+    })();
+    // 2. load overflow mappings into the page once
+    (function loadOverflow(n) {
+      var ok = false; try { ok = typeof STORE !== "undefined" && STORE && STORE.asinLotsMap && Object.keys(STORE.asinLotsMap).length > 0; } catch (e) {}
+      if (!ok) return void (n < 40 && setTimeout(function () { loadOverflow(n + 1); }, 1500));
+      var A = ADM(); if (!A) return;
+      A.doc("spapiAsinLotsMap2").get().then(function (d) {
+        var m2 = (d.exists && d.data().map) || {}, k = Object.keys(m2); if (!k.length) return;
+        k.forEach(function (a) { var r = m2[a], cur = STORE.asinLotsMap[a]; if (isRecord(r) && (!cur || String(r.savedAt || "") >= String(cur.savedAt || ""))) STORE.asinLotsMap[a] = r; });
+        try { matchMemo.clear(); } catch (e) {} try { spMarkAllDirty(); spRender(); } catch (e) {}
+      }).catch(function (e) { console.warn("Overflow mappings not loaded", e); });
+    })(0);
+    // 3. Map from an Add ASIN row -> auto retry + reopen
+    var list = $("aaList"); if (!list) return;
+    list.addEventListener("click", function (e) {
+      var b = e.target.closest('[data-aa="map"]'); if (!b) return;
+      var tr = b.closest("tr"), link = tr && tr.querySelector('a[href*="/dp/"]');
+      var asin = link ? (link.getAttribute("href").split("/dp/")[1] || "").replace(/[^A-Z0-9]/gi, "").toUpperCase() : "";
+      if (!asin) return;
+      var docId = b.getAttribute("data-asin"), before = "";
+      try { before = JSON.stringify(STORE.asinLotsMap[asin] || null); } catch (x) {}
+      var tries = 0, wait = setInterval(function () {
+        var mm = $("spapiMatchModal"); if (!mm && ++tries < 20) return; clearInterval(wait); if (!mm) return;
+        var obs = new MutationObserver(function () {
+          if (mm.style.display !== "none") return;
+          obs.disconnect();
+          var after = ""; try { after = JSON.stringify(STORE.asinLotsMap[asin] || null); } catch (x) {}
+          var db = G.db();
+          if (after !== before && after !== "null" && db) {
+            db.collection("spapiAddAsin").doc(docId).set({ status: "pending", error: null, requestedAt: Date.now() }, { merge: true })
+              .then(function () { say("✓ Mapped — the robot lists it at the next sync (about 15 min)"); })
+              .catch(function (x) { say("Mapped, but the row was not re-queued — press Retry", true); });
+          }
+          setTimeout(function () { var o = $("aaOpen"); o && o.click(); }, 300);
+        });
+        obs.observe(mm, { attributes: true, attributeFilter: ["style"] });
+      }, 150);
+    }, true);
   }
 
   /* ===== "Needs attention" panel: listings the robot can't price (no cost) and listings with no live offer =====

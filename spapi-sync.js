@@ -758,8 +758,15 @@ async function loadLotsCatalog(A) {
 async function loadCostData() {
   if (costData) return costData;
   const A = dbMain.collection('aikm_admin');
-  const [lots, map, man] = await Promise.all([loadLotsCatalog(A), A.doc('spapiAsinLotsMap').get(), A.doc('spapiManualCosts').get()]);
-  costData = { lots, map: (map.exists && map.data().map) || {}, manual: (man.exists && man.data().costs) || {} };
+  const [lots, map, map2, man] = await Promise.all([loadLotsCatalog(A), A.doc('spapiAsinLotsMap').get(), A.doc('spapiAsinLotsMap2').get().catch(() => null), A.doc('spapiManualCosts').get()]);
+  // Owner, 24 Oct 2026: mappings were "not getting saved" - spapiAsinLotsMap is one Firestore document (1 MB limit).
+  // The Amazon page now writes to spapiAsinLotsMap2 when the main one is full; the newer record of an ASIN wins.
+  const m1 = (map.exists && map.data().map) || {}, m2 = (map2 && map2.exists && map2.data().map) || {};
+  const merged = { ...m1 };
+  Object.entries(m2).forEach(([a, r]) => { if (!merged[a] || String((r && r.savedAt) || '') >= String((merged[a] && merged[a].savedAt) || '')) merged[a] = r; });
+  const kb = Math.round(JSON.stringify(m1).length / 1024);
+  console.log(`ASIN mappings: ${Object.keys(m1).length} in the main record (~${kb} KB of 1024 KB)${Object.keys(m2).length ? `, ${Object.keys(m2).length} in the overflow record` : ''}.`);
+  costData = { lots, map: merged, manual: (man.exists && man.data().costs) || {} };
   return costData;
 }
 function bestSlab(p) { const s = (p && p.slabs) || []; let b = null; s.forEach((x) => { const v = Number(x.price); if (v > 0 && (b == null || v < b)) b = v; }); return b; }
@@ -1783,16 +1790,23 @@ async function mapByBarcode(asin, code) {
   const p = Object.values(c.lots).find((x) => x && x.barcode && strip(x.barcode) === strip(code));
   if (!p) return null;
   const rec = { code: String(p.code), name: p.name || '', vendorName: 'LOTS', parts: [{ code: String(p.code), name: p.name || '', qty: 1 }], savedAt: new Date().toISOString(), source: 'barcode' };
-  await dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').set({ map: { [asin]: rec } }, { merge: true });
+  await dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').set({ map: { [asin]: rec } }, { merge: true })
+    .catch(() => dbMain.collection('aikm_admin').doc('spapiAsinLotsMap2').set({ map: { [asin]: rec } }, { merge: true }));   // main record full -> overflow
   c.map[asin] = rec;
   console.log(`Add ASIN: barcode ${code} = LOTS ${p.code} (${p.name}) - mapped to ${asin}.`);
   return p;
 }
 async function applyAddAsinRequests(sellerId) {
   const snap = await db.collection('spapiAddAsin').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').limit(15).get();
-  if (snap.empty) { console.log('Add ASIN: nothing pending.'); return; }
-  console.log(`Add ASIN: ${snap.size} request(s).`);
-  for (const d of snap.docs) {
+  // Owner, 24 Oct 2026: a "Needs cost" row whose ASIN has been mapped since is retried automatically (no Retry click needed)
+  let mappedNow = [];
+  try {
+    const nc = await db.collection('spapiAddAsin').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'needs_cost').limit(60).get();
+    if (!nc.empty) { const c = await loadCostData(); mappedNow = nc.docs.filter((d) => { const a = String(d.data().asin || '').toUpperCase(); return a && (c.map[a] || Number(d.data().cost) > 0); }).slice(0, 15); }
+  } catch (e) { console.warn('Add ASIN: needs-cost check skipped:', e.message || e); }
+  if (snap.empty && !mappedNow.length) { console.log('Add ASIN: nothing pending.'); return; }
+  console.log(`Add ASIN: ${snap.size} request(s)${mappedNow.length ? ` + ${mappedNow.length} mapped since "Needs cost" (retried)` : ''}.`);
+  for (const d of snap.docs.concat(mappedNow)) {
     const r = d.data();
     let asin = String(r.asin || '').trim().toUpperCase();
     const done = (patch) => d.ref.set({ ...patch, doneAt: Date.now() }, { merge: true });
@@ -2040,13 +2054,13 @@ async function loadLotsForGuard() {
   const [lotsSnap, mapSnap, asinDoc] = await Promise.all([
     dbMain.collection('aikm_admin').doc('lotsCatalog').collection('chunks').get(),
     dbMain.collection('aikm_admin').doc('masterMapping').collection('chunks').get(),
-    dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').get(),
+    Promise.resolve(null),
   ]);
   const lotsByCode = {};
   lotsSnap.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code != null) lotsByCode[String(p.code)] = p; }));
   const nameMap = {};
   mapSnap.forEach((d) => Object.assign(nameMap, d.data().map || {}));
-  const asinMap = asinDoc.exists ? (asinDoc.data().map || {}) : {};
+  const asinMap = (await loadCostData()).map;   // main + overflow mapping records (same as the price robot)
   return { lotsByCode, nameMap, asinMap };
 }
 
