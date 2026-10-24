@@ -1873,7 +1873,12 @@ async function applyAddAsinRequests(sellerId) {
       }
       const profit = Math.round(orderProfit(i, kc.cost, price, ship));
       // 5) list it (dry run first)
-      const qty = Math.max(1, Math.min(999, parseInt(r.qty) || 10));
+      let qty = Math.max(1, Math.min(999, parseInt(r.qty) || 10));
+      // Owner, 24 Oct 2026: a NEW listing whose LOTS-GN stock is under 12 goes live with stock 0 (OMS Guru can add stock later)
+      const lm = (await loadCostData()).map[asin], lcode = lm && (!lm.vendorName || String(lm.vendorName).toUpperCase() === 'LOTS') && (lm.code || (Array.isArray(lm.parts) && lm.parts[0] && lm.parts[0].code));
+      const lp = lcode ? (await loadCostData()).lots[String(lcode)] : null, lotsGn = lp ? parseFloat(lp.qty) : NaN;
+      let stockNote = '';
+      if (!isNaN(lotsGn) && lotsGn < NEW_LISTING_MIN_LOTS) { qty = 0; stockNote = `LOTS-GN stock ${lotsGn} is under ${NEW_LISTING_MIN_LOTS} - listed with stock 0`; }
       const attributes = {
         condition_type: [{ value: 'new_new', marketplace_id: MARKETPLACE_ID }],
         merchant_suggested_asin: [{ value: asin, marketplace_id: MARKETPLACE_ID }],
@@ -1909,6 +1914,7 @@ async function applyAddAsinRequests(sellerId) {
       if (replaced.length) basis = `Relisted - old ${replaced.join(', ')} deleted · ${basis}`;
       if (notDeleted.length) basis = `⚠ Old ${notDeleted.join(', ')} could NOT be deleted - delete it in Seller Central · ${basis}`;
       if (fbaOnes.length) basis += ` · FBA listing ${fbaOnes.map((x) => x.sku).join(', ')} left as is`;
+      if (stockNote) { basis = `${stockNote} · ${basis}`; console.log(`Add ASIN ${sku}: ${stockNote}.`); }
       await done({ status: 'listed', sku, name, img: img ? img.link : null, price, mrp, qty, cost: kc.cost, costSrc: kc.src, profit, basis, ship, replaced, notDeleted });
       const at = Date.now();
       await dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${asin}_${at}`).set({ account: ACCOUNT_LABEL, asin, name, oldSku: replaced[0] || sku, newSku: sku, price, mrp, qty, at,
@@ -2020,11 +2026,12 @@ async function applyPendingListingDeletions(sellerId) {
 // were fighting. OMS Guru owns Amazon stock. This tool now only reads LOTS stock for the page, and
 // one time puts back any listing it had set to 0 earlier. Set to true only if OMS Guru's Amazon
 // inventory sync is turned off.
-// SWITCHED ON again (owner, 24 Oct 2026): "when any product has less than 12 stock in LOTS-GN, the listing must be 0".
-// LOTS-GN = aikm_admin/lotsCatalog (LOTS-62 is lots62Catalog, not used here). OMS Guru may push stock back - the robot
-// sets it to 0 again at its next sync while LOTS-GN stays under 12. Set STOCK_GUARD=off in the workflow to switch off.
-const STOCK_GUARD_ENABLED = String(process.env.STOCK_GUARD || 'on').toLowerCase() !== 'off';
+// OFF again (owner, 24 Oct 2026, same day): the "LOTS-GN under 12 -> stock 0" rule is wanted ONLY for new listings the
+// robot creates (Add ASIN - see NEW_LISTING_MIN_LOTS), not for existing listings. While off, any listing this guard set
+// to 0 gets its previous Amazon stock put back (undo below). STOCK_GUARD=on in the workflow switches it on.
+const STOCK_GUARD_ENABLED = String(process.env.STOCK_GUARD || 'off').toLowerCase() === 'on';
 const STOCK_GUARD_MIN = 12;
+const NEW_LISTING_MIN_LOTS = 12;   // Add ASIN: LOTS-GN stock under this -> the new listing goes live with stock 0
 const STOCK_GUARD_MAX_ZERO = 100;          // most listings set to 0 in one run (the rest follow next run)
 const STOCK_GUARD_BROKEN_SHARE = 0.6;      // if 60%+ of LOTS-linked in-stock listings would go to 0, LOTS data looks broken - stop
 function normalizeName(e) { return String(e).toLowerCase().replace(/[|/,_\-()]/g, ' ').replace(/[^a-z0-9. ]/g, ' ').replace(/\s+/g, ' ').trim(); }
