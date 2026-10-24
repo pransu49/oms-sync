@@ -19,7 +19,7 @@
     var sub = document.createElement("div");
     sub.className = "subtabbar no-print"; sub.id = "subtab-easyship"; sub.style.display = "none";
     sub.innerHTML = '<span class="subtab-label">Amazon Easy Ship</span>' +
-      '<span class="es-meta">Auto 11:30 AM for next working day · 2 PM pickup · skips &gt;4 units or &gt;3 kg</span>' +
+      '<span class="es-meta">Auto 11:30 AM for next working day · 2 PM pickup · bulky prepaid orders packed too</span>' +
       '<span style="flex:1"></span>' +
       '<label class="es-meta" for="esDate" style="display:flex;align-items:center;gap:6px;">SLA date <input type="date" id="esDate" style="min-height:34px;width:150px;"></label>' +
       '<button type="button" class="subbtn" id="esDryBtn" title="Shows what would be packed — packs nothing"><i class="ti ti-eye"></i> Preview</button>' +
@@ -39,7 +39,7 @@
       '<div class="es-grid"><div>' +
         '<div class="panel"><h2>Labels <span id="esLabelsFor" class="es-meta"></span><button type="button" class="btn-gold" id="esAllBtn" style="margin-left:auto;display:none;"><i class="ti ti-files"></i> Download all labels (1 PDF)</button></h2><div id="esLabels"></div></div>' +
         '<div class="panel"><h2>Failed — fix in OMS Guru <span class="es-meta" id="esFailedCount"></span></h2><div id="esFailed"></div></div>' +
-        '<div class="panel"><h2>Skipped — bulky orders <span class="es-meta" id="esSkipCount"></span></h2><small class="hint">Not packed by the robot: more than 4 units, or heavier than 3 kg. Ship these yourself.</small><div id="esSkip" style="margin-top:10px"></div></div>' +
+        '<div class="panel"><h2>Skipped — bulky COD orders <span class="es-meta" id="esSkipCount"></span></h2><small class="hint">Not packed by the robot: COD orders with more than 4 units or over 3 kg (bulky prepaid orders are packed). Ship these yourself.</small><div id="esSkip" style="margin-top:10px"></div></div>' +
         '<div class="panel"><h2>Check manually <span class="es-meta" id="esCheckCount"></span></h2><small class="hint">Not packed — the two Easy Ship rules (no mobile number + no Self-Fulfilled tag) did not agree, or the order already has an invoice.</small><div id="esCheck" style="margin-top:10px"></div></div>' +
       '</div><div>' +
         '<div class="panel"><h2>Picklist <span class="es-meta" id="esPickCount"></span><button type="button" class="secondary" id="esPickPdfBtn" style="margin-left:auto;display:none;"><i class="ti ti-file-type-pdf"></i> Picklist PDF (A4)</button></h2><div id="esPick"></div></div>' +
@@ -49,7 +49,7 @@
         '<div class="panel"><h2>How it works</h2><div class="es-rule">' +
           "<b>When:</b> every working day at 11:30 AM it packs orders for the <b>next working day</b> (Sundays and off days skipped). Run now = the date you pick.<br>" +
           "<b>Which orders:</b> Amazon New orders with <b>no buyer mobile</b> and <b>no Self-Fulfilled tag</b>, SLA date today (or overdue).<br>" +
-          "<b>Skipped:</b> orders with <b>more than 4 units</b> or <b>over 3 kg</b> (OMS weight) — listed separately, never packed.<br>" +
+          "<b>Skipped:</b> <b>COD</b> orders with <b>more than 4 units</b> or <b>over 3 kg</b> (OMS weight) — listed separately, never packed. Bulky <b>prepaid</b> orders are packed as normal.<br>" +
           "<b>Pickup slot:</b> always <b>2:00–4:00 PM on the SLA date</b>, never earlier.<br>" +
           "<b>Labels:</b> one PDF per account, sorted by product, product name + qty already printed on each label.<br>" +
           "<b>Weights:</b> taken from OMS Guru.</div></div>" +
