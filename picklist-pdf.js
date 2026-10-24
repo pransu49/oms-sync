@@ -173,7 +173,84 @@ async function sendTelegramPdf(fileName, bytes, caption) {
   } catch (e) { console.log('Telegram picklist not sent:', e.message); return false; }
 }
 
-module.exports = { picklistPdf, sendTelegramPdf };
+// LOTS low-stock report: same premium design. rows = [{ name, code, stock, sold, listings:[{acct, sku, q}] }]
+// (already sorted: best sellers first)
+async function lowStockPdf({ date, rows, limit, days }) {
+  const pdf = await PDFDocument.create();
+  const reg = await pdf.embedFont(StandardFonts.Helvetica);
+  const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const W = 595.28, H = 841.89, M = 36, RED = rgb(0.71, 0.14, 0.09), AMBER = rgb(0.8, 0.45, 0.05);
+  const made = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(11, 16);
+  const oos = rows.filter((r) => r.stock === 0).length, selling = rows.filter((r) => r.sold > 0).length;
+  const cNo = M + 8, cName = M + 34, cSkuX = M + 268, cSoldR = W - M - 92, cStockR = W - M - 6;
+  const nameW = cSkuX - cName - 12, skuW = cSoldR - 46 - cSkuX;
+  let page, y; const pages = [];
+  const header = (first) => {
+    page = pdf.addPage([W, H]); pages.push(page);
+    const bandH = first ? 104 : 54;
+    page.drawRectangle({ x: 0, y: H - bandH, width: W, height: bandH, color: NAVY });
+    page.drawRectangle({ x: 0, y: H - bandH - 3, width: W, height: 3, color: GOLD });
+    page.drawText('A I K M', { x: M, y: H - 26, size: 8, font: bold, color: GOLD });
+    page.drawText('LOW STOCK REPORT', { x: M, y: H - (first ? 52 : 44), size: first ? 22 : 14, font: bold, color: WHITE });
+    if (first) page.drawText(`LOTS products mapped to Amazon - below ${limit} in stock`, { x: M, y: H - 74, size: 11, font: reg, color: rgb(0.85, 0.82, 0.72) });
+    const dt = niceDate(date);
+    page.drawText(dt, { x: W - M - bold.widthOfTextAtSize(dt, first ? 12 : 10), y: H - (first ? 52 : 44), size: first ? 12 : 10, font: bold, color: WHITE });
+    if (first) { const t = `Generated ${made} IST`; page.drawText(t, { x: W - M - reg.widthOfTextAtSize(t, 8.5), y: H - 74, size: 8.5, font: reg, color: rgb(0.75, 0.73, 0.66) }); }
+    y = H - bandH - 3 - 22;
+    if (first) {
+      const stats = [['BELOW ' + limit, rows.length], ['OUT OF STOCK', oos], [`SELLING (${days} DAYS)`, selling]];
+      const gap = 12, cw = (W - 2 * M - 2 * gap) / 3, ch = 58;
+      stats.forEach(([k, v], i) => {
+        const x = M + i * (cw + gap);
+        page.drawRectangle({ x, y: y - ch, width: cw, height: ch, color: CREAM, borderColor: LINE, borderWidth: 0.8 });
+        page.drawRectangle({ x, y: y - ch, width: 3, height: ch, color: i === 1 ? RED : GOLD });
+        page.drawText(k, { x: x + 14, y: y - 18, size: 7.5, font: bold, color: MUTED });
+        page.drawText(String(v), { x: x + 14, y: y - 46, size: 22, font: bold, color: i === 1 ? RED : NAVY });
+      });
+      y -= ch + 18;
+      page.drawText(`Sorted by units sold in the last ${days} days - best sellers first. Restock these first.`, { x: M, y, size: 8.5, font: reg, color: MUTED });
+      y -= 18;
+    }
+    page.drawText('#', { x: cNo, y, size: 7.5, font: bold, color: MUTED });
+    page.drawText('PRODUCT  /  LOTS CODE', { x: cName, y, size: 7.5, font: bold, color: MUTED });
+    page.drawText('AMAZON LISTINGS', { x: cSkuX, y, size: 7.5, font: bold, color: MUTED });
+    page.drawText(`SOLD ${days}D`, { x: cSoldR - bold.widthOfTextAtSize(`SOLD ${days}D`, 7.5), y, size: 7.5, font: bold, color: MUTED });
+    page.drawText('LOTS STOCK', { x: cStockR - bold.widthOfTextAtSize('LOTS STOCK', 7.5), y, size: 7.5, font: bold, color: MUTED });
+    y -= 8;
+    page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 1.2, color: NAVY });
+  };
+  header(true);
+  rows.forEach((r, i) => {
+    const nl = wrap(r.name, bold, 9.5, nameW, 2);
+    const ls = (r.listings || []).slice(0, 3).map((x) => { let t = `${safe(x.acct)}  ${safe(x.sku)}${x.q != null ? `  (Amz ${x.q})` : ''}`; while (t.length > 1 && reg.widthOfTextAtSize(t, 7.5) > skuW) t = t.slice(0, -1); return t; });
+    const lines = Math.max(nl.length + 1, ls.length, 1);
+    const rh = Math.max(32, 12 + lines * 11.5);
+    if (y - rh < 60) header(false);
+    const top = y, mid = top - rh / 2;
+    if (i % 2 === 1) page.drawRectangle({ x: M, y: top - rh, width: W - 2 * M, height: rh, color: ZEBRA });
+    page.drawText(String(i + 1), { x: cNo, y: mid - 3, size: 8.5, font: reg, color: MUTED });
+    nl.forEach((t, k) => page.drawText(t, { x: cName, y: top - 14 - k * 11.5, size: 9.5, font: bold, color: INK }));
+    page.drawText(`LOTS ${safe(r.code)}`, { x: cName, y: top - 14 - nl.length * 11.5, size: 7.5, font: reg, color: MUTED });
+    ls.forEach((t, k) => page.drawText(t, { x: cSkuX, y: top - 14 - k * 11.5, size: 7.5, font: reg, color: MUTED }));
+    if ((r.listings || []).length > 3) page.drawText(`+${r.listings.length - 3} more`, { x: cSkuX, y: top - 14 - 3 * 11.5, size: 7, font: reg, color: MUTED });
+    const sold = String(r.sold || 0);
+    page.drawText(sold, { x: cSoldR - bold.widthOfTextAtSize(sold, 12), y: mid - 4, size: 12, font: bold, color: r.sold ? NAVY : MUTED });
+    const st = r.stock === 0 ? 'OUT' : String(r.stock), sw = Math.max(34, bold.widthOfTextAtSize(st, 11) + 14);
+    page.drawRectangle({ x: cStockR - sw, y: mid - 9, width: sw, height: 18, color: r.stock === 0 ? RED : r.stock <= 5 ? AMBER : NAVY });
+    page.drawText(st, { x: cStockR - sw / 2 - bold.widthOfTextAtSize(st, 11) / 2, y: mid - 4, size: 11, font: bold, color: WHITE });
+    y = top - rh;
+    page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.5, color: LINE });
+  });
+  pages.forEach((p, k) => {
+    const t = `Page ${k + 1} of ${pages.length}`;
+    p.drawLine({ start: { x: M, y: 34 }, end: { x: W - M, y: 34 }, thickness: 0.5, color: LINE });
+    p.drawText(`AIKM  -  LOTS low stock  -  ${niceDate(date)}`, { x: M, y: 22, size: 7.5, font: reg, color: MUTED });
+    p.drawText(t, { x: W - M - reg.widthOfTextAtSize(t, 7.5), y: 22, size: 7.5, font: reg, color: MUTED });
+  });
+  return Buffer.from(await pdf.save());
+}
+
+module.exports = { picklistPdf, lowStockPdf, sendTelegramPdf };
 
 if (require.main === module) {
   (async () => {

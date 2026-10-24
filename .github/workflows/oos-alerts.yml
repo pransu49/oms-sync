@@ -44,10 +44,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - run: npm install --no-audit --no-fund firebase-admin
+      - run: npm install --no-audit --no-fund firebase-admin pdf-lib@1.17.1
       - run: node oos-alerts.js
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}   # sales of the last 30 days
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FORCE: ${{ inputs.force || 'false' }}
