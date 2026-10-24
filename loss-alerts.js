@@ -70,18 +70,33 @@ const timeLbl = (ms) => new Date(ms + IST).toISOString().slice(11, 16).replace(/
   if (fresh.length) {
     const lost = fresh.filter((x) => x.profit < 0).reduce((a, x) => a - x.profit, 0);
     const g = {};
-    fresh.forEach((x) => { const k = `${x.acct}|${x.sku || x.name}`; const r = g[k] || (g[k] = { name: x.name, acct: x.acct, ch: x.ch, n: 0, profit: 0 }); r.n++; r.profit += x.profit; });
+    fresh.forEach((x) => { const k = `${x.acct}|${x.sku || x.name}`; const r = g[k] || (g[k] = { name: x.name, sku: x.sku, acct: x.acct, ch: x.ch, n: 0, profit: 0 }); r.n++; r.profit += x.profit; });
     const top = Object.values(g).sort((a, b) => a.profit - b.profit);
     const allLost = loss.filter((x) => x.profit < 0).reduce((a, x) => a - x.profit, 0);
+    const BAR = '━━━━━━━━━━━━━━━━';
+    const win = st.lastAt ? `${timeLbl(st.lastAt)} → ${timeLbl(now)}` : `Today · up to ${timeLbl(now)}`;
+    const item = (r, k) => {
+      const per = r.profit / r.n, dot = per < 0 ? '🔴' : '🟠';
+      return [
+        `${dot} <b>${k + 1}. ${esc(r.name.slice(0, 70))}</b>`,
+        r.sku ? `      SKU  <code>${esc(r.sku)}</code>` : '',
+        `      ${esc(r.acct)}${r.ch ? ` · ${esc(r.ch)}` : ''}`,
+        `      ${r.n} order${r.n > 1 ? 's' : ''}  ·  <b>${inr(per)}</b> / order${r.n > 1 ? `  ·  total <b>${inr(r.profit)}</b>` : ''}`,
+      ].filter(Boolean).join('\n');
+    };
     const msg = [
-      `📉 <b>Loss orders</b>  <i>${esc(since)}</i>`,
-      LINE,
-      `<b>${fresh.length}</b> new loss order${fresh.length > 1 ? 's' : ''}${lost ? `   💸 <b>${inr(lost)}</b> lost` : ''}`,
-      '\n<b>Products</b>',
-      ...top.slice(0, 8).map((r) => `• <b>${esc(r.name.slice(0, 60))}</b>\n   ${esc(r.acct)}${r.ch ? ` · ${esc(r.ch)}` : ''} — ${r.n} order${r.n > 1 ? 's' : ''} · <b>${inr(r.profit / r.n)}</b>/order`),
-      top.length > 8 ? `<i>+ ${top.length - 8} more products in the console</i>` : '',
-      `\n<b>Today so far</b>   ${loss.length} loss orders${allLost ? ` · ${inr(allLost)} lost` : ''}`,
-      '<i>Fix prices: Console → Loss Orders</i>',
+      '📉 <b>LOSS ORDERS ALERT</b>',
+      `<i>${esc(win)}</i>`,
+      BAR,
+      `🧾 New loss orders   <b>${fresh.length}</b>`,
+      `💸 Money lost   <b>${inr(lost)}</b>`,
+      `📦 Products   <b>${top.length}</b>`,
+      BAR,
+      top.slice(0, 8).map(item).join('\n\n'),
+      top.length > 8 ? `\n<i>+ ${top.length - 8} more products in the console</i>` : '',
+      BAR,
+      `📊 <b>Today so far</b>   ${loss.length} orders  ·  ${inr(allLost)} lost`,
+      '🔧 <i>Fix prices → Console › Loss Orders</i>',
     ].filter((x) => x !== '').join('\n');
     await notify(msg, { html: true });
   }
