@@ -135,7 +135,7 @@
       fsList("main", "aikm_admin/lotsCatalog/chunks").catch(() => []),
     ]);
     progress("Loading purchase bills…");
-    const rows = await sbAll(`kind=in.(bill,customer,setting,product_hsn,autobill_map,autobill_done)&select=kind,id,data`);
+    const rows = await sbAll(`kind=in.(bill,customer,setting,product_hsn,autobill_map,autobill_done,stock_open,stock_adj)&select=kind,id,data`);
     const by = k => rows.filter(r => r.kind === k);
 
     // live data first (freshest status), then the archive for older shipped dates
@@ -149,7 +149,8 @@
     const userMap = {}; by("autobill_map").forEach(r => { userMap[r.id] = r.data; });
     const done = {}; by("autobill_done").forEach(r => { done[r.id] = r.data; });
     const customers = by("customer").map(r => r.data).filter(Boolean);
-    const abSales = {}; (await sbAll(`kind=eq.sale&data->>source=eq.autobill&select=kind,id,data`)).forEach(r => { abSales[r.id] = r.data; });
+    const abSales = {}, otherSales = [];
+    (await sbAll(`kind=eq.sale&select=kind,id,data`)).forEach(r => { if (!r.data) return; if (r.data.source === "autobill") abSales[r.id] = r.data; else otherSales.push(r.data); });
 
     /* product index from purchase bills (latest purchase wins) */
     const mergeTo = k => { const m = merge.map || {}; for (let i = 0; i < 6 && m[k] && m[k] !== k; i++) k = m[k]; return k; };
@@ -186,8 +187,25 @@
       if (String(inf.gst || "") !== "") p.gst = num(inf.gst);
       if (hsnOver[p.key]) p.hsn = hsnOver[p.key];
     }
+    /* STOCK = opening count + purchases − sales (other than auto bills, which the planner handles) ± adjustments.
+       Each event has a date; the planner only bills what is in stock on the bill's date, so stock never goes negative. */
+    const stockEv = [];
+    const ev = (date, key, q) => { if (key && q) stockEv.push({ date: date || "0000-00-00", key, q }); };
+    const op = (by("stock_open")[0] || {}).data;
+    if (op && op.date) for (const [k, o] of Object.entries(op.items || {})) ev(op.date, mergeTo(k), num(o.qty));
+    for (const r of by("bill")) {
+      const b = r.data; if (!b || !b.items) continue;
+      if (op && op.date && (b.billDate || "") < op.date) continue;          // before the opening count = already inside it
+      b.items.forEach(it => { if (!it.name) return; const u = num(it.qty) + num(it.free); ev(b.billDate, mergeTo(pkey(it)), b.docType === "credit" ? -Math.abs(u) : u); });
+    }
+    for (const v of otherSales) {
+      if (v.status === "Cancelled" || (op && op.date && (v.invoiceDate || "") < op.date)) continue;
+      (v.items || []).forEach(it => { if (it.name) ev(v.invoiceDate, mergeTo(it.key || pkey(it)), -(num(it.qty) + num(it.free))); });
+    }
+    by("stock_adj").forEach(r => { const a = r.data || {}; if (!(op && op.date && (a.date || "") < op.date)) ev(a.date, mergeTo(a.key), num(a.qty)); });
+    stockEv.sort((a, b) => a.date.localeCompare(b.date));
     PLAN = null;
-    D = { abSales, orders, asinMap, mm, lots, settings, merge, prods, byCode, byBc, byName, userMap, done, customers, loadedAt: Date.now() };
+    D = { stockEv, abSales, orders, asinMap, mm, lots, settings, merge, prods, byCode, byBc, byName, userMap, done, customers, loadedAt: Date.now() };
     return D;
   }
 
@@ -293,12 +311,14 @@
         x.lines.set(p.key, L);
       }
     }
-    const plan = {};   // plan[coId][day] = draft
-    for (const co of COMPANIES) {
-      const c = ship[co.id] || {}, queue = []; plan[co.id] = {};
-      let open = null;      // earliest day still to be approved for this company
-      for (const day of days) {
-        const sd = c[day];
+    const plan = {}, queues = {}, open = {};   // plan[coId][day] = draft
+    COMPANIES.forEach(co => { plan[co.id] = {}; queues[co.id] = []; open[co.id] = null; });
+    const stock = new Map(); let evi = 0;
+    const st = k => stock.get(k) || 0;
+    for (const day of days) {
+      while (evi < D.stockEv.length && D.stockEv[evi].date <= day) { const e = D.stockEv[evi++]; stock.set(e.key, st(e.key) + e.q); }
+      for (const co of COMPANIES) {
+        const c = ship[co.id] || {}, queue = queues[co.id], sd = c[day];
         if (sd) for (const L of sd.lines.values()) queue.push({ day, key: L.key, p: L.p, qty: L.qty, via: L.via, src: L.src });
         const id = day + "__" + co.gstin, done = D.done[id];
         const d = { co, id, date: day, done: done || null, orders: sd ? sd.orders : new Set(), unmatched: sd ? sd.unmatched : new Map(), lines: new Map(), from: "", to: "" };
@@ -309,37 +329,46 @@
           d.lines.set(e.key, L);
           if (!d.from || e.day < d.from) d.from = e.day; if (!d.to || e.day > d.to) d.to = e.day;
           e.qty = Math.round((e.qty - qty) * 1000) / 1000;
+          stock.set(e.key, Math.round((st(e.key) - qty) * 1000) / 1000);
         };
         if (done) {
-          // a saved bill: remove exactly what it billed from the queue (oldest first)
+          // a saved bill: remove exactly what it billed from the queue (oldest first) and from stock
           const inv = D.abSales[done.invoiceId];
           for (const it of (inv && inv.items) || []) {
             let left = num(it.qty);
             for (const e of queue) { if (left <= 0) break; if (e.key !== it.key || e.qty <= 0) continue; const t = Math.min(e.qty, left); take(e, t); left = Math.round((left - t) * 1000) / 1000; }
+            if (left > 0) stock.set(it.key, st(it.key) - left);
           }
         } else {
           let gross = 0;
           for (const e of queue) {
             if (e.qty <= 0) continue;
             const ln = lineFor(e.p); if (!(ln.unitInc > 0)) continue;
+            const have = st(e.key); if (have <= 0.0005) continue;               // no stock on this date -> waits for the next purchase
             const room = (co.noCap ? Infinity : CAP - 1) - gross; if (room < ln.unitInc * 0.001) continue;
             const whole = Number.isInteger(e.qty);
             let fit = room / ln.unitInc; fit = !isFinite(fit) ? e.qty : whole ? Math.floor(fit) : Math.floor(fit * 1000) / 1000;
-            const t = Math.min(e.qty, fit); if (t <= 0) continue;
+            let t = Math.min(e.qty, fit, have); t = whole ? Math.floor(t) : Math.floor(t * 1000) / 1000;
+            if (t <= 0) continue;
             take(e, t); gross += t * ln.unitInc;
           }
         }
         for (let i = queue.length - 1; i >= 0; i--) if (queue[i].qty <= 0.0005) queue.splice(i, 1);
         d.carry = queue.reduce((a, e) => a + e.qty * lineFor(e.p).unitInc, 0);
+        d.noStock = queue.filter(e => st(e.key) <= 0.0005).reduce((a, e) => a + e.qty * lineFor(e.p).unitInc, 0);
+        d.noStockN = new Set(queue.filter(e => st(e.key) <= 0.0005).map(e => e.key)).size;
+        const wl = new Map(); queue.filter(e => st(e.key) <= 0.0005).forEach(e => { const w = wl.get(e.key) || { name: e.p.name, qty: 0, stock: st(e.key), val: 0 }; w.qty += e.qty; w.val += e.qty * lineFor(e.p).unitInc; wl.set(e.key, w); });
+        d.waitList = [...wl.entries()].map(([key, w]) => ({ key, ...w })).sort((a, b) => b.val - a.val);
         finishDraft(d);
-        if (!d.done && d.items.length && !open) { open = day; d.isNext = true; }
-        d.blockedBy = !d.done && d.items.length && open !== day ? open : "";
+        if (!d.done && d.items.length && !open[co.id]) { open[co.id] = day; d.isNext = true; }
+        d.blockedBy = !d.done && d.items.length && open[co.id] !== day ? open[co.id] : "";
         plan[co.id][day] = d;
       }
     }
     PLAN = { days, plan };
     return PLAN;
   }
+  window.__aikmAutoBillDebug = () => ({ D, PLAN });
   function finishDraft(d) {
     d.items = [...d.lines.values()].sort((a, b) => a.p.name.localeCompare(b.p.name)).map(L => {
       const ln = lineFor(L.p), cap = L.p.mrp > 0 ? L.p.mrp / (1 + L.p.gst / 100) : Infinity;
@@ -502,11 +531,12 @@
   async function open() {
     document.addEventListener("keydown", escKey, true);
     root().innerHTML = `<div class="ab-root"><div class="ab-scrim" id="abScrim"></div><div class="ab-panel" role="dialog" aria-modal="true" aria-label="Auto sale bills">
-      <div class="ab-head"><h2>Auto sale bills<small>From orders shipped · cost + ${MIN_PCT}–${MAX_PCT}% · never above MRP · max ₹49,999 a bill (Sasta: full bill + e-way) · no Sundays</small></h2><button class="btn small" id="abReload" title="Load latest orders">Refresh</button><button class="btn small" id="abClose">Close</button></div>
+      <div class="ab-head"><h2>Auto sale bills<small>From orders shipped · cost + ${MIN_PCT}–${MAX_PCT}% · never above MRP · max ₹49,999 a bill (Sasta: full bill + e-way) · no Sundays</small></h2><button class="btn small" id="abEwb" title="Download one e-way bill upload file for bills over ₹50,000">E-way bill file</button><button class="btn small" id="abReload" title="Load latest orders">Refresh</button><button class="btn small" id="abClose">Close</button></div>
       <div class="ab-body" id="abBody"><div class="ab-load" id="abLoad">Loading…</div></div>
       <div class="ab-foot" id="abFoot" hidden></div></div></div>`;
     $("#abScrim").onclick = close; $("#abClose").onclick = close;
     $("#abReload").onclick = () => { D = null; open(); };
+    $("#abEwb").onclick = () => { if (D) ewbScreen(); else toast("Still loading — try again in a moment."); };
     try {
       if (!D || Date.now() - D.loadedAt > 10 * 60 * 1000) await loadAll(t => { const l = $("#abLoad"); if (l) l.textContent = t; });
     } catch (e) { $("#abBody").innerHTML = `<div class="ab-load">Could not load: ${esc(e.message)}<br><br><button class="btn" id="abRetry">Try again</button></div>`; $("#abRetry").onclick = () => { D = null; open(); }; return; }
@@ -532,7 +562,7 @@
         <h3>${esc(x.co.label)}</h3>
         <div class="big">${empty ? "—" : inr(x.total)}</div>
         <div class="meta">${x.items.length ? `${x.items.length} products · goods of ${x.from === x.to ? fmtD(x.from) : fmtD(x.from) + "–" + fmtD(x.to)} · avg ${x.avgPct.toFixed(1)}%` : `${x.orders.size} orders shipped`}</div>
-        <div class="tags">${x.done ? pill("good", "Saved " + esc(x.done.invoiceNo)) : empty ? pill("", "Nothing to bill") : x.blockedBy ? pill("", "After " + fmtD(x.blockedBy)) : pill("warn", "Ready")}${x.carry > 1 ? pill("acc", inr(x.carry) + " carried forward") : ""}${x.total > 50000 ? pill("bad", "E-way bill needed") : ""}${x.unmatched.size ? pill("bad", x.unmatched.size + " not matched") : ""}${x.hsnBad && !x.done ? pill("bad", x.hsnBad + " HSN missing") : ""}${x.low && !x.done ? pill("warn", x.low + " under 15%") : ""}</div></button>`;
+        <div class="tags">${x.done ? pill("good", "Saved " + esc(x.done.invoiceNo)) : empty ? pill("", "Nothing to bill") : x.blockedBy ? pill("", "After " + fmtD(x.blockedBy)) : pill("warn", "Ready")}${x.noStock > 1 ? pill("bad", x.noStockN + " waiting for stock") : ""}${x.carry - x.noStock > 1 ? pill("acc", inr(x.carry - x.noStock) + " carried forward") : ""}${x.total > 50000 ? pill("bad", "E-way bill needed") : ""}${x.unmatched.size ? pill("bad", x.unmatched.size + " not matched") : ""}${x.hsnBad && !x.done ? pill("bad", x.hsnBad + " HSN missing") : ""}${x.low && !x.done ? pill("warn", x.low + " under 15%") : ""}</div></button>`;
     };
     $("#abBody").innerHTML = `${archFail ? `<div class="banner">Older dates (before the last 15 days) could not load. Press Refresh to try again.</div>` : ""}
       <div class="ab-dates">${ds.map(x => `<button type="button" class="ab-date" data-d="${x.date}" aria-pressed="${x.date === S.date}"><b>${dayName(x.date)} ${fmtD(x.date)}</b><span>${x.billN && x.doneN === x.billN ? '<i class="ok">✓ billed</i>' : x.billN ? x.doneN + "/" + x.billN + " billed" : "no bill"}${x.next ? " · next" : ""}</span></button>`).join("")}</div>
@@ -562,7 +592,9 @@
       </tbody></table></div>` : ""}
       ${d.blockedBy ? `<div class="banner">Preview only — approve ${esc(d.co.label)}'s bill of ${dayName(d.blockedBy)} ${fmtD(d.blockedBy)} first. Bills go in date order so the ₹49,999 split stays correct.</div>` : ""}
       ${d.total > 50000 ? `<div class="banner bad">Over ₹50,000 — make an e-way bill for this invoice on ewaybillgst.gov.in before the goods move.</div>` : ""}
-      ${d.carry > 1 ? `<div class="banner info">${inr(d.carry)} of goods did not fit under ₹49,999 and moves to the next working day.</div>` : ""}
+      ${d.noStock > 1 ? `<div class="banner">${d.noStockN} product${d.noStockN > 1 ? "s" : ""} (${inr(d.noStock)}) not billed — not enough stock in purchase bills on this date. They go on the first bill after the purchase is saved, so stock never goes negative.
+        <div class="sub" style="margin-top:6px">${(d.waitList || []).slice(0, 8).map(w => `${esc(w.name)} — ${+w.qty.toFixed(2)} short (${inr(w.val)})`).join(" · ")}${(d.waitList || []).length > 8 ? ` · +${d.waitList.length - 8} more` : ""}</div></div>` : ""}
+      ${d.carry - d.noStock > 1 ? `<div class="banner info">${inr(d.carry - d.noStock)} of goods did not fit under ₹49,999 and moves to the next working day.</div>` : ""}
       <div class="ab-sec"><h4>Bill to ${esc(d.co.label)} · ${dayName(d.date)} ${fmtD(d.date)} · goods shipped ${d.from === d.to ? fmtD(d.from) : fmtD(d.from) + " – " + fmtD(d.to)}</h4>
         <div class="ab-sum"><span>Cost <b>${inr(d.cost)}</b></span><span>Taxable <b>${inr(d.taxable)}</b></span><span>GST <b>${inr(d.gst)}</b></span><span>Profit <b>${inr(d.profit)}</b> (${d.avgPct.toFixed(1)}%)</span></div></div>
       <div class="tablebox"><table class="ab-t"><thead><tr><th>Product</th><th class="hm">HSN</th><th class="r">Qty</th><th class="r hm">Cost/unit</th><th class="r">Rate (ex-GST)</th><th class="r">Profit %</th><th class="r hm">MRP</th><th class="r hm">GST</th><th class="r">Amount</th></tr></thead><tbody>
@@ -615,6 +647,87 @@
       await runSave(list);
     };
   }
+  /* =====================================================================
+     E-WAY BILL FILE — one JSON for the e-way bill portal's Bulk Generation (ewaybillgst.gov.in → e-Waybill → Generate Bulk)
+     ===================================================================== */
+  const EWB_KEY = "aikmEwbDefaults";
+  function ewbDefaults() { try { return JSON.parse(localStorage.getItem(EWB_KEY) || "{}"); } catch (e) { return {}; } }
+  function ewbScreen() {
+    const df = ewbDefaults(), from = todayIso().slice(0, 8) + "01", to = todayIso();
+    $("#abFoot").hidden = true;
+    $("#abBody").innerHTML = `
+      <div class="ab-sec"><h4>E-way bill file — saved bills over ₹50,000</h4><button class="btn small" id="ewbBack">← Back to bills</button></div>
+      <div class="icard"><div class="grid4">
+        <label class="f">From<input type="date" id="ewbFrom" value="${from}"></label>
+        <label class="f">To<input type="date" id="ewbTo" value="${to}"></label>
+        <label class="f">Vehicle no.<input id="ewbVeh" value="${esc(df.veh || "")}" placeholder="UP16AB1234" style="text-transform:uppercase"></label>
+        <label class="f">Distance (km)<input id="ewbKm" inputmode="numeric" value="${esc(df.km || "10")}"></label>
+        <label class="f">Dispatch pincode<input id="ewbPin" inputmode="numeric" value="${esc(df.pin || "201301")}"></label>
+      </div></div>
+      <div id="ewbList"></div>`;
+    $("#ewbBack").onclick = () => draw();
+    ["#ewbFrom", "#ewbTo"].forEach(s => $(s).onchange = list);
+    function list() {
+      const f = $("#ewbFrom").value, t = $("#ewbTo").value;
+      const inv = Object.values(D.abSales).filter(v => v.status !== "Cancelled" && num(v.total) > 50000 && v.invoiceDate >= f && v.invoiceDate <= t).sort((a, b) => a.invoiceDate.localeCompare(b.invoiceDate) || String(a.invoiceNo).localeCompare(String(b.invoiceNo)));
+      $("#ewbList").innerHTML = inv.length ? `<div class="tablebox"><table class="ab-t"><thead><tr><th class="ck"><input type="checkbox" id="ewbAll" checked></th><th>Date</th><th>Bill no.</th><th>Customer</th><th class="r">Total</th><th class="r">Items</th></tr></thead><tbody>
+        ${inv.map((v, i) => `<tr><td class="ck"><input type="checkbox" class="ewbCk" data-i="${i}" checked></td><td class="num">${fmtD(v.invoiceDate)}</td><td class="mono">${esc(v.invoiceNo)}</td><td>${esc(v.customer)}</td><td class="r num">${inr(v.total)}</td><td class="r num">${(v.items || []).length}</td></tr>`).join("")}
+        </tbody></table></div>
+        <div class="row" style="margin-top:12px"><button class="btn primary" id="ewbGo">Download e-way bill file</button><span class="note">Then: ewaybillgst.gov.in → e-Waybill → Generate Bulk → choose this file → Upload → Generate.</span></div>`
+        : `<div class="ab-load">No saved bills over ₹50,000 between ${fmtD(f)} and ${fmtD(t)}.</div>`;
+      const all = $("#ewbAll"); if (all) all.onchange = () => document.querySelectorAll(".ewbCk").forEach(c => c.checked = all.checked);
+      const go = $("#ewbGo"); if (go) go.onclick = () => {
+        const veh = $("#ewbVeh").value.toUpperCase().replace(/[^A-Z0-9]/g, ""), km = Math.max(1, Math.round(num($("#ewbKm").value))), pin = String($("#ewbPin").value).trim();
+        if (!/^[A-Z]{2}\d{1,2}[A-Z]{0,3}\d{4}$/.test(veh)) return toast("Enter a valid vehicle number, like UP16AB1234.");
+        if (!/^\d{6}$/.test(pin)) return toast("Dispatch pincode must be 6 digits.");
+        try { localStorage.setItem(EWB_KEY, JSON.stringify({ veh, km, pin })); } catch (e) {}
+        const pick = [...document.querySelectorAll(".ewbCk")].filter(c => c.checked).map(c => inv[+c.dataset.i]);
+        if (!pick.length) return toast("Tick at least one bill.");
+        const json = ewbJson(pick, { veh, km, pin });
+        const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(json, null, 1)], { type: "application/json" }));
+        a.download = `AIKM-eway-bills-${pick[0].invoiceDate}-to-${pick[pick.length - 1].invoiceDate}.json`; a.click();
+        toast(`E-way bill file downloaded for ${pick.length} bill${pick.length > 1 ? "s" : ""}.`, 5000);
+      };
+    }
+    list();
+  }
+  function ewbJson(invs, o) {
+    const st = D.settings || {}, g = String(st.gstin || "09AARCA8877D2ZZ").toUpperCase(), sc = +g.slice(0, 2);
+    const cut = (t, n) => String(t || "").replace(/\s+/g, " ").trim().slice(0, n);
+    const addr = String(st.address || "");
+    const dmy = s => s.split("-").reverse().join("/");
+    return {
+      version: "1.0.0621",
+      billLists: invs.map(v => {
+        const cg = String(v.customerGstin || "").toUpperCase(), tc = +(cg.slice(0, 2) || v.stateCode || sc);
+        const cust = D.customers.find(c => String(c.gstin || "").toUpperCase() === cg) || {};
+        const toPin = String(cust.pincode || (String(v.customerAddress || "").match(/\b(\d{6})\b(?!.*\b\d{6}\b)/) || [])[1] || "");
+        const inter = tc !== sc;
+        // one line per HSN + GST rate keeps the e-way bill short (portal limit 250 lines)
+        const grp = new Map();
+        (v.items || []).forEach(it => {
+          const k = String(it.hsn) + "|" + num(it.gstPct), x = grp.get(k) || { hsn: String(it.hsn), g: num(it.gstPct), q: 0, tx: 0, names: [] };
+          x.q += num(it.qty); x.tx += money(num(it.qty) * num(it.rate)); if (x.names.length < 3) x.names.push(it.name); grp.set(k, x);
+        });
+        const items = [...grp.values()].map((x, i) => ({
+          itemNo: i + 1, productName: cut(x.names[0], 100), productDesc: cut(x.names.join(", ") + (x.names.length >= 3 ? " etc." : ""), 100),
+          hsnCode: +x.hsn, quantity: money(x.q), qtyUnit: "NOS", taxableAmount: money(x.tx),
+          sgstRate: inter ? 0 : x.g / 2, cgstRate: inter ? 0 : x.g / 2, igstRate: inter ? x.g : 0, cessRate: 0, cessNonAdvol: 0,
+        }));
+        const main = [...grp.values()].sort((a, b) => b.tx - a.tx)[0];
+        return {
+          userGstin: g, supplyType: "O", subSupplyType: 1, subSupplyDesc: "", docType: "INV", docNo: String(v.invoiceNo), docDate: dmy(v.invoiceDate),
+          fromGstin: g, fromTrdName: cut(st.company, 100), fromAddr1: cut(addr, 120), fromAddr2: "", fromPlace: "Noida", fromPincode: +o.pin, fromStateCode: sc, actualFromStateCode: sc,
+          toGstin: cg || "URP", toTrdName: cut(v.customer, 100), toAddr1: cut(cust.address || v.customerAddress, 120), toAddr2: "", toPlace: cut(cust.city || "Noida", 50), toPincode: +toPin || +o.pin, toStateCode: tc, actualToStateCode: tc,
+          transactionType: 1, totalValue: money(v.taxable), cgstValue: money(v.cgst), sgstValue: money(v.sgst), igstValue: money(v.igst), cessValue: 0, TotNonAdvolVal: 0,
+          OthValue: money(v.roundOff), totInvValue: money(v.total),
+          transMode: 1, transDistance: String(o.km), transporterName: "", transporterId: "", transDocNo: "", transDocDate: "", vehicleNo: o.veh, vehicleType: "R",
+          mainHsnCode: main ? +main.hsn : 0, itemList: items,
+        };
+      }),
+    };
+  }
+
   async function runSave(list) {
     if (S.busy) return; S.busy = true;
     const msg = $("#abFoot .msg"); $("#abFoot").querySelectorAll("button").forEach(b => b.disabled = true);
