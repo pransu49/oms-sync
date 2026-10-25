@@ -149,6 +149,7 @@
     const userMap = {}; by("autobill_map").forEach(r => { userMap[r.id] = r.data; });
     const done = {}; by("autobill_done").forEach(r => { done[r.id] = r.data; });
     const customers = by("customer").map(r => r.data).filter(Boolean);
+    const abSales = {}; (await sbAll(`kind=eq.sale&data->>source=eq.autobill&select=kind,id,data`)).forEach(r => { abSales[r.id] = r.data; });
 
     /* product index from purchase bills (latest purchase wins) */
     const mergeTo = k => { const m = merge.map || {}; for (let i = 0; i < 6 && m[k] && m[k] !== k; i++) k = m[k]; return k; };
@@ -185,7 +186,8 @@
       if (String(inf.gst || "") !== "") p.gst = num(inf.gst);
       if (hsnOver[p.key]) p.hsn = hsnOver[p.key];
     }
-    D = { orders, asinMap, mm, lots, settings, merge, prods, byCode, byBc, byName, userMap, done, customers, loadedAt: Date.now() };
+    PLAN = null;
+    D = { abSales, orders, asinMap, mm, lots, settings, merge, prods, byCode, byBc, byName, userMap, done, customers, loadedAt: Date.now() };
     return D;
   }
 
@@ -258,47 +260,101 @@
     if (rate > cap) { rate = cap; capped = true; }
     return { rate, capped, pct: cost ? (rate / cost - 1) * 100 : 0 };
   }
-  const EDIT = {};          // user changes to rate / hsn / qty, per draft line:  EDIT[draftId][lineKey] = {...}
-  function buildDrafts(date) {
-    const list = shippedOrders().filter(o => o._date === date);
-    const drafts = COMPANIES.map(co => ({ co, id: date + "__" + co.gstin, date, orders: new Set(), lines: new Map(), unmatched: new Map(), lotsOnly: 0 }));
-    const byCo = Object.fromEntries(drafts.map(d => [d.co.id, d]));
-    for (const o of list) {
-      const d = byCo[o._co.id], q = num(o.qty) || 1;
-      d.orders.add(o.channelOrderId);
+  /* ---------- planner: one bill per company per working day (Sundays never), each bill at most ₹49,999.
+     Orders queue up by shipped date; each day's bill takes the oldest unbilled goods first until the cap.
+     Anything over the cap carries forward to the next working day (including days with no orders). ---------- */
+  const START = "2026-10-01", CAP = 49999;
+  const EDIT = {};          // user changes per product key: { rate, hsn } — used on every bill of that product
+  const isSunday = d => new Date(d + "T00:00:00Z").getUTCDay() === 0;
+  function workDays() { const out = []; for (let d = START, end = todayIso(); d <= end; d = addDays(d, 1)) if (!isSunday(d)) out.push(d); return out; }
+  function lineFor(p) {
+    const pr = priceFor(p), e = EDIT[p.key] || {};
+    const rate = e.rate != null ? e.rate : pr.rate, hsn = String(e.hsn != null ? e.hsn : p.hsn || "");
+    return { rate, hsn, capped: pr.capped && e.rate == null, unitInc: rate * (1 + p.gst / 100) };
+  }
+  let PLAN = null;
+  function buildPlan() {
+    const days = workDays(), ship = {};   // ship[coId][workday] = { lines: Map, unmatched: Map, orders: Set }
+    const dayFor = d => { while (isSunday(d)) d = addDays(d, 1); return d; };   // Sunday shipments join Monday
+    for (const o of shippedOrders()) {
+      if (o._date < START) continue;
+      const wd = dayFor(o._date), c = (ship[o._co.id] ||= {}), x = (c[wd] ||= { lines: new Map(), unmatched: new Map(), orders: new Set() }), q = num(o.qty) || 1;
+      x.orders.add(o.channelOrderId);
       const m = matchLine(o);
       if (!m) {
         const k = o.asin ? "asin:" + o.asin : "sku:" + normKey(o.sku);
-        const u = d.unmatched.get(k) || { k, asin: o.asin || "", sku: o.sku || "", name: o.productName || o.sku, qty: 0, channel: o.channel };
-        u.qty += q; d.unmatched.set(k, u); continue;
+        const u = x.unmatched.get(k) || { k, asin: o.asin || "", sku: o.sku || "", name: o.productName || o.sku, qty: 0 };
+        u.qty += q; x.unmatched.set(k, u); continue;
       }
       for (const { p, units, via } of m) {
-        const L = d.lines.get(p.key) || { key: p.key, p, qty: 0, via, orders: 0, src: new Map() };
-        L.qty = Math.round((L.qty + q * units) * 1000) / 1000; L.orders++;
+        const L = x.lines.get(p.key) || { key: p.key, p, qty: 0, via, src: new Map() };
+        L.qty = Math.round((L.qty + q * units) * 1000) / 1000;
         const sk = String(o.productName || o.sku).slice(0, 70), sv = L.src.get(sk) || { q: 0, u: units }; sv.q += q; L.src.set(sk, sv);
-        d.lines.set(p.key, L);
+        x.lines.set(p.key, L);
       }
     }
-    for (const d of drafts) {
-      const ed = EDIT[d.id] || {};
-      d.items = [...d.lines.values()].sort((a, b) => a.p.name.localeCompare(b.p.name)).map(L => {
-        const pr = priceFor(L.p), e = ed[L.key] || {};
-        const rate = e.rate != null ? e.rate : pr.rate, qty = e.qty != null ? e.qty : L.qty, hsn = (e.hsn != null ? e.hsn : L.p.hsn || "");
-        const pct = L.p.cost ? (rate / L.p.cost - 1) * 100 : 0, cap = L.p.mrp > 0 ? L.p.mrp / (1 + L.p.gst / 100) : Infinity;
-        if (L.p.noBill) d.lotsOnly++;
-        return { L, p: L.p, qty, rate, hsn: String(hsn || ""), pct, capped: pr.capped && e.rate == null, overMrp: rate > cap + 0.005, hsnBad: !/^(\d{4}|\d{6}|\d{8})$/.test(String(hsn || "")) };
-      });
-      const calc = calcTotals(d.items);
-      Object.assign(d, calc, {
-        done: D.done[d.id] || null,
-        low: d.items.filter(i => i.pct < MIN_PCT - 0.05).length,
-        hsnBad: d.items.filter(i => i.hsnBad).length,
-        overMrp: d.items.filter(i => i.overMrp).length,
-        avgPct: calc.cost ? (calc.taxable / calc.cost - 1) * 100 : 0,
-      });
+    const plan = {};   // plan[coId][day] = draft
+    for (const co of COMPANIES) {
+      const c = ship[co.id] || {}, queue = []; plan[co.id] = {};
+      let open = null;      // earliest day still to be approved for this company
+      for (const day of days) {
+        const sd = c[day];
+        if (sd) for (const L of sd.lines.values()) queue.push({ day, key: L.key, p: L.p, qty: L.qty, via: L.via, src: L.src });
+        const id = day + "__" + co.gstin, done = D.done[id];
+        const d = { co, id, date: day, done: done || null, orders: sd ? sd.orders : new Set(), unmatched: sd ? sd.unmatched : new Map(), lines: new Map(), from: "", to: "" };
+        const take = (e, qty) => {
+          const L = d.lines.get(e.key) || { key: e.key, p: e.p, qty: 0, via: e.via, src: new Map(), days: new Set() };
+          L.qty = Math.round((L.qty + qty) * 1000) / 1000; L.days.add(e.day);
+          for (const [k, v] of e.src) { const sv = L.src.get(k) || { q: 0, u: v.u }; sv.q += v.q; L.src.set(k, sv); }
+          d.lines.set(e.key, L);
+          if (!d.from || e.day < d.from) d.from = e.day; if (!d.to || e.day > d.to) d.to = e.day;
+          e.qty = Math.round((e.qty - qty) * 1000) / 1000;
+        };
+        if (done) {
+          // a saved bill: remove exactly what it billed from the queue (oldest first)
+          const inv = D.abSales[done.invoiceId];
+          for (const it of (inv && inv.items) || []) {
+            let left = num(it.qty);
+            for (const e of queue) { if (left <= 0) break; if (e.key !== it.key || e.qty <= 0) continue; const t = Math.min(e.qty, left); take(e, t); left = Math.round((left - t) * 1000) / 1000; }
+          }
+        } else {
+          let gross = 0;
+          for (const e of queue) {
+            if (e.qty <= 0) continue;
+            const ln = lineFor(e.p); if (!(ln.unitInc > 0)) continue;
+            const room = CAP - 1 - gross; if (room < ln.unitInc * 0.001) continue;
+            const whole = Number.isInteger(e.qty);
+            let fit = room / ln.unitInc; fit = whole ? Math.floor(fit) : Math.floor(fit * 1000) / 1000;
+            const t = Math.min(e.qty, fit); if (t <= 0) continue;
+            take(e, t); gross += t * ln.unitInc;
+          }
+        }
+        for (let i = queue.length - 1; i >= 0; i--) if (queue[i].qty <= 0.0005) queue.splice(i, 1);
+        d.carry = queue.reduce((a, e) => a + e.qty * lineFor(e.p).unitInc, 0);
+        finishDraft(d);
+        if (!d.done && d.items.length && !open) { open = day; d.isNext = true; }
+        d.blockedBy = !d.done && d.items.length && open !== day ? open : "";
+        plan[co.id][day] = d;
+      }
     }
-    return drafts;
+    PLAN = { days, plan };
+    return PLAN;
   }
+  function finishDraft(d) {
+    d.items = [...d.lines.values()].sort((a, b) => a.p.name.localeCompare(b.p.name)).map(L => {
+      const ln = lineFor(L.p), cap = L.p.mrp > 0 ? L.p.mrp / (1 + L.p.gst / 100) : Infinity;
+      const pct = L.p.cost ? (ln.rate / L.p.cost - 1) * 100 : 0;
+      return { L, p: L.p, qty: L.qty, rate: ln.rate, hsn: ln.hsn, pct, capped: ln.capped, overMrp: ln.rate > cap + 0.005, hsnBad: !/^(\d{4}|\d{6}|\d{8})$/.test(ln.hsn) };
+    });
+    const calc = calcTotals(d.items);
+    Object.assign(d, calc, {
+      low: d.items.filter(i => i.pct < MIN_PCT - 0.05).length,
+      hsnBad: d.items.filter(i => i.hsnBad).length,
+      overMrp: d.items.filter(i => i.overMrp).length,
+      avgPct: calc.cost ? (calc.taxable / calc.cost - 1) * 100 : 0,
+    });
+  }
+  function buildDrafts(date) { const P = PLAN || buildPlan(); return COMPANIES.map(co => P.plan[co.id][date]); }
   function calcTotals(items) {
     let taxable = 0, gst = 0, cost = 0;
     items.forEach(i => { const tx = money(i.qty * i.rate); taxable += tx; gst += money(tx * i.p.gst / 200) * 2; cost += i.qty * i.p.cost; });
@@ -307,11 +363,10 @@
     return { taxable, gst, cost: money(cost), total: Math.round(gross), profit: money(taxable - cost) };
   }
   function dateSummary() {
-    const all = shippedOrders(), m = new Map();
-    all.forEach(o => { const x = m.get(o._date) || { date: o._date, orders: new Set() }; x.orders.add(o.channelOrderId); m.set(o._date, x); });
-    return [...m.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 45).map(x => {
-      const doneN = COMPANIES.filter(c => D.done[x.date + "__" + c.gstin]).length;
-      return { date: x.date, orders: x.orders.size, doneN };
+    const P = PLAN || buildPlan();
+    return P.days.slice().reverse().map(date => {
+      const ds = COMPANIES.map(c => P.plan[c.id][date]);
+      return { date, orders: ds.reduce((a, d) => a + d.orders.size, 0), doneN: ds.filter(d => d.done).length, billN: ds.filter(d => d.done || d.items.length).length, next: ds.some(d => d.isNext) };
     });
   }
 
@@ -322,6 +377,8 @@
     if (!d.items.length) throw new Error("No matched products in this bill.");
     if (d.hsnBad) throw new Error("Enter the HSN for every product first (red boxes).");
     if (d.overMrp) throw new Error("A rate is above MRP. Lower it first.");
+    if (d.total > CAP) throw new Error("Bill is above ₹49,999 — lower a rate.");
+    if (d.blockedBy) throw new Error(`Approve ${fmtD(d.blockedBy)} first (bills go in date order).`);
     const exist = await sb("GET", `docs?kind=eq.autobill_done&id=eq.${encodeURIComponent(d.id)}&select=data`);
     if (exist.length) throw new Error(`Already billed: ${exist[0].data.invoiceNo}`);
     const st = (await sb("GET", "docs?kind=eq.setting&id=eq.company&select=data"))[0]?.data || {};
@@ -346,7 +403,7 @@
       customer: cust.name, customerGstin: d.co.gstin, stateCode: code, placeOfSupply: code + "-" + (cust.state || states[code] || ""),
       customerAddress: [cust.address, cust.pincode].filter(Boolean).join(", "), customerPhone: cust.phone || "", customerEmail: cust.email || "", customerDl: cust.dl || "",
       invoiceType: "B2B", paymentStatus: "Unpaid", paidDate: "",
-      notes: `Auto bill · orders shipped ${fmtD(d.date)} · ${d.orders.size} orders`, items, updatedAt: nowIso(),
+      notes: `Auto bill · goods shipped ${d.from === d.to ? fmtD(d.from) : fmtD(d.from) + " – " + fmtD(d.to)}`, items, updatedAt: nowIso(),
       taxable, cgst, sgst, igst, roundOff: money(total - gross), total, cancelledAt: "", source: "autobill",
     };
     await sbPut([{ kind: "sale", id: inv.id, fy, data: inv }]);
@@ -354,7 +411,7 @@
     const hsnRows = d.items.filter(i => i.hsn && i.hsn !== i.p.hsn).map(i => ({ kind: "product_hsn", id: i.p.key, data: { key: i.p.key, name: i.p.name, hsn: String(i.hsn) } }));
     if (hsnRows.length) await sbPut(hsnRows);
     D.done[d.id] = { invoiceId: inv.id, invoiceNo: inv.invoiceNo, total };
-    delete EDIT[d.id];
+    D.abSales[inv.id] = inv; PLAN = null;
     return inv;
   }
   async function rememberPick(u, prodKey, mult) {
@@ -363,7 +420,7 @@
     if (u.asin) rows.push({ kind: "autobill_map", id: "asin:" + u.asin, data });
     if (u.sku) rows.push({ kind: "autobill_map", id: "sku:" + normKey(u.sku), data });
     await sbPut(rows);
-    rows.forEach(r => { D.userMap[r.id] = r.data; });
+    rows.forEach(r => { D.userMap[r.id] = r.data; }); PLAN = null;
   }
 
   /* =====================================================================
@@ -445,7 +502,7 @@
   async function open() {
     document.addEventListener("keydown", escKey, true);
     root().innerHTML = `<div class="ab-root"><div class="ab-scrim" id="abScrim"></div><div class="ab-panel" role="dialog" aria-modal="true" aria-label="Auto sale bills">
-      <div class="ab-head"><h2>Auto sale bills<small>From orders shipped · cost + ${MIN_PCT}–${MAX_PCT}% · never above MRP</small></h2><button class="btn small" id="abReload" title="Load latest orders">Refresh</button><button class="btn small" id="abClose">Close</button></div>
+      <div class="ab-head"><h2>Auto sale bills<small>From orders shipped · cost + ${MIN_PCT}–${MAX_PCT}% · never above MRP · max ₹49,999 a bill · no Sundays</small></h2><button class="btn small" id="abReload" title="Load latest orders">Refresh</button><button class="btn small" id="abClose">Close</button></div>
       <div class="ab-body" id="abBody"><div class="ab-load" id="abLoad">Loading…</div></div>
       <div class="ab-foot" id="abFoot" hidden></div></div></div>`;
     $("#abScrim").onclick = close; $("#abClose").onclick = close;
@@ -456,8 +513,8 @@
     const ds = dateSummary();
     if (!ds.length) { $("#abBody").innerHTML = `<div class="ab-load">No shipped orders found.</div>`; return; }
     if (!S.date || !ds.some(x => x.date === S.date)) {
-      const y = addDays(todayIso(), -1);
-      S.date = (ds.find(x => x.date <= y && x.doneN < COMPANIES.length) || ds.find(x => x.date <= y) || ds[0]).date;
+      const nx = ds.filter(x => x.next).pop();
+      S.date = (nx || ds[1] || ds[0]).date;
     }
     draw();
   }
@@ -466,7 +523,7 @@
     const ds = dateSummary();
     S.drafts = buildDrafts(S.date);
     let d = S.drafts.find(x => x.co.id === S.co);
-    if (!d || (!d.items.length && !d.unmatched.size && !d.done)) d = S.drafts.find(x => x.items.length || x.unmatched.size) || S.drafts[0];
+    if (!d || (!d.items.length && !d.unmatched.size && !d.done)) d = S.drafts.find(x => x.items.length || x.unmatched.size || x.done) || S.drafts[0];
     S.co = d.co.id;
     const pill = (cls, t) => `<span class="pill ${cls}">${t}</span>`;
     const card = x => {
@@ -474,11 +531,11 @@
       return `<button type="button" class="ab-card${x.done ? " done" : ""}" data-co="${x.co.id}" aria-pressed="${x.co.id === S.co}">
         <h3>${esc(x.co.label)}</h3>
         <div class="big">${empty ? "—" : inr(x.total)}</div>
-        <div class="meta">${x.orders.size} orders · ${x.items.length} products${x.items.length ? ` · avg ${x.avgPct.toFixed(1)}%` : ""}</div>
-        <div class="tags">${x.done ? pill("good", "Saved " + esc(x.done.invoiceNo)) : empty ? pill("", "No orders") : pill("warn", "Draft")}${x.unmatched.size ? pill("bad", x.unmatched.size + " not matched") : ""}${x.hsnBad && !x.done ? pill("bad", x.hsnBad + " HSN missing") : ""}${x.low && !x.done ? pill("warn", x.low + " under 15%") : ""}</div></button>`;
+        <div class="meta">${x.items.length ? `${x.items.length} products · goods of ${x.from === x.to ? fmtD(x.from) : fmtD(x.from) + "–" + fmtD(x.to)} · avg ${x.avgPct.toFixed(1)}%` : `${x.orders.size} orders shipped`}</div>
+        <div class="tags">${x.done ? pill("good", "Saved " + esc(x.done.invoiceNo)) : empty ? pill("", "Nothing to bill") : x.blockedBy ? pill("", "After " + fmtD(x.blockedBy)) : pill("warn", "Ready")}${x.carry > 1 ? pill("acc", inr(x.carry) + " carried forward") : ""}${x.unmatched.size ? pill("bad", x.unmatched.size + " not matched") : ""}${x.hsnBad && !x.done ? pill("bad", x.hsnBad + " HSN missing") : ""}${x.low && !x.done ? pill("warn", x.low + " under 15%") : ""}</div></button>`;
     };
     $("#abBody").innerHTML = `${archFail ? `<div class="banner">Older dates (before the last 15 days) could not load. Press Refresh to try again.</div>` : ""}
-      <div class="ab-dates">${ds.map(x => `<button type="button" class="ab-date" data-d="${x.date}" aria-pressed="${x.date === S.date}"><b>${dayName(x.date)} ${fmtD(x.date)}</b><span>${x.orders} orders · ${x.doneN === COMPANIES.length ? '<i class="ok">✓ billed</i>' : x.doneN ? x.doneN + "/4 billed" : "not billed"}</span></button>`).join("")}</div>
+      <div class="ab-dates">${ds.map(x => `<button type="button" class="ab-date" data-d="${x.date}" aria-pressed="${x.date === S.date}"><b>${dayName(x.date)} ${fmtD(x.date)}</b><span>${x.billN && x.doneN === x.billN ? '<i class="ok">✓ billed</i>' : x.billN ? x.doneN + "/" + x.billN + " billed" : "no bill"}${x.next ? " · next" : ""}</span></button>`).join("")}</div>
       <div class="ab-cards">${S.drafts.map(card).join("")}</div>
       <div id="abDetail"></div>`;
     $("#abBody").querySelectorAll(".ab-date").forEach(b => b.onclick = () => { S.date = b.dataset.d; draw(); });
@@ -489,13 +546,13 @@
   function detail(d) {
     const box = $("#abDetail"), foot = $("#abFoot");
     foot.hidden = false;
-    const readyAll = S.drafts.filter(x => !x.done && x.items.length && !x.hsnBad && !x.overMrp);
+    const readyAll = S.drafts.filter(x => !x.done && x.items.length && !x.blockedBy && !x.hsnBad && !x.overMrp && x.total <= CAP);
     if (d.done) {
-      box.innerHTML = `<div class="banner info">Bill <b>${esc(d.done.invoiceNo)}</b> (${inr(d.done.total)}) is already saved for ${esc(d.co.label)} — orders shipped ${fmtD(d.date)}. Open it from the Sales list to view or print.</div>`;
+      box.innerHTML = `<div class="banner info">Bill <b>${esc(d.done.invoiceNo)}</b> (${inr(d.done.total)}) is already saved for ${esc(d.co.label)} on ${fmtD(d.date)}. Open it from the Sales list to view or print.</div>`;
       foot.innerHTML = `<span class="msg"></span>${readyAll.length ? `<button class="btn primary" id="abAll">Approve all ${readyAll.length} ready bills</button>` : ""}`;
       wireAll(readyAll); return;
     }
-    if (!d.items.length && !d.unmatched.size) { box.innerHTML = `<div class="ab-load">No orders shipped for ${esc(d.co.label)} on ${fmtD(d.date)}.</div>`; foot.innerHTML = `<span class="msg"></span>${readyAll.length ? `<button class="btn primary" id="abAll">Approve all ${readyAll.length} ready bills</button>` : ""}`; wireAll(readyAll); return; }
+    if (!d.items.length && !d.unmatched.size) { box.innerHTML = `<div class="ab-load">Nothing to bill for ${esc(d.co.label)} on ${fmtD(d.date)}.</div>`; foot.innerHTML = `<span class="msg"></span>${readyAll.length ? `<button class="btn primary" id="abAll">Approve all ${readyAll.length} ready bills</button>` : ""}`; wireAll(readyAll); return; }
     const prodOpts = [...D.prods.values()].sort((a, b) => a.name.localeCompare(b.name));
     box.innerHTML = `
       ${d.unmatched.size ? `<div class="ab-sec"><h4>Not matched — pick the purchased product once (remembered)</h4></div>
@@ -503,13 +560,15 @@
       <div class="tablebox ab-um"><table class="ab-t"><thead><tr><th>Sold as</th><th class="r">Qty</th><th>Purchased product</th><th>Units per sale</th><th></th></tr></thead><tbody>
       ${[...d.unmatched.values()].map((u, i) => `<tr data-i="${i}"><td><span class="pn">${esc(u.name)}</span><div class="sub">${esc([u.asin, u.sku].filter(Boolean).join(" · "))}</div></td><td class="r num">${u.qty}</td><td><input list="abProds" class="abPick" placeholder="Type product name"></td><td><input class="abMult" type="number" min="1" step="1" value="1" style="width:64px"></td><td style="white-space:nowrap"><button class="btn small primary abSave">Save</button> <button class="btn small abSkip" title="Not billed (gift, freebie, own stock)">Skip</button></td></tr>`).join("")}
       </tbody></table></div>` : ""}
-      <div class="ab-sec"><h4>Bill to ${esc(d.co.label)} · shipped ${dayName(d.date)} ${fmtD(d.date)}</h4>
+      ${d.blockedBy ? `<div class="banner">Preview only — approve ${esc(d.co.label)}'s bill of ${dayName(d.blockedBy)} ${fmtD(d.blockedBy)} first. Bills go in date order so the ₹49,999 split stays correct.</div>` : ""}
+      ${d.carry > 1 ? `<div class="banner info">${inr(d.carry)} of goods did not fit under ₹49,999 and moves to the next working day.</div>` : ""}
+      <div class="ab-sec"><h4>Bill to ${esc(d.co.label)} · ${dayName(d.date)} ${fmtD(d.date)} · goods shipped ${d.from === d.to ? fmtD(d.from) : fmtD(d.from) + " – " + fmtD(d.to)}</h4>
         <div class="ab-sum"><span>Cost <b>${inr(d.cost)}</b></span><span>Taxable <b>${inr(d.taxable)}</b></span><span>GST <b>${inr(d.gst)}</b></span><span>Profit <b>${inr(d.profit)}</b> (${d.avgPct.toFixed(1)}%)</span></div></div>
       <div class="tablebox"><table class="ab-t"><thead><tr><th>Product</th><th class="hm">HSN</th><th class="r">Qty</th><th class="r hm">Cost/unit</th><th class="r">Rate (ex-GST)</th><th class="r">Profit %</th><th class="r hm">MRP</th><th class="r hm">GST</th><th class="r">Amount</th></tr></thead><tbody>
       ${d.items.map((i, n) => `<tr data-n="${n}" class="${i.overMrp || i.hsnBad ? "bad" : i.pct < MIN_PCT - 0.05 ? "warn" : ""}">
         <td><span class="pn">${esc(i.p.name)}</span><div class="sub">${esc(i.p.noBill ? "No purchase bill yet — LOTS list price" : i.p.sup + (i.p.date ? " · " + fmtD(i.p.date) : ""))} · ${esc(i.L.via)}</div><div class="sub" title="${esc([...i.L.src].map(([k, v]) => v.q + " × " + k + (v.u !== 1 ? " (" + (+v.u.toFixed(3)) + " each)" : "")).join("\n"))}">Sold: ${esc([...i.L.src].slice(0, 2).map(([k, v]) => v.q + " × " + k + (v.u !== 1 ? " (×" + (+v.u.toFixed(3)) + ")" : "")).join(" · "))}${i.L.src.size > 2 ? " · +" + (i.L.src.size - 2) + " more" : ""}</div></td>
         <td class="hm"><input class="h${i.hsnBad ? " bad" : ""}" data-k="hsn" value="${esc(i.hsn)}" inputmode="numeric" placeholder="HSN"></td>
-        <td class="r"><input data-k="qty" value="${i.qty}" inputmode="decimal" style="width:60px"></td>
+        <td class="r num">${+i.qty.toFixed(3)}</td>
         <td class="r num hm">${inr(i.p.cost, 2)}</td>
         <td class="r"><input data-k="rate" class="${i.overMrp ? "bad" : ""}" value="${i.rate.toFixed(2)}" inputmode="decimal"></td>
         <td class="r num">${i.pct.toFixed(1)}%${i.capped ? `<div class="sub">MRP limit</div>` : ""}</td>
@@ -517,13 +576,13 @@
         <td class="r num hm">${i.p.gst}%</td>
         <td class="r num">${inr(i.qty * i.rate * (1 + i.p.gst / 100), 2)}</td></tr>`).join("")}
       </tbody></table></div>
-      <p class="note" style="margin:0">Rate = purchase cost + ${MAX_PCT}%. Where that crosses MRP it is lowered to MRP (yellow = below ${MIN_PCT}%, red = fix before saving). Your edits stay until you close this window.</p>`;
+      <p class="note" style="margin:0">Rate = purchase cost + ${MAX_PCT}%. Where that crosses MRP it is lowered to MRP (yellow = below ${MIN_PCT}%, red = fix before saving). A rate or HSN you change applies to that product on every bill. Quantities are set by the ₹49,999 split.</p>`;
     // edits
     box.querySelectorAll("tr[data-n] input").forEach(inp => inp.onchange = () => {
       const i = d.items[+inp.closest("tr").dataset.n], k = inp.dataset.k;
-      const e = ((EDIT[d.id] ||= {})[i.L.key] ||= {});
+      const e = (EDIT[i.L.key] ||= {});
       e[k] = k === "hsn" ? inp.value.trim() : num(inp.value);
-      draw();
+      PLAN = null; draw();
     });
     // unmatched picks
     const um = [...d.unmatched.values()];
@@ -537,7 +596,7 @@
       const u = um[+b.closest("tr").dataset.i]; b.disabled = true;
       try { await rememberPick(u, "__skip"); toast("Skipped — will not be billed"); draw(); } catch (e) { b.disabled = false; toast("Not saved: " + e.message, 5000); }
     });
-    const block = d.hsnBad ? `Enter ${d.hsnBad} missing HSN` : d.overMrp ? "A rate is above MRP" : "";
+    const block = d.blockedBy ? `Approve ${fmtD(d.blockedBy)} first` : d.hsnBad ? `Enter ${d.hsnBad} missing HSN` : d.overMrp ? "A rate is above MRP" : d.total > CAP ? "Above ₹49,999" : "";
     foot.innerHTML = `<span class="msg">${d.unmatched.size ? `<span class="up">${d.unmatched.size} product${d.unmatched.size > 1 ? "s" : ""} not matched will be left out.</span>` : block ? `<span class="up">${block}</span>` : `${d.items.length} products · total <b>${inr(d.total)}</b>`}</span>
       ${readyAll.length > 1 ? `<button class="btn" id="abAll">Approve all ${readyAll.length} ready</button>` : ""}
       <button class="btn primary" id="abOne" ${block || !d.items.length ? "disabled" : ""}>Approve &amp; save bill</button>`;
@@ -563,7 +622,7 @@
       if (msg) msg.textContent = `Saving ${d.co.label}…`;
       try { const inv = await saveDraft(d); ok.push(inv.invoiceNo); } catch (e) { bad.push(d.co.label + ": " + e.message); }
     }
-    S.busy = false;
+    S.busy = false; PLAN = null;
     if (ok.length) toast(`Saved ${ok.join(", ")}. They appear in Sales within 30 seconds.`, 6000);
     if (bad.length) toast("Not saved — " + bad.join(" · "), 8000);
     draw();
