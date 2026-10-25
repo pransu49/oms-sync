@@ -22,7 +22,7 @@
   const MAX_PCT = 20, MIN_PCT = 15;
   const COMPANIES = [
     { id: "praso", re: /^praso/i, gstin: "09CKOPP4345K1ZG", label: "Praso Enterprises" },
-    { id: "sasta", re: /^sasta/i, gstin: "09AEWFS5594P1ZI", label: "Sasta Store" },
+    { id: "sasta", re: /^sasta/i, gstin: "09AEWFS5594P1ZI", label: "Sasta Store", noCap: true },   // no ₹49,999 cap: one full bill a day + e-way bill when over ₹50,000
     { id: "munda", re: /^e[\s-]*commerce\s*munda/i, gstin: "09LNSPK8937N1ZI", label: "E Commerce Munda" },
     { id: "vishal", re: /^vishal/i, gstin: "09DHZPP6300R1Z6", label: "Vishal E Commerce" },
   ];
@@ -322,9 +322,9 @@
           for (const e of queue) {
             if (e.qty <= 0) continue;
             const ln = lineFor(e.p); if (!(ln.unitInc > 0)) continue;
-            const room = CAP - 1 - gross; if (room < ln.unitInc * 0.001) continue;
+            const room = (co.noCap ? Infinity : CAP - 1) - gross; if (room < ln.unitInc * 0.001) continue;
             const whole = Number.isInteger(e.qty);
-            let fit = room / ln.unitInc; fit = whole ? Math.floor(fit) : Math.floor(fit * 1000) / 1000;
+            let fit = room / ln.unitInc; fit = !isFinite(fit) ? e.qty : whole ? Math.floor(fit) : Math.floor(fit * 1000) / 1000;
             const t = Math.min(e.qty, fit); if (t <= 0) continue;
             take(e, t); gross += t * ln.unitInc;
           }
@@ -377,7 +377,7 @@
     if (!d.items.length) throw new Error("No matched products in this bill.");
     if (d.hsnBad) throw new Error("Enter the HSN for every product first (red boxes).");
     if (d.overMrp) throw new Error("A rate is above MRP. Lower it first.");
-    if (d.total > CAP) throw new Error("Bill is above ₹49,999 — lower a rate.");
+    if (d.total > CAP && !d.co.noCap) throw new Error("Bill is above ₹49,999 — lower a rate.");
     if (d.blockedBy) throw new Error(`Approve ${fmtD(d.blockedBy)} first (bills go in date order).`);
     const exist = await sb("GET", `docs?kind=eq.autobill_done&id=eq.${encodeURIComponent(d.id)}&select=data`);
     if (exist.length) throw new Error(`Already billed: ${exist[0].data.invoiceNo}`);
@@ -502,7 +502,7 @@
   async function open() {
     document.addEventListener("keydown", escKey, true);
     root().innerHTML = `<div class="ab-root"><div class="ab-scrim" id="abScrim"></div><div class="ab-panel" role="dialog" aria-modal="true" aria-label="Auto sale bills">
-      <div class="ab-head"><h2>Auto sale bills<small>From orders shipped · cost + ${MIN_PCT}–${MAX_PCT}% · never above MRP · max ₹49,999 a bill · no Sundays</small></h2><button class="btn small" id="abReload" title="Load latest orders">Refresh</button><button class="btn small" id="abClose">Close</button></div>
+      <div class="ab-head"><h2>Auto sale bills<small>From orders shipped · cost + ${MIN_PCT}–${MAX_PCT}% · never above MRP · max ₹49,999 a bill (Sasta: full bill + e-way) · no Sundays</small></h2><button class="btn small" id="abReload" title="Load latest orders">Refresh</button><button class="btn small" id="abClose">Close</button></div>
       <div class="ab-body" id="abBody"><div class="ab-load" id="abLoad">Loading…</div></div>
       <div class="ab-foot" id="abFoot" hidden></div></div></div>`;
     $("#abScrim").onclick = close; $("#abClose").onclick = close;
@@ -532,7 +532,7 @@
         <h3>${esc(x.co.label)}</h3>
         <div class="big">${empty ? "—" : inr(x.total)}</div>
         <div class="meta">${x.items.length ? `${x.items.length} products · goods of ${x.from === x.to ? fmtD(x.from) : fmtD(x.from) + "–" + fmtD(x.to)} · avg ${x.avgPct.toFixed(1)}%` : `${x.orders.size} orders shipped`}</div>
-        <div class="tags">${x.done ? pill("good", "Saved " + esc(x.done.invoiceNo)) : empty ? pill("", "Nothing to bill") : x.blockedBy ? pill("", "After " + fmtD(x.blockedBy)) : pill("warn", "Ready")}${x.carry > 1 ? pill("acc", inr(x.carry) + " carried forward") : ""}${x.unmatched.size ? pill("bad", x.unmatched.size + " not matched") : ""}${x.hsnBad && !x.done ? pill("bad", x.hsnBad + " HSN missing") : ""}${x.low && !x.done ? pill("warn", x.low + " under 15%") : ""}</div></button>`;
+        <div class="tags">${x.done ? pill("good", "Saved " + esc(x.done.invoiceNo)) : empty ? pill("", "Nothing to bill") : x.blockedBy ? pill("", "After " + fmtD(x.blockedBy)) : pill("warn", "Ready")}${x.carry > 1 ? pill("acc", inr(x.carry) + " carried forward") : ""}${x.total > 50000 ? pill("bad", "E-way bill needed") : ""}${x.unmatched.size ? pill("bad", x.unmatched.size + " not matched") : ""}${x.hsnBad && !x.done ? pill("bad", x.hsnBad + " HSN missing") : ""}${x.low && !x.done ? pill("warn", x.low + " under 15%") : ""}</div></button>`;
     };
     $("#abBody").innerHTML = `${archFail ? `<div class="banner">Older dates (before the last 15 days) could not load. Press Refresh to try again.</div>` : ""}
       <div class="ab-dates">${ds.map(x => `<button type="button" class="ab-date" data-d="${x.date}" aria-pressed="${x.date === S.date}"><b>${dayName(x.date)} ${fmtD(x.date)}</b><span>${x.billN && x.doneN === x.billN ? '<i class="ok">✓ billed</i>' : x.billN ? x.doneN + "/" + x.billN + " billed" : "no bill"}${x.next ? " · next" : ""}</span></button>`).join("")}</div>
@@ -546,7 +546,7 @@
   function detail(d) {
     const box = $("#abDetail"), foot = $("#abFoot");
     foot.hidden = false;
-    const readyAll = S.drafts.filter(x => !x.done && x.items.length && !x.blockedBy && !x.hsnBad && !x.overMrp && x.total <= CAP);
+    const readyAll = S.drafts.filter(x => !x.done && x.items.length && !x.blockedBy && !x.hsnBad && !x.overMrp && (x.total <= CAP || x.co.noCap));
     if (d.done) {
       box.innerHTML = `<div class="banner info">Bill <b>${esc(d.done.invoiceNo)}</b> (${inr(d.done.total)}) is already saved for ${esc(d.co.label)} on ${fmtD(d.date)}. Open it from the Sales list to view or print.</div>`;
       foot.innerHTML = `<span class="msg"></span>${readyAll.length ? `<button class="btn primary" id="abAll">Approve all ${readyAll.length} ready bills</button>` : ""}`;
@@ -561,6 +561,7 @@
       ${[...d.unmatched.values()].map((u, i) => `<tr data-i="${i}"><td><span class="pn">${esc(u.name)}</span><div class="sub">${esc([u.asin, u.sku].filter(Boolean).join(" · "))}</div></td><td class="r num">${u.qty}</td><td><input list="abProds" class="abPick" placeholder="Type product name"></td><td><input class="abMult" type="number" min="1" step="1" value="1" style="width:64px"></td><td style="white-space:nowrap"><button class="btn small primary abSave">Save</button> <button class="btn small abSkip" title="Not billed (gift, freebie, own stock)">Skip</button></td></tr>`).join("")}
       </tbody></table></div>` : ""}
       ${d.blockedBy ? `<div class="banner">Preview only — approve ${esc(d.co.label)}'s bill of ${dayName(d.blockedBy)} ${fmtD(d.blockedBy)} first. Bills go in date order so the ₹49,999 split stays correct.</div>` : ""}
+      ${d.total > 50000 ? `<div class="banner bad">Over ₹50,000 — make an e-way bill for this invoice on ewaybillgst.gov.in before the goods move.</div>` : ""}
       ${d.carry > 1 ? `<div class="banner info">${inr(d.carry)} of goods did not fit under ₹49,999 and moves to the next working day.</div>` : ""}
       <div class="ab-sec"><h4>Bill to ${esc(d.co.label)} · ${dayName(d.date)} ${fmtD(d.date)} · goods shipped ${d.from === d.to ? fmtD(d.from) : fmtD(d.from) + " – " + fmtD(d.to)}</h4>
         <div class="ab-sum"><span>Cost <b>${inr(d.cost)}</b></span><span>Taxable <b>${inr(d.taxable)}</b></span><span>GST <b>${inr(d.gst)}</b></span><span>Profit <b>${inr(d.profit)}</b> (${d.avgPct.toFixed(1)}%)</span></div></div>
@@ -596,7 +597,7 @@
       const u = um[+b.closest("tr").dataset.i]; b.disabled = true;
       try { await rememberPick(u, "__skip"); toast("Skipped — will not be billed"); draw(); } catch (e) { b.disabled = false; toast("Not saved: " + e.message, 5000); }
     });
-    const block = d.blockedBy ? `Approve ${fmtD(d.blockedBy)} first` : d.hsnBad ? `Enter ${d.hsnBad} missing HSN` : d.overMrp ? "A rate is above MRP" : d.total > CAP ? "Above ₹49,999" : "";
+    const block = d.blockedBy ? `Approve ${fmtD(d.blockedBy)} first` : d.hsnBad ? `Enter ${d.hsnBad} missing HSN` : d.overMrp ? "A rate is above MRP" : d.total > CAP && !d.co.noCap ? "Above ₹49,999" : "";
     foot.innerHTML = `<span class="msg">${d.unmatched.size ? `<span class="up">${d.unmatched.size} product${d.unmatched.size > 1 ? "s" : ""} not matched will be left out.</span>` : block ? `<span class="up">${block}</span>` : `${d.items.length} products · total <b>${inr(d.total)}</b>`}</span>
       ${readyAll.length > 1 ? `<button class="btn" id="abAll">Approve all ${readyAll.length} ready</button>` : ""}
       <button class="btn primary" id="abOne" ${block || !d.items.length ? "disabled" : ""}>Approve &amp; save bill</button>`;
