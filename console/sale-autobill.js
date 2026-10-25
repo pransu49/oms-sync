@@ -102,10 +102,10 @@
     if (!r.ok) throw new Error("Could not read " + path + " (" + r.status + ")");
     const j = await r.json(); const o = {}; for (const k in (j.fields || {})) o[k] = fv(j.fields[k]); return o;
   }
-  async function fsList(db, path) {
+  async function fsList(db, path, size = 50) {
     const out = []; let tok = "";
     for (let i = 0; i < 200; i++) {
-      const r = await fetch(fsBase(db, path) + `?pageSize=50&key=${FS[db].k}` + (tok ? "&pageToken=" + encodeURIComponent(tok) : ""));
+      const r = await fetch(fsBase(db, path) + `?pageSize=${size}&key=${FS[db].k}` + (tok ? "&pageToken=" + encodeURIComponent(tok) : ""));
       if (!r.ok) throw new Error("Could not read " + path + " (" + r.status + ")");
       const j = await r.json();
       (j.documents || []).forEach(d => { const o = { _id: d.name.split("/").pop() }; for (const k in (d.fields || {})) o[k] = fv(d.fields[k]); out.push(o); });
@@ -122,7 +122,7 @@
     progress("Loading orders…");
     const [omsChunks, archChunks, asinDoc, mmChunks, lotsChunks] = await Promise.all([
       fsList("oms", "aikm_admin/omsOrders/chunks"),
-      fsList("oms", "aikm_admin/omsArchive/chunks").catch(() => []),
+      fsList("oms", "aikm_admin/omsArchive/chunks", 5).catch(() => []),
       fsDoc("main", "aikm_admin/spapiAsinLotsMap").catch(() => null),
       fsList("main", "aikm_admin/masterMapping/chunks").catch(() => []),
       fsList("main", "aikm_admin/lotsCatalog/chunks").catch(() => []),

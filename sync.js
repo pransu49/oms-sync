@@ -277,7 +277,7 @@ async function pushToFirestore(orders, docName = 'omsOrders') {
   }
   const db = admin.firestore();
 
-  const CHUNK_SIZE = 400;
+  const CHUNK_SIZE = docName === 'omsOrders' ? 400 : 1500;
   const chunksRef = db.collection('aikm_admin').doc(docName).collection('chunks');
 
   // Read existing chunk hashes so unchanged chunks aren't rewritten every run.
@@ -420,7 +420,10 @@ async function archiveMain() {
     console.log(`  ${rows.length} rows, ${added} new.`);
     await new Promise(r => setTimeout(r, 20000));   // let OMS Guru finish one export before asking the next
   }
-  const shipped = all.filter((o) => String(o.shipmentDate || '').trim());
+  // keep only what billing needs, so the archive stays small and quick to read
+  const shipped = all.filter((o) => String(o.shipmentDate || '').trim()).map((o) => ({
+    orderDate: o.orderDate, shipmentDate: o.shipmentDate, channel: o.channel, channelOrderId: o.channelOrderId, channelSubOrderId: o.channelSubOrderId,
+    asin: o.asin || '', sku: o.sku, productName: o.productName, qty: o.qty, status: o.status }));
   await pushToFirestore(shipped, ARCHIVE_DOC);
   console.log(`Archive saved: ${shipped.length} shipped order line(s) of ${all.length}. Done.`);
 }
