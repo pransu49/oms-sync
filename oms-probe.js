@@ -54,4 +54,27 @@ const strip = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<sty
   };
   await dl('/channel_listings', /<form action="(\/skus\/download_skus\/\d+)"[\s\S]*?<\/form>/, 'MAPPED_LISTINGS');
   await dl('/skus/inventory', /<form action="(\/skus\/exportInventory\/\d+)"[\s\S]*?<\/form>/, 'INVENTORY');
+  const start = Date.now(), got = {};
+  while (Date.now() - start < 5 * 60e3 && Object.keys(got).length < 2) {
+    await new Promise((r) => setTimeout(r, 15e3));
+    const n = await req('/notifications');
+    const items = [...n.text.matchAll(/<li class="item"[^>]*>([\s\S]*?)<\/li>/g)].map((m) => m[1]).slice(0, 12);
+    for (const it of items) {
+      const txt = strip(it), link = (it.match(/href="([^"]+)"/) || [])[1];
+      const key = /listing/i.test(txt) ? 'listings' : /inventory/i.test(txt) ? 'inventory' : null;
+      if (!key || got[key] || !link) continue;
+      const when = (txt.match(/@ ([A-Za-z]+ \d+, \d{4} \d+:\d+:\d+ [AP]M)/) || [])[1]; const t = when ? new Date(when + ' GMT+0530').getTime() : 0;
+      if (t && t < start - 3 * 60e3) continue;
+      got[key] = link; console.log('NOTIF', key, txt.slice(0, 200), link);
+      const f = await fetch(link.startsWith('http') ? link : BASE + link, { headers: { ...H, Cookie: ck() }, redirect: 'follow' });
+      const buf = Buffer.from(await f.arrayBuffer()); const ct = f.headers.get('content-type') || '';
+      let text = buf.toString('utf8');
+      if (buf[0] === 0x50 && buf[1] === 0x4b) { console.log(key, 'is a ZIP/XLSX', buf.length); const XLSX = require('xlsx'); const wb = XLSX.read(buf); text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]); }
+      const lines = text.split(/\r?\n/);
+      console.log(`FILE ${key} [${ct}] ${buf.length}b LINES=${lines.length}`);
+      console.log(`FILE ${key} HEAD:`, lines.slice(0, 4).join(' || ').slice(0, 1500));
+      console.log(`FILE ${key} AMAZON:`, lines.filter((l) => /amazon/i.test(l)).slice(0, 6).join(' || ').slice(0, 2000));
+      console.log(`FILE ${key} DETTOL:`, lines.filter((l) => /Dettol_Skincare soap-75g\*4/i.test(l)).slice(0, 8).join(' || ').slice(0, 2000));
+    }
+  }
 })().catch((e) => { console.error('probe failed', e); process.exit(1); });
