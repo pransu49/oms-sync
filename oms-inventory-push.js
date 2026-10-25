@@ -64,7 +64,7 @@ async function queueExport(page, actionRe, what) {
   if (f.status !== 302) throw new Error(`OMS Guru did not queue the ${what} export (status ${f.status})`);
 }
 // Wait for the export links (posted in notifications), download and unzip them
-const usedLinks = new Set();
+const usedLinks = new Set(), dbgSeen = new Set();
 async function waitExports(since, wanted) {
   const out = {};
   while (Date.now() - since < 8 * 60e3 && Object.keys(out).length < wanted.length) {
@@ -75,6 +75,7 @@ async function waitExports(since, wanted) {
       const txt = strip(it), link = (it.match(/href="([^"]+)"/) || [])[1];
       let key = /channel_listing_mapping/i.test(txt) ? 'listings' : /inventory/i.test(txt) ? 'inventory' : null;
       if (key === 'listings' && wanted.includes('unmapped')) key = 'unmapped';
+      if (wanted.includes('unmapped') && !dbgSeen.has(txt)) { dbgSeen.add(txt); console.log('NOTE:', txt.slice(0, 170), link ? link.slice(-30) : ''); }
       if (!key || out[key] || !link || !wanted.includes(key) || usedLinks.has(link)) continue;
       const when = (txt.match(/@ ([A-Za-z]+ \d+, \d{4} \d+:\d+:\d+ [AP]M)/) || [])[1];
       const t = when ? new Date(when + ' GMT+0530').getTime() : 0;
