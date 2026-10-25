@@ -95,6 +95,7 @@ function lotsFor(asin, L) {
       if (amz <= 0 && l.low >= MIN && free >= MIN) { wrongOos.push({ i, l, bl, free }); seen['oos:' + id] = 1; }
       if (amz > 0 && (l.low < MIN || amz > Math.max(0, l.units - bl) + 2)) { oversell.push({ i, l, amz, bl }); seen['over:' + id] = 1; }
     }
+    console.log(`${acct}: raw wrong-OOS ${wrongOos.length}, raw oversell ${oversell.length}`); wrongOos.slice(0, 6).forEach((x) => console.log(`   OOS? ${x.i.sku} ${String(x.i.name || '').slice(0, 40)} LOTS ${x.l.low} blocked ${x.bl} free ${x.free}`)); oversell.slice(0, 6).forEach((x) => console.log(`   OVER? ${x.i.sku} ${String(x.i.name || '').slice(0, 40)} amz ${x.amz} LOTS ${x.l.low} units ${x.l.units} blocked ${x.bl}`));
     // only what was also seen in the previous check (give robots + OMS Guru one cycle to catch up)
     const oosConf = wrongOos.filter((x) => prevSeen[`oos:${acct}:${x.i.sku}`]);
     const overConf = oversell.filter((x) => prevSeen[`over:${acct}:${x.i.sku}`]);

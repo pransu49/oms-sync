@@ -6,6 +6,8 @@ on:
     types: [completed]
   schedule:
     - cron: '20 * * * *'   # backup, every hour
+  push:
+    branches: [claude/robot-watchdog]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -36,4 +38,4 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+          DRY_RUN: ${{ github.event_name == 'push' && 'true' || inputs.dry_run || 'false' }}
