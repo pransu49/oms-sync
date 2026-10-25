@@ -201,12 +201,19 @@ async function main() {
     if (r['Is Combo Product'] === 'Yes') { combo.add(sku); continue; }
     (bySku[sku] = bySku[sku] || { sku, name: r['Product Name'], list: [] }).list.push({ asin: (r['Extra Data'] || '').toUpperCase(), title: r['Channel Listing Title'], channel: r['Channel Name'], lsku: r['Channel Listing SKU Code'] });
   }
-  const rows = []; let notLinked = 0, conflicts = 0;
+  const rows = [], unlinked = []; let notLinked = 0, conflicts = 0;
   for (const g of Object.values(bySku)) {
     if (!(g.sku in omsQty)) continue;                               // not a stock product in this warehouse
     const seen = new Map();
     for (const l of g.list) { const k = l.asin || l.title; if (seen.has(k)) continue; const u = lotsUnitsFor(l.asin, l.title, L); if (u) seen.set(k, { ...u, asin: l.asin }); }
-    if (!seen.size) { notLinked++; continue; }
+    if (!seen.size) {
+      notLinked++;
+      const asins = [...new Set(g.list.map((l) => l.asin).filter(Boolean))];
+      const why = asins.some((a) => L.asinMap[a] && L.asinMap[a].vendorName && String(L.asinMap[a].vendorName).toUpperCase() !== 'LOTS') ? 'Mapped to another vendor (not LOTS)'
+        : asins.some((a) => L.asinMap[a]) ? 'Mapped LOTS product has no stock data' : 'ASIN not mapped to LOTS';
+      unlinked.push([g.sku, String(g.name || '').slice(0, 90), asins.slice(0, 4).join(' '), omsQty[g.sku], g.list.length, why]);
+      continue;
+    }
     const opts = [...seen.values()];
     const best = opts.reduce((a, b) => (b.target < a.target ? b : a));
     const differ = new Set(opts.map((o) => o.target)).size > 1;
@@ -235,20 +242,35 @@ async function main() {
     if (result.ok === null) status = 'sent';
     console.log(`OMS Guru result: ${result.note} ${failed ? `(${failed} rows failed)` : ''}`);
   }
-  // save for the "OMS inventory" tab (only what the page needs; rows with a change first)
-  const err = result.errors || {};
-  const pack = rows.sort((a, b) => (a.change === 'same') - (b.change === 'same') || a.sku.localeCompare(b.sku)).slice(0, 4000)
-    .map((r) => [r.sku, String(r.name || '').slice(0, 90), r.asin || '', r.lots, String(r.lotsName || '').slice(0, 70), r.lotsQty, r.omsQty, r.newQty, r.change, r.via, err[r.sku] ? String(err[r.sku]).slice(0, 120) : r.note]);
+  // save for the "OMS inventory" tab. Test runs go to their own record and never overwrite the tab (25 Oct 2026 fix).
+  const err = result.errors || {}, C = db.collection('spapiSnapshots'), base = DRY ? 'omsInventoryTest' : 'omsInventory';
+  // last real change per product, carried from earlier runs
+  const prev = {};
+  try {
+    const pd = await C.doc('omsInventory').get();
+    if (pd.exists && pd.data().chunks) {
+      const ps = await Promise.all(Array.from({ length: pd.data().chunks }, (_, i) => C.doc(`omsInventory_rows_${i}`).get()));
+      JSON.parse(ps.map((x) => (x.exists ? x.data().data : '')).join('') || '[]').forEach((r) => { if (r[13]) prev[r[0]] = [r[11], r[12], r[13]]; });
+    }
+  } catch (e) { console.warn('Earlier changes not read:', e.message || e); }
+  const sentOk = !DRY && (status === 'done' || status === 'partial' || status === 'sent');
+  const pack = rows.sort((a, b) => a.sku.localeCompare(b.sku)).slice(0, 4000).map((r) => {
+    const last = sentOk && r.change !== 'same' && !err[r.sku] ? [r.omsQty, r.newQty, runAt] : (prev[r.sku] || [null, null, null]);
+    return [r.sku, String(r.name || '').slice(0, 90), r.asin || '', r.lots, String(r.lotsName || '').slice(0, 70), r.lotsQty, r.omsQty, r.newQty, r.change, r.via,
+      err[r.sku] ? 'OMS Guru: ' + String(err[r.sku]).slice(0, 120) : r.note, ...last];
+  });
   const doc = { at: runAt, finishedAt: Date.now(), status, dry: DRY, note: result.note || '', stats: { ...stats, failed: Object.keys(err).length }, rule: `LOTS stock below ${OOS_BELOW} -> 0, otherwise LOTS stock`, warehouse: 'DEFAULT 310803' };
-  const json = JSON.stringify(pack);
+  const json = JSON.stringify({ rows: pack, unlinked: unlinked.slice(0, 4000) });
   const parts = []; for (let i = 0; i < json.length; i += 900000) parts.push(json.slice(i, i + 900000));
-  await Promise.all(parts.map((p, i) => db.collection('spapiSnapshots').doc(`omsInventory_rows_${i}`).set({ data: p, at: runAt })));
-  await db.collection('spapiSnapshots').doc('omsInventory').set({ ...doc, chunks: parts.length });
-  const hist = db.collection('spapiSnapshots').doc('omsInventory_history');
-  const h = await hist.get(); const runs = ((h.exists && h.data().runs) || []).slice(-47);
-  runs.push({ at: runAt, status, ...stats, failed: Object.keys(err).length });
-  await hist.set({ runs });
-  console.log(`Saved for the OMS inventory tab (${rows.length} rows, ${parts.length} part(s)). Status: ${status}.`);
+  await Promise.all(parts.map((p, i) => C.doc(`${base}_rows_${i}`).set({ data: p, at: runAt })));
+  await C.doc(base).set({ ...doc, chunks: parts.length, v: 2 });
+  if (!DRY) {
+    const hist = C.doc('omsInventory_history');
+    const h = await hist.get(); const runs = ((h.exists && h.data().runs) || []).filter((x) => x.status !== 'test').slice(-47);
+    runs.push({ at: runAt, status, ...stats, failed: Object.keys(err).length });
+    await hist.set({ runs });
+  }
+  console.log(`Saved ${DRY ? 'test results (tab not changed)' : 'for the OMS inventory tab'}: ${rows.length} linked + ${unlinked.length} not linked, ${parts.length} part(s). Status: ${status}.`);
   if (status === 'failed') process.exitCode = 1;
 }
 main().catch((e) => {
