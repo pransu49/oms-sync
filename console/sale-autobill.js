@@ -970,6 +970,14 @@
     const sups = rows.filter(r => r.kind === "supplier").map(r => r.data);
     const supOf = b => sups.find(x => x.name === b.supplier) || sups.find(x => x.gstin && x.gstin === b.supplierGstin && normName(x.name) === normName(b.supplier)) || null;
     const today = todayIso(), V = new Map();
+    /* Advance-payment vendors (paid before goods come): their bills are always paid on the bill date */
+    const adv = rows.filter(r => r.kind === "bill" && r.data && r.data.paymentStatus !== "Paid" && (supOf(r.data) || {}).advance === true);
+    if (adv.length) {
+      const fix = adv.map(r => ({ kind: "bill", id: r.id, fy: r.data.fy || null, data: { ...r.data, paymentStatus: "Paid", paidDate: r.data.billDate || today, paidBy: "advance", updatedAt: nowIso() } }));
+      for (let i = 0; i < fix.length; i += 50) await sbPut(fix.slice(i, i + 50));
+      fix.forEach((f, i) => { adv[i].data = f.data; });
+    }
+    PAY.adv = sups.filter(x => x.advance === true);
     for (const r of rows) {
       if (r.kind !== "bill") continue; const b = r.data; if (!b || b.paymentStatus === "Paid") continue;
       const sup = supOf(b), cd = sup && sup.creditDays !== "" && sup.creditDays != null ? num(sup.creditDays) : null;
@@ -1019,16 +1027,25 @@
         ${tile("Due now", R.due, "due today or overdue", "#B42318")}
         ${tile("Due in next 3 days", R.soon, "plan the payment", "#C9A24B")}</div>
       <div class="banner info">Due date = bill date + the vendor's <b>credit days</b>. Type the days and press Enter — saved on the vendor, used for every bill. Paid bills drop off; mark them paid here or in All bills.</div>
-      <div class="tablebox"><table class="ab-t"><thead><tr><th>Vendor</th><th style="width:120px">Credit days</th><th class="r">Outstanding</th><th class="r">Due now</th><th class="r">Next 3 days</th><th>Oldest due</th><th></th></tr></thead><tbody>
+      <div class="tablebox"><table class="ab-t"><thead><tr><th>Vendor</th><th style="width:150px">Credit days</th><th class="r">Outstanding</th><th class="r">Due now</th><th class="r">Next 3 days</th><th>Oldest due</th><th></th></tr></thead><tbody>
       ${R.list.map((v, i) => `<tr data-v="${i}"><td><span class="pn">${esc(v.name)}</span><div class="sub">${v.bills.length} unpaid bill${v.bills.length > 1 ? "s" : ""}</div></td>
-        <td>${v.sup ? `<input class="payCd" data-v="${i}" value="${v.cd ?? ""}" inputmode="numeric" placeholder="Set" style="width:70px;text-align:center"> <span class="sub">days</span>` : '<span class="sub">add in Parties</span>'}</td>
+        <td>${v.sup ? `<input class="payCd" data-v="${i}" value="${v.cd ?? ""}" inputmode="numeric" placeholder="Set" style="width:60px;text-align:center"> <span class="sub">days</span> <button class="btn small payAdv" data-id="${esc(v.sup.id)}" title="Paid in advance — mark all its bills paid">Advance</button>` : '<span class="sub">add in Parties</span>'}</td>
         <td class="r num">${inr(v.total, 2)}</td><td class="r num" style="color:${v.due > 0 ? "#B42318" : "inherit"};font-weight:${v.due > 0 ? 600 : 400}">${inr(v.due, 2)}</td><td class="r num">${v.soon ? inr(v.soon, 2) : "—"}</td>
         <td>${v.oldest ? `<span class="pill bad">${fmtD(v.oldest)}</span>` : "—"}</td><td class="r"><button class="btn small payTg" data-v="${i}">${payOpen.has(v.name) ? "Hide" : "Bills"}</button></td></tr>
         ${payOpen.has(v.name) ? `<tr><td colspan="7" style="background:#FBF9F4;padding:8px 14px"><table class="ab-t" style="background:#fff"><thead><tr><th>Bill</th><th>Bill date</th><th>Due date</th><th class="r">Amount</th><th>Status</th><th></th></tr></thead><tbody>
           ${v.bills.map(x => `<tr><td class="mono">${esc(x.b.billNo || "—")}${x.credit ? ' <span class="pill">credit note</span>' : ""}</td><td class="num">${fmtD(x.b.billDate || "")}</td><td class="num">${fmtD(x.due)}</td><td class="r num">${x.amt < 0 ? "− " + inr(-x.amt, 2) : inr(x.amt, 2)}</td>
             <td>${x.credit ? "—" : x.late > 0 ? `<span class="pill bad">${x.late} day${x.late > 1 ? "s" : ""} overdue</span>` : x.late === 0 ? '<span class="pill bad">Due today</span>' : `<span class="pill">in ${-x.late} day${x.late < -1 ? "s" : ""}</span>`}</td>
             <td class="r"><button class="btn small payPaid" data-id="${esc(x.id)}">Mark paid</button></td></tr>`).join("")}</tbody></table></td></tr>` : ""}`).join("")}
-      </tbody></table></div>`;
+      </tbody></table></div>
+      ${(PAY.adv || []).length ? `<div class="banner" style="margin-top:12px"><b>Advance payment vendors</b> — bills always marked paid on the bill date: ${PAY.adv.map(x => `<span class="pill" style="margin:2px">${esc(x.name)} <a href="#" class="payUnadv" data-id="${esc(x.id)}" title="Stop treating as advance" style="margin-left:4px;color:#B42318;text-decoration:none">×</a></span>`).join("")}</div>` : ""}`;
+    const setAdv = async (id, on) => {
+      const cur = (await sb("GET", `docs?kind=eq.supplier&id=eq.${encodeURIComponent(id)}&select=data`))[0]?.data; if (!cur) return;
+      if (on && !(await askYes(`${cur.name} is paid in advance?\nAll its unpaid bills — and every new bill — will be marked paid on the bill date.`, "Yes, advance"))) return;
+      await sbPut([{ kind: "supplier", id, data: { ...cur, advance: on, savedAt: nowIso() } }]);
+      toast(on ? `${cur.name}: bills now always paid` : `${cur.name}: normal credit again`); payRender(true);
+    };
+    sec.querySelectorAll(".payAdv").forEach(b => b.onclick = () => setAdv(b.dataset.id, true).catch(e => toast("Not saved: " + e.message, 5000)));
+    sec.querySelectorAll(".payUnadv").forEach(a => a.onclick = e => { e.preventDefault(); setAdv(a.dataset.id, false).catch(er => toast("Not saved: " + er.message, 5000)); });
     sec.querySelectorAll(".payTg").forEach(b => b.onclick = () => { const v = R.list[+b.dataset.v]; payOpen.has(v.name) ? payOpen.delete(v.name) : payOpen.add(v.name); payRender(false); });
     sec.querySelectorAll(".payCd").forEach(inp => {
       inp.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); inp.blur(); } };
