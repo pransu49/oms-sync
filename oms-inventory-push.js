@@ -6,8 +6,10 @@
 //     and the current inventory of every master SKU.
 //  2. For each SIMPLE master SKU (combos follow their parts in OMS) whose Amazon listings are linked to LOTS on the
 //     Amazon page (ASIN mapping, or saved name mapping), works out the stock it should have:
-//       LOTS-GN stock below 10        -> 0 (owner rule: "below 10 for LOTS to make OOS")
-//       otherwise                     -> LOTS stock converted to Amazon units (pack splits / multi-packs respected)
+//       free = LOTS stock (in Amazon units) - OMS Blocked (orders not shipped yet)
+//       LOTS stock below 10, or free below 10 -> In Stock = Blocked, so Amazon shows 0 (owner, 25 Oct 2026:
+//                                               "blocked qty minus LOTS stock so the product goes out of stock")
+//       otherwise                              -> In Stock = LOTS stock (OMS Guru shows Amazon In Stock - Blocked)
 //     If one master SKU has several Amazon listings linked differently, the LOWEST is used (never oversell).
 //  3. Uploads only the master SKUs whose OMS stock differs, with OMS Guru's own "Update InStock Qty" import (type 2,
 //     RESET). OMS Guru then pushes the stock to Amazon as usual.
@@ -70,14 +72,16 @@ async function waitExports(since, wanted) {
     const items = [...n.text.matchAll(/<li class="item"[^>]*>([\s\S]*?)<\/li>/g)].map((m) => m[1]).slice(0, 15);
     for (const it of items) {
       const txt = strip(it), link = (it.match(/href="([^"]+)"/) || [])[1];
-      const key = /channel_listing_mapping/i.test(txt) ? 'listings' : /inventory file/i.test(txt) ? 'inventory' : null;
+      const key = /channel_listing_mapping/i.test(txt) ? 'listings' : /inventory/i.test(txt) ? 'inventory' : null;
       if (!key || out[key] || !link || !wanted.includes(key)) continue;
       const when = (txt.match(/@ ([A-Za-z]+ \d+, \d{4} \d+:\d+:\d+ [AP]M)/) || [])[1];
       const t = when ? new Date(when + ' GMT+0530').getTime() : 0;
       if (!t || t < since - 90e3) continue;                     // an older export
       const f = await fetch(link.startsWith('http') ? link : BASE + link, { headers: { ...H, Cookie: ck() }, redirect: 'follow' });
       const buf = Buffer.from(await f.arrayBuffer());
-      out[key] = buf[0] === 0x50 && buf[1] === 0x4b ? new AdmZip(buf).getEntries()[0].getData().toString('utf8') : buf.toString('utf8');
+      const body = buf[0] === 0x50 && buf[1] === 0x4b ? new AdmZip(buf).getEntries()[0].getData().toString('utf8') : buf.toString('utf8');
+      if (key === 'inventory' && !/Blocked/.test(body.slice(0, 400))) continue;   // an older plain inventory export - need the full one
+      out[key] = body;
       console.log(`Downloaded ${key}: ${out[key].length} characters.`);
     }
   }
@@ -115,22 +119,22 @@ async function loadLots() {
   return { lots, nameMap, asinMap };
 }
 // Amazon units this listing can sell from LOTS stock, or null when it is not linked to LOTS (vendor / unknown)
-function lotsUnitsFor(asin, title, L) {
+function lotsUnitsFor(asin, title, L, bl = 0) {
   let m = asin && (L.asinMap[asin] || L.asinMap[String(asin).toUpperCase()]), via = 'ASIN';
   if (!m || !(m.code || (m.parts || []).length)) { const n = title && L.nameMap[normalizeName(title)]; if (n && n.code && n.vendorName === 'LOTS') { m = { code: n.code }; via = 'name'; } else return null; }
   if (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS') return null;
   const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ code: m.code, qty: 1 }];
-  let units = Infinity, minLots = Infinity; const codes = [];
+  let units = Infinity, minLots = Infinity, freeLots = Infinity; const codes = [];
   for (const x of parts) {
     const p = L.lots[String(x.code)]; if (!p) return null;
     const q = parseFloat(p.qty); if (isNaN(q)) return null;
     const need = Math.max(1, Number(x.qty) || 1) / Math.max(1, parseInt(x.lotsPack) || 1);   // LOTS units per Amazon unit
     units = Math.min(units, Math.floor(Math.max(0, q) / need + 1e-9));
     minLots = Math.min(minLots, q);
+    freeLots = Math.min(freeLots, q - bl * need);                                         // LOTS units left after the blocked orders
     codes.push(`${p.code}${parts.length > 1 || need !== 1 ? `×${Math.round(need * 100) / 100}` : ''}`);
   }
-  const target = minLots < OOS_BELOW ? 0 : units;
-  return { target, lotsQty: minLots, codes: codes.join(' + '), lotsName: (L.lots[String(parts[0].code)] || {}).name || '', via };
+  return { target: units, units, lotsQty: minLots, freeLots: Math.floor(freeLots), codes: codes.join(' + '), lotsName: (L.lots[String(parts[0].code)] || {}).name || '', via };
 }
 
 // ---- upload to OMS Guru: Import Data -> "Update InStock Qty and/or Last Purchase Price" (type 2), RESET ----
@@ -187,13 +191,14 @@ async function main() {
   await login();
   const since = Date.now();
   await queueExport('/channel_listings', /\/skus\/download_skus\/\d+/, 'channel listing mapping');
-  await queueExport('/skus/inventory', /\/skus\/exportInventory\/\d+/, 'inventory');
+  await queueExport('/skus/inventory', /\/skus\/exportFullInventory\/\d+/, 'full inventory');
   const files = await waitExports(since, ['listings', 'inventory']);
   const listings = parseCsv(files.listings), inventory = parseCsv(files.inventory);
   console.log(`OMS Guru: ${listings.length} channel listings, ${inventory.length} products with stock in DEFAULT 310803.`);
   if (inventory.length < 500 || listings.length < 1000) throw new Error('OMS Guru export looks incomplete. Nothing changed.');
 
-  const omsQty = {}; inventory.forEach((r) => { if (r['Item SkuCode']) omsQty[r['Item SkuCode']] = parseInt(r.Qty, 10) || 0; });
+  const omsQty = {}, blocked = {};
+  inventory.forEach((r) => { const k = r['Item SkuCode']; if (!k || (r['Warehouse Id'] && r['Warehouse Id'] !== WAREHOUSE_ID)) return; omsQty[k] = parseInt(r['In Stock'], 10) || 0; blocked[k] = Math.max(0, parseInt(r.Blocked, 10) || 0); });
   // group Amazon listings by master SKU
   const bySku = {}, combo = new Set();
   for (const r of listings) {
@@ -205,7 +210,7 @@ async function main() {
   for (const g of Object.values(bySku)) {
     if (!(g.sku in omsQty)) continue;                               // not a stock product in this warehouse
     const seen = new Map();
-    for (const l of g.list) { const k = l.asin || l.title; if (seen.has(k)) continue; const u = lotsUnitsFor(l.asin, l.title, L); if (u) seen.set(k, { ...u, asin: l.asin }); }
+    for (const l of g.list) { const k = l.asin || l.title; if (seen.has(k)) continue; const u = lotsUnitsFor(l.asin, l.title, L, blocked[g.sku] || 0); if (u) seen.set(k, { ...u, asin: l.asin }); }
     if (!seen.size) {
       notLinked++;
       const asins = [...new Set(g.list.map((l) => l.asin).filter(Boolean))];
@@ -214,20 +219,30 @@ async function main() {
       unlinked.push([g.sku, String(g.name || '').slice(0, 90), asins.slice(0, 4).join(' '), omsQty[g.sku], g.list.length, why]);
       continue;
     }
-    const opts = [...seen.values()];
-    const best = opts.reduce((a, b) => (b.target < a.target ? b : a));
-    const differ = new Set(opts.map((o) => o.target)).size > 1;
+    const bl = blocked[g.sku] || 0, cur0 = omsQty[g.sku];
+    const opts = [...seen.values()].map((o) => {
+      const free = o.freeLots, oos = o.lotsQty < OOS_BELOW || free < OOS_BELOW;
+      // OOS: Amazon must show 0 = In Stock - Blocked. Already 0 or less -> leave In Stock as it is; else set In Stock = Blocked.
+      return { ...o, free, oos, target: oos ? (cur0 <= bl ? cur0 : bl) : o.units };
+    });
+    // never oversell: any link that says out of stock wins; otherwise the link giving the FEWEST Amazon units
+    const best = opts.find((o) => o.oos) || opts.reduce((a, b) => (b.units < a.units ? b : a));
+    const differ = new Set(opts.map((o) => (o.oos ? 0 : o.free))).size > 1;
     if (differ) conflicts++;
     const cur = omsQty[g.sku], newQty = best.target;
-    rows.push({ sku: g.sku, name: g.name, asin: best.asin, lots: best.codes, lotsName: best.lotsName, lotsQty: best.lotsQty, via: best.via, omsQty: cur, newQty,
-      change: newQty === cur ? 'same' : newQty === 0 ? 'zero' : newQty > cur ? 'up' : 'down', note: differ ? `Listings linked differently (${opts.map((o) => o.target).join(' / ')}) - lowest used` : '' });
+    const why = best.oos ? (best.lotsQty < OOS_BELOW ? `LOTS ${best.lotsQty} is below ${OOS_BELOW}` : `LOTS ${best.lotsQty} - blocked ${bl}${best.units !== best.lotsQty && bl ? ' (in LOTS units)' : ''} = ${best.free}, below ${OOS_BELOW}`) + ' - Amazon 0' : '';
+    rows.push({ sku: g.sku, name: g.name, asin: best.asin, lots: best.codes, lotsName: best.lotsName, lotsQty: best.lotsQty, via: best.via, omsQty: cur, newQty, blocked: bl, oos: best.oos,
+      change: newQty === cur ? 'same' : best.oos ? 'zero' : newQty > cur ? 'up' : 'down',
+      note: [why, differ ? `Listings linked differently (${opts.map((o) => (o.oos ? 0 : o.free)).join(' / ')} free) - lowest used` : ''].filter(Boolean).join(' · ') });
   }
   const push = rows.filter((r) => r.change !== 'same');
-  const linkedInStock = rows.filter((r) => r.omsQty > 0).length, goingZero = push.filter((r) => r.change === 'zero').length;
+  const linkedInStock = rows.filter((r) => r.omsQty - r.blocked > 0).length, goingZero = push.filter((r) => r.change === 'zero').length;
   const stats = { linked: rows.length, push: push.length, zero: goingZero, up: push.filter((r) => r.change === 'up').length, down: push.filter((r) => r.change === 'down').length,
     same: rows.length - push.length, notLinked, combos: combo.size, conflicts, products: inventory.length };
   console.log(`Linked to LOTS: ${stats.linked} · to update: ${stats.push} (${stats.up} up, ${stats.down} down, ${stats.zero} to 0) · unchanged ${stats.same} · not linked ${notLinked} · combos skipped ${combo.size} · differently linked ${conflicts}.`);
-  push.slice(0, 25).forEach((r) => console.log(`  ${r.sku}: OMS ${r.omsQty} -> ${r.newQty} (LOTS ${r.lots} = ${r.lotsQty})`));
+  push.slice(0, 25).forEach((r) => console.log(`  ${r.sku}: OMS ${r.omsQty} -> ${r.newQty} (LOTS ${r.lots} = ${r.lotsQty}, blocked ${r.blocked})${r.note ? " · " + r.note : ""}`));
+  console.log(`Blocked-rule examples: ${rows.filter((r) => r.oos && r.lotsQty >= OOS_BELOW).length} products out of stock only because of blocked orders.`);
+  rows.filter((r) => r.oos && r.lotsQty >= OOS_BELOW).slice(0, 8).forEach((r) => console.log(`  BLOCKED ${r.sku}: In Stock ${r.omsQty} -> ${r.newQty} · ${r.note}`));
 
   let result = { ok: null, errors: {}, note: '' }, status = 'done';
   if (goingZero >= 20 && goingZero > linkedInStock * BROKEN_SHARE) {
@@ -257,9 +272,9 @@ async function main() {
   const pack = rows.sort((a, b) => a.sku.localeCompare(b.sku)).slice(0, 4000).map((r) => {
     const last = sentOk && r.change !== 'same' && !err[r.sku] ? [r.omsQty, r.newQty, runAt] : (prev[r.sku] || [null, null, null]);
     return [r.sku, String(r.name || '').slice(0, 90), r.asin || '', r.lots, String(r.lotsName || '').slice(0, 70), r.lotsQty, r.omsQty, r.newQty, r.change, r.via,
-      err[r.sku] ? 'OMS Guru: ' + String(err[r.sku]).slice(0, 120) : r.note, ...last];
+      err[r.sku] ? 'OMS Guru: ' + String(err[r.sku]).slice(0, 120) : r.note, ...last, r.blocked, r.oos ? 1 : 0];
   });
-  const doc = { at: runAt, finishedAt: Date.now(), status, dry: DRY, note: result.note || '', stats: { ...stats, failed: Object.keys(err).length }, rule: `LOTS stock below ${OOS_BELOW} -> 0, otherwise LOTS stock`, warehouse: 'DEFAULT 310803' };
+  const doc = { at: runAt, finishedAt: Date.now(), status, dry: DRY, note: result.note || '', stats: { ...stats, failed: Object.keys(err).length }, rule: `LOTS stock (or LOTS minus blocked) below ${OOS_BELOW} -> Amazon 0, otherwise LOTS stock`, warehouse: 'DEFAULT 310803' };
   const json = JSON.stringify({ rows: pack, unlinked: unlinked.slice(0, 4000) });
   const parts = []; for (let i = 0; i < json.length; i += 900000) parts.push(json.slice(i, i + 900000));
   await Promise.all(parts.map((p, i) => C.doc(`${base}_rows_${i}`).set({ data: p, at: runAt })));
