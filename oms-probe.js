@@ -36,6 +36,6 @@ const strip = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<sty
   const home = await req('/reports/export_data');
   const menu = [...new Set([...home.text.matchAll(/href="(https:\/\/client\.omsguru\.com)?(\/[a-z_\/]+)"/g)].map((m) => m[2]))].filter((h) => /product|inventor|stock|warehouse|listing|sku/i.test(h));
   console.log('MENU LINKS:', menu.join(' , '));
-  const w = await req('/warehouses'); console.log('WAREHOUSES:', w.status, strip(w.text).replace(/^.*?Logout/, '').slice(0, 2500));
-  for (const m of menu.slice(0, 8)) { const r = await req(m); console.log(`PAGE ${m}: ${r.status} ::`, strip(r.text).replace(/^.*?Logout/, '').slice(0, 1500)); }
+  const w = { status: 0, text: '' }; console.log('WAREHOUSES:', w.status, strip(w.text).replace(/^.*?Logout/, '').slice(0, 2500));
+  for (const m of ['/skus/inventory','/channel_listings','/skus/list_products','/map_skus']) { const r = await req(m); console.log(`PAGE ${m}: ${r.status} ::`, strip(r.text).replace(/^[\s\S]*?What's New Settings/, '').slice(0, 2500)); }
 })().catch((e) => { console.error('probe failed', e); process.exit(1); });
