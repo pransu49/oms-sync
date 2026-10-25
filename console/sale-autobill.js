@@ -376,10 +376,12 @@
     }
     const plan = {}, queues = {}, open = {};   // plan[coId][day] = draft
     COMPANIES.forEach(co => { plan[co.id] = {}; queues[co.id] = []; open[co.id] = null; });
+    /* Stock is bought 2–4 days after the order, so purchases up to BUY_AHEAD days after the bill date count for it */
+    const BUY_AHEAD = 4, ahead = day => { const t = new Date(day + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + BUY_AHEAD); return t.toISOString().slice(0, 10); };
     const stock = new Map(); let evi = 0;
     const st = k => stock.get(k) || 0;
     for (const day of days) {
-      while (evi < D.stockEv.length && D.stockEv[evi].date <= day) { const e = D.stockEv[evi++]; stock.set(e.key, st(e.key) + e.q); }
+      const upTo = ahead(day); while (evi < D.stockEv.length && D.stockEv[evi].date <= upTo) { const e = D.stockEv[evi++]; stock.set(e.key, st(e.key) + e.q); }
       for (const co of COMPANIES) {
         const c = ship[co.id] || {}, queue = queues[co.id], sd = c[day];
         if (sd) for (const L of sd.lines.values()) queue.push({ day, key: L.key, p: L.p, qty: L.qty, via: L.via, src: L.src });
@@ -654,7 +656,7 @@
       </tbody></table></div>` : ""}
       ${d.blockedBy ? `<div class="banner">Preview only — approve ${esc(d.co.label)}'s bill of ${dayName(d.blockedBy)} ${fmtD(d.blockedBy)} first. Bills go in date order so the ₹49,999 split stays correct.</div>` : ""}
       ${d.total > 50000 ? `<div class="banner bad">Over ₹50,000 — make an e-way bill for this invoice on ewaybillgst.gov.in before the goods move.</div>` : ""}
-      ${d.noStock > 1 ? `<div class="banner">${d.noStockN} product${d.noStockN > 1 ? "s" : ""} (${inr(d.noStock)}) not billed — not enough stock in purchase bills on this date. They go on the first bill after the purchase is saved, so stock never goes negative.
+      ${d.noStock > 1 ? `<div class="banner">${d.noStockN} product${d.noStockN > 1 ? "s" : ""} (${inr(d.noStock)}) not billed — not enough stock — no purchase bill up to 4 days after this date. They go on the first bill after the purchase is saved, so stock never goes negative.
         <div class="sub" style="margin-top:6px">${(d.waitList || []).slice(0, 8).map(w => `${esc(w.name)} — ${+w.qty.toFixed(2)} short (${inr(w.val)})`).join(" · ")}${(d.waitList || []).length > 8 ? ` · +${d.waitList.length - 8} more` : ""}</div></div>` : ""}
       ${d.carry - d.noStock > 1 ? `<div class="banner info">${inr(d.carry - d.noStock)} of goods did not fit under ₹49,999 and moves to the next working day.</div>` : ""}
       <div class="ab-sec"><h4>Bill to ${esc(d.co.label)} · ${dayName(d.date)} ${fmtD(d.date)} · goods shipped ${d.from === d.to ? fmtD(d.from) : fmtD(d.from) + " – " + fmtD(d.to)}</h4>
