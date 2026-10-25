@@ -37,7 +37,19 @@
   // "Same for all" answers are remembered per column name and used again next time
   var MK = "aikm_meesho_memory", norm = function (h) { return String(h).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); };
   function memGet() { try { return JSON.parse(localStorage.getItem(MK) || "{}"); } catch (e) { return {}; } }
-  function memSet(h, v) { try { var m = memGet(); if (v) m[norm(h)] = v; else delete m[norm(h)]; localStorage.setItem(MK, JSON.stringify(m)); } catch (e) {} }
+  var MAKER = /manufacturer|packer|importer|marketed/i;
+  try { var m0 = memGet(), ch = false; Object.keys(m0).forEach(function (k) { if (MAKER.test(k) && !/ \| /.test(k)) { delete m0[k]; ch = true; } });   // old one-for-all maker answers (put wrong addresses on other brands)
+    if (ch) localStorage.setItem(MK, JSON.stringify(m0)); } catch (e) {}
+  var brandOf = function (r) { return String((r.d && r.d.brand) || (r.p && r.p.name || "").split(/[\s,|-]+/)[0] || "").toLowerCase().trim(); };
+  var mkKey = function (h, brand) { return norm(h) + " | " + brand; };
+  // a value Meesho will reject even though the box is filled
+  function invalid(c, v) {
+    if (!v || /^not required$/i.test(v)) return "";
+    if (/pin\s*code|pincode|\bpin\b|zip|postal/i.test(c.head) && !/^[1-9]\d{5}$/.test(v)) return "Pincode must be 6 digits";
+    if (/address/i.test(c.head) && !(v.length >= 15 && (/\d/.test(v) || v.split(",").length >= 3))) return "Not a full address (street, city, state)";
+    return "";
+  }
+  function memSet(h, v) { try { var m = memGet(), k = / \| /.test(h) ? h : norm(h); if (v) m[k] = v; else delete m[k]; localStorage.setItem(MK, JSON.stringify(m)); } catch (e) {} }
 
   /* ---------- styles ---------- */
   function css() {
@@ -468,7 +480,7 @@
     var want = function (pct) { for (var P = Math.ceil(cost); P < cost * 5 + 1000; P++) if (profitAt(P, cost, r) >= P * pct / 100) return P; return null; };
     var tgt = want(Number(S.tgtPct) || 20), min = want(Number(S.minPct) || 15), P = tgt, note = "";
     if (!P) P = mrp ? Math.floor(mrp) : Math.ceil(cost * 1.6);
-    if (mrp && P > mrp) P = Math.floor(mrp);          // never above MRP (profit may then be lower)
+    if (mrp && P > mrp - 10) P = Math.floor(mrp - 10);   // Meesho: MRP must be at least Rs 10 above the price
     var pf = profitAt(P, cost, r), pc = Math.round(pf / P * 100);
     note = "Cost ₹" + Math.round(cost) + " · GST on margin ₹" + Math.round(P - cost - pf) + " · profit ₹" + Math.round(pf) + " (" + pc + "%)" + (pc < (Number(S.minPct) || 15) ? " — BELOW " + S.minPct + "%: MRP too low" : "");
     if (pc < (Number(S.minPct) || 15)) return (p._pi = { v: "", was: note + " — left empty (below your minimum profit). Type a price to list anyway.", low: true });
@@ -478,7 +490,7 @@
   // from Meesho error files dropped in this tab. Each is swapped for a safe word (or removed).
   var BW = "aikm_meesho_badwords";
   var SWAP = { chocolate: "choco", chocolates: "choco", chocolaty: "choco", honey: "", desi: "traditional", enjoy: "savour", enjoyable: "tasty",
-    real: "genuine", friends: "family", friend: "family", moments: "times", moment: "time", an: "a", delight: "treat", magic: "special", happy: "joyful", fun: "tasty" };
+    real: "genuine", friends: "family", friend: "family", moments: "times", moment: "time", an: "a", delight: "treat", magic: "special", happy: "joyful", fun: "tasty", everyday: "daily", trace: "bit" };
   function badWords() { var m = {}; Object.keys(SWAP).forEach(function (k) { m[k] = SWAP[k]; }); try { var l = JSON.parse(localStorage.getItem(BW) || "{}"); Object.keys(l).forEach(function (k) { if (!(k in m)) m[k] = ""; }); } catch (e) {} return m; }
   function learnWords(list) { try { var l = JSON.parse(localStorage.getItem(BW) || "{}"); list.forEach(function (w) { l[w.toLowerCase()] = 1; }); localStorage.setItem(BW, JSON.stringify(l)); } catch (e) {} }
   function safe(x) {
@@ -495,7 +507,9 @@
       t = tidy(d && d.description);
     var s = b.map(function (x) { return "• " + x; }).join("\n");
     if (t && s.indexOf(t.slice(0, 40)) < 0) s += (s ? "\n\n" : "") + t;
-    return (s || (d && d.title) || p.name || "").slice(0, 3000);
+    var title = tidy((d && d.title) || p.name || "");
+    if (s.replace(/[•\s]/g, "").length < 80 && title) s = title + (s ? "\n" + s : "");   // too little text on Amazon: lead with the product name
+    return s.slice(0, 3000);
   }
   function grams(s) {   // "450g", "1.25kg", "500 ml", "1 L" -> grams (ml counted as g)
     var m = /(\d+(?:\.\d+)?)\s*(kgs?|kilo\w*|gms?|grams?|g|ml|millilit\w*|ltrs?|lit\w*|l)\b/i.exec(String(s || "")); if (!m) return 0;
@@ -584,7 +598,7 @@
     [/inventory|stock|available quantity|quantity available|^qty/, function (x) { return x.p.quantity > 0 ? x.p.quantity : (Number(S.stock) || 0); }],
     [/sku|style id|style code|product id/, function (x) { return x.p.sku || x.p.asin; }, "text"],
     [/product name|title|catalog name|^name$/, function (x) { return safe(tidy((x.d && x.d.title) || x.p.name || "")); }, "text"],
-    [/image|photo|picture/, function (x) { var im = (x.d && x.d.images && x.d.images.length ? x.d.images : (x.p.img ? [x.p.img] : [])); return im[x.slot] || ""; }, "text"],
+    [/image|photo|picture/, function (x) { var im = (x.d && x.d.images && x.d.images.length ? x.d.images : (x.p.img ? [x.p.img] : [])); im = im.filter(function (u, i) { return im.indexOf(u) === i; }); return im[x.slot] || ""; }, "text"],
     [/brand/, function (x) { return S.brand || (x.d && x.d.brand) || ""; }, "text"],
     [/country/, function (x) { return (x.d && x.d.countryOfOrigin) || S.country || "India"; }],
     [/importer/, function (x) { var c = x.d && x.d.contacts && x.d.contacts.importer, imp = PF().importer || "";
@@ -657,10 +671,12 @@
           var x = { p: p, d: d, h: h, slot: 0, c: c };
           if (rule && /image|photo|picture/.test(h)) { var n = /(\d+)/.exec(h); x.slot = n ? Math.max(0, +n[1] - 1) : /front|main/.test(h) ? 0 : /back/.test(h) ? 1 : /side/.test(h) ? 2 : slot; slot = Math.max(slot, x.slot) + 1; }
           v = rule ? rule[1](x) : guess(c.head, d);
-          if ((v === "" || v == null) && mem[norm(c.head)]) v = mem[norm(c.head)];
+          var mk = MAKER.test(c.head), bmem = mk ? mem[mkKey(c.head, brandOf({ p: p, d: d }))] : null;
+          if (mk && bmem && (v === "" || v == null || (typeof v === "object" && !v.v) || invalid(c, typeof v === "object" ? v.v : String(v)))) v = bmem;   // what you typed for this brand before
+          else if (!mk && (v === "" || v == null) && mem[norm(c.head)]) v = mem[norm(c.head)];
           var sn = v && typeof v === "object" ? v : snap(v, c.options);
           if ((sn.v === "" || sn.v == null) && c.options && c.options.length === 1) sn = { v: c.options[0] };   // only one choice -> take it
-          if ((sn.v === "" || sn.v == null) && mem[norm(c.head)]) { var ms = snap(mem[norm(c.head)], c.options); if (ms.v) sn = { v: ms.v, was: sn.was }; }   // your earlier "Same for all"
+          if (!mk && (sn.v === "" || sn.v == null) && mem[norm(c.head)]) { var ms = snap(mem[norm(c.head)], c.options); if (ms.v) sn = { v: ms.v, was: sn.was }; }   // your earlier "Same for all"
           vals[c.idx] = { v: sn.v === "" || sn.v == null ? "" : String(sn.v), was: sn.was || "", low: !!sn.low, auto: sn.v !== "" && sn.v != null, text: kind === "text" || !!c.options };
         });
         return { p: p, d: d, vals: vals };
@@ -674,11 +690,11 @@
   /* ---------- 5. review grid ---------- */
   function needCols() {
     var anyReq = tpl.cols.some(function (c) { return c.req; });
-    return tpl.cols.filter(function (c) { return grid.rows.some(function (r) { return r.vals[c.idx].low; }) || (grid.rows.some(function (r) { return !r.vals[c.idx].v; }) && (anyReq ? c.req : true)); });
+    return tpl.cols.filter(function (c) { return grid.rows.some(function (r) { return r.vals[c.idx].low || invalid(c, r.vals[c.idx].v); }) || (grid.rows.some(function (r) { return !r.vals[c.idx].v; }) && (anyReq ? c.req : true)); });
   }
   function counts() {
     var auto = 0, need = 0, tot = 0, empty = 0;
-    grid.rows.forEach(function (r) { tpl.cols.forEach(function (c) { var v = r.vals[c.idx]; if (v.v) auto++; else empty++; if (c.req && !v.v) need++; tot++; }); });
+    grid.rows.forEach(function (r) { tpl.cols.forEach(function (c) { var v = r.vals[c.idx]; if (v.v) auto++; else empty++; if ((c.req && !v.v) || invalid(c, v.v)) need++; tot++; }); });
     return { auto: auto, need: need, tot: tot, empty: empty, known: tpl.cols.some(function (c) { return c.req; }) };
   }
   function drawGrid() {
@@ -692,7 +708,8 @@
     var body = grid.rows.map(function (r, ri) {
       return '<tr><td class="p"><div class="ms-pn" title="' + esc(r.p.name) + '">' + esc(r.p.name) + "</div><small>" + esc(r.p.asin) + (r.d ? "" : " · basic data") + "</small></td>" + cols.map(function (c) {
         var v = r.vals[c.idx], need = !v.v && (c.req || (onlyNeed && nc.length));
-        var bad = (v.v && c.options && c.options.indexOf(v.v) < 0) || v.low;
+        var why = invalid(c, v.v), bad = (v.v && c.options && c.options.indexOf(v.v) < 0) || v.low || !!why;
+        if (why) v.was = why;
         return '<td class="' + (need ? "need" : "") + (bad ? " bad" : "") + '"' + (v.was ? ' title="' + esc(v.was) + '"' : "") + '><input class="ms-c" data-r="' + ri + '" data-c="' + c.idx + '" value="' + esc(v.v) + '"' + (c.options ? ' list="msDl' + c.idx + '"' : "") + (v.was && !v.v ? ' placeholder="' + esc(("Amazon: " + v.was).slice(0, 40)) + '"' : "") + ">" +
           (v.was && (v.v || v.low) ? '<small class="ms-why' + (v.low ? " lo" : "") + '">' + esc(v.was) + "</small>" : "") + "</td>";
       }).join("") + "</tr>";
@@ -712,7 +729,8 @@
       var el = e.target; if (!el.dataset || el.dataset.r == null) return;
       var v = grid.rows[+el.dataset.r].vals[+el.dataset.c]; v.v = el.value.trim(); v.auto = false; v.low = false;
       var td = el.parentNode, c = tpl.cols.filter(function (x) { return x.idx === +el.dataset.c; })[0];
-      td.classList.toggle("need", !v.v && !!c.req); td.classList.toggle("bad", !!(v.v && c.options && c.options.indexOf(v.v) < 0));
+      td.classList.toggle("need", !v.v && !!c.req); td.classList.toggle("bad", !!(v.v && c.options && c.options.indexOf(v.v) < 0) || !!invalid(c, v.v));
+      if (MAKER.test(c.head) && v.v && !invalid(c, v.v)) memSet(mkKey(c.head, brandOf(grid.rows[+el.dataset.r])), v.v);   // remembered for this brand only
     };
     res.onclick = function (e) {
       if (e.target.closest("#msTog")) { onlyNeed = !onlyNeed; drawGrid(); return; }
@@ -720,8 +738,11 @@
       var b = e.target.closest("[data-allgo]"); if (!b) return;
       var idx = +b.dataset.allgo, inp = res.querySelector('[data-all="' + idx + '"]'), v = inp.value.trim();
       if (!v) return toast("Type or pick a value first", true);
-      grid.rows.forEach(function (r) { r.vals[idx].v = v; r.vals[idx].auto = false; });
-      var col = tpl.cols.filter(function (c) { return c.idx === idx; })[0]; if (col) memSet(col.head, v);
+      var col = tpl.cols.filter(function (c) { return c.idx === idx; })[0], why = col && invalid(col, v);
+      if (why) return toast(why + " — not applied", true);
+      grid.rows.forEach(function (r) { r.vals[idx].v = v; r.vals[idx].auto = false; r.vals[idx].was = ""; });
+      if (col && MAKER.test(col.head)) grid.rows.forEach(function (r) { memSet(mkKey(col.head, brandOf(r)), v); });   // per brand
+      else if (col) memSet(col.head, v);
       drawGrid(); toast("Filled for all " + grid.rows.length + " products — remembered for next time");
     };
     drawSteps();
@@ -756,7 +777,7 @@
   }
   async function download() {
     var n = counts();
-    if (n.need && !confirm(n.need + " required boxes are still empty — Meesho will reject those products. Download anyway?")) return;
+    if (n.need && !confirm(n.need + " boxes are empty or wrong (red / yellow) — Meesho will reject those products. Download anyway?")) return;
     try {
       var doc = X(new XMLSerializer().serializeToString(tpl.doc)), sd = all(doc, "sheetData")[0], rows = {};
       all(sd, "row").forEach(function (r) { rows[+r.getAttribute("r")] = r; });
