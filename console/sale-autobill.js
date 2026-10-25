@@ -476,9 +476,9 @@
      UI
      ===================================================================== */
   const CSS = `
-  .ab-root{position:fixed;inset:0;z-index:50;display:flex}
+  .ab-root{position:fixed;inset:0;z-index:1000;display:flex}
   .ab-scrim{position:absolute;inset:0;background:rgba(5,15,18,.45)}
-  .ab-panel{position:relative;margin-left:auto;width:min(1180px,100%);height:100%;background:var(--bg);display:flex;flex-direction:column;box-shadow:-12px 0 40px rgba(0,0,0,.2)}
+  .ab-panel{position:relative;width:100%;height:100%;background:var(--bg);display:flex;flex-direction:column}
   .ab-head{display:flex;align-items:center;gap:12px;padding:14px 22px;background:linear-gradient(135deg,#0F1B33,#14284B);color:#fff;border-bottom:3px solid var(--gold)}
   .ab-head h2{font-size:19px;font-weight:700;color:#fff;margin:0 auto 0 0}
   .ab-head small{display:block;font:500 12px var(--f-body);color:var(--gold);letter-spacing:.04em}
