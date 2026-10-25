@@ -1,0 +1,43 @@
+name: Meesho listing robot (on command only)
+
+# Never scheduled. Started by "Fill file" in the Meesho tab (dalbhaat.in/pages/amazon).
+# Reads product details from Amazon for the picked products; the page fills the Meesho template.
+on:
+  workflow_dispatch:
+    inputs:
+      asins:
+        description: 'ASINs, comma separated (max 100)'
+        default: ''
+      req_id:
+        description: 'request id the page waits on'
+        default: ''
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-save amazon-sp-api firebase-admin@12
+      - shell: bash
+        run: node meesho-robot.js 2>&1 | tee run.log
+        env:
+          SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
+          SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
+          SPAPI_REFRESH_TOKEN: ${{ secrets.SPAPI_REFRESH_TOKEN }}
+          FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
+          ASINS: ${{ inputs.asins }}
+          REQ_ID: ${{ inputs.req_id }}
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node report-health.js meeshorobot "Meesho robot" run.log || true
