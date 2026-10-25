@@ -2135,13 +2135,14 @@ async function repairStockRule24(sellerId) {
 }
 
 // OWNER RULE (25 Oct 2026): "Inventory is managed by OMS Guru. The robot only marks out of stock the products that
-// have NO stock in LOTS." So: a LOTS-linked self-ship listing whose LOTS-GN stock is 0 (or less) and still shows stock
+// have NO stock in LOTS." Then (same day): "change zero to below 10". So: a LOTS-linked self-ship listing whose LOTS-GN stock is below 10 and still shows stock
 // on Amazon is set to 0. The robot NEVER puts stock back and never sets any other number - OMS Guru does that when
 // LOTS has stock again. Old "put back" memory from earlier rules is simply dropped (no stock pushes).
 // Safety: confirmed LOTS link only; FBA untouched; only on a fresh listings report; stops if the LOTS catalogue looks
 // incomplete or 60%+ of linked in-stock listings would go to 0 (broken LOTS upload); at most 100 per run.
 // STOCK_GUARD=off in the workflow switches it off.
 const OOS_RULE_ON = String(process.env.STOCK_GUARD || 'on').toLowerCase() !== 'off';
+const OOS_LOTS_BELOW = 10;   // owner, 25 Oct 2026: LOTS stock below 10 -> Amazon out of stock
 async function runStockGuard(sellerId) {
   if (!OOS_RULE_ON) { console.log('Out-of-stock rule: off (STOCK_GUARD=off).'); return; }
   if (!sellerId) { console.log('Out-of-stock rule skipped: SPAPI_SELLER_ID not set.'); return; }
@@ -2163,10 +2164,10 @@ async function runStockGuard(sellerId) {
     SNAP.inventory[docId].stockGuard = null;
     if (isNaN(lotsQty) || amzQty <= 0) continue;
     linkedInStock++;
-    if (lotsQty <= 0) toZero.push({ item, lotsQty, amzQty });
+    if (lotsQty < OOS_LOTS_BELOW) toZero.push({ item, lotsQty, amzQty });
   }
   if (toZero.length >= 20 && toZero.length > linkedInStock * 0.6) {
-    console.warn(`Out-of-stock rule STOPPED: ${toZero.length} of ${linkedInStock} LOTS-linked listings show 0 in LOTS - LOTS stock looks broken. Nothing changed.`);
+    console.warn(`Out-of-stock rule STOPPED: ${toZero.length} of ${linkedInStock} LOTS-linked listings are below ${OOS_LOTS_BELOW} in LOTS - LOTS stock looks broken. Nothing changed.`);
     await guardRef.set({ items: {}, blocked: { at: Date.now(), wouldZero: toZero.length, of: linkedInStock }, rule: 'lots_zero', updatedAt: Date.now() });
     return;
   }
@@ -2178,7 +2179,7 @@ async function runStockGuard(sellerId) {
     try {
       await setAmazonQuantity(sellerId, z.item.sku, 0);
       snapPatch('inventory', docId, { quantity: 0, lastStockPush: { status: 'applied', at: Date.now(), qty: 0,
-        reason: `No stock in LOTS (${z.lotsQty}) - marked out of stock (Amazon had ${z.amzQty}). OMS Guru restocks it.` } });
+        reason: `LOTS stock ${z.lotsQty} is below ${OOS_LOTS_BELOW} - marked out of stock (Amazon had ${z.amzQty}). OMS Guru restocks it.` } });
       await db.collection('spapiInventory').doc(docId).set({ quantity: 0 }, { merge: true });
       zeroed++;
     } catch (e) {
@@ -2189,7 +2190,7 @@ async function runStockGuard(sellerId) {
     await new Promise((r) => setTimeout(r, 800));
   }
   await guardRef.set({ items: {}, blocked: null, rule: 'lots_zero', updatedAt: Date.now() });
-  console.log(`Out-of-stock rule (LOTS stock 0 -> Amazon 0): ${zeroed} marked out of stock, ${failed} failed, ${linkedInStock} LOTS-linked in-stock listings checked.`);
+  console.log(`Out-of-stock rule (LOTS stock below ${OOS_LOTS_BELOW} -> Amazon 0): ${zeroed} marked out of stock, ${failed} failed, ${linkedInStock} LOTS-linked in-stock listings checked.`);
 }
 
 // Listings deleted/replaced on Amazon disappear from the listings report. Drop them from the
@@ -2403,7 +2404,7 @@ async function run() {
     await syncCompetitivePricing(asinsFromInventory);
   } else console.log('Step 3: quick sync - competitor prices skipped (done in the full sync).');
 
-  console.log('Step 3a: out-of-stock rule (LOTS stock 0 -> Amazon 0; OMS Guru owns all other stock)...');
+  console.log('Step 3a: out-of-stock rule (LOTS stock below 10 -> Amazon 0; OMS Guru owns all other stock)...');
   if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
 
   console.log('Step 3a1: relist robot ("Not selling" -> new SKU, old SKU deleted)...');
