@@ -82,7 +82,7 @@ async function login() {
   }
 }
 
-async function requestExport(daysBack) {
+async function requestExport(daysBack, endDaysAgo = 0) {
   let res = await fetch(BASE + '/reports/export_data', { headers: { ...BROWSER_HEADERS, 'Cookie': cookieHeader() } });
   updateCookies(res);
   let html = await res.text();
@@ -102,7 +102,8 @@ async function requestExport(daysBack) {
   }
 
   const end = new Date();
-  const start = new Date();
+  end.setDate(end.getDate() - endDaysAgo);
+  const start = new Date(end);
   start.setDate(start.getDate() - daysBack);
 
   const body = new URLSearchParams({
@@ -375,6 +376,7 @@ async function main() {
   console.log(`Logging into OMS Guru as ${EMAIL}...`);
   await login();
   await new Promise(r => setTimeout(r, 1500 + Math.floor(Math.random() * 1500))); // brief pause, less bot-like than an instant next request
+  if (ARCHIVE_DOC) return archiveMain();
   console.log(`Requesting export for last ${DAYS_BACK} days...`);
   const link = await requestExport(DAYS_BACK);
   console.log('Export queued, polling for download...');
@@ -396,6 +398,23 @@ async function main() {
   await saveReadyToConfirm(orders);
   slaCheck(orders);
   console.log('Done.');
+}
+
+// OMS Guru exports at most ~15 days at a time, so the archive asks for 14-day windows and joins them.
+async function archiveMain() {
+  const all = [], seen = new Set();
+  for (let ago = 0; ago < DAYS_BACK; ago += 14) {
+    console.log(`Archive window: ${ago + 14} to ${ago} days ago...`);
+    const link = await requestExport(14, ago);
+    const rows = parseOrders(await pollAndDownload(link)).map(slimOrder);
+    let added = 0;
+    rows.forEach((o) => { const k = [o.channelSubOrderId || o.channelOrderId, o.sku, o.channel].join('|'); if (seen.has(k)) return; seen.add(k); all.push(o); added++; });
+    console.log(`  ${rows.length} rows, ${added} new.`);
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  const shipped = all.filter((o) => String(o.shipmentDate || '').trim());
+  await pushToFirestore(shipped, ARCHIVE_DOC);
+  console.log(`Archive saved: ${shipped.length} shipped order line(s) of ${all.length}. Done.`);
 }
 
 main().catch((e) => {
