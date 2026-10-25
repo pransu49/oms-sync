@@ -64,7 +64,7 @@ async function queueExport(page, actionRe, what) {
   if (f.status !== 302) throw new Error(`OMS Guru did not queue the ${what} export (status ${f.status})`);
 }
 // Wait for the export links (posted in notifications), download and unzip them
-const usedLinks = new Set(), dbgSeen = new Set();
+const usedLinks = new Set();
 async function waitExports(since, wanted) {
   const out = {};
   while (Date.now() - since < 8 * 60e3 && Object.keys(out).length < wanted.length) {
@@ -73,9 +73,7 @@ async function waitExports(since, wanted) {
     const items = [...n.text.matchAll(/<li class="item"[^>]*>([\s\S]*?)<\/li>/g)].map((m) => m[1]).slice(0, 15);
     for (const it of items) {
       const txt = strip(it), link = (it.match(/href="([^"]+)"/) || [])[1];
-      let key = /channel_listing_mapping/i.test(txt) ? 'listings' : /inventory/i.test(txt) ? 'inventory' : null;
-      if (key === 'listings' && wanted.includes('unmapped')) key = 'unmapped';
-      if (wanted.includes('unmapped') && !dbgSeen.has(txt)) { dbgSeen.add(txt); console.log('NOTE:', txt.slice(0, 170), link ? link.slice(-30) : ''); }
+      const key = /unmapped_channel_listings/i.test(txt) ? 'unmapped' : /channel_listing_mapping/i.test(txt) ? 'listings' : /inventory/i.test(txt) ? 'inventory' : null;
       if (!key || out[key] || !link || !wanted.includes(key) || usedLinks.has(link)) continue;
       const when = (txt.match(/@ ([A-Za-z]+ \d+, \d{4} \d+:\d+:\d+ [AP]M)/) || [])[1];
       const t = when ? new Date(when + ' GMT+0530').getTime() : 0;
@@ -287,6 +285,7 @@ async function main() {
     const t0 = Date.now();
     await queueExport('/map_skus', /\/skus\/download_skus\/\d+\/1/, 'unmapped listings');
     const um = parseCsv((await waitExports(t0, ['unmapped'])).unmapped);
+    if (um.length) console.log('Unmapped columns:', Object.keys(um[0]).join(' | '));
     const skuAsin = await loadAmazonSkuAsin();
     const { plan, skipped } = planAutoMap(um, listings, skuAsin);
     console.log(`Auto-map: ${um.length} unmapped listings in OMS Guru (${um.filter((r) => /amazon/i.test(r['Channel Name'] || '')).length} Amazon) -> ${plan.length} can be mapped, ${skipped.length} left for you.`);
