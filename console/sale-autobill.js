@@ -73,6 +73,49 @@
     });
   }
 
+  /* Product search box (replaces the browser list, which also matched vendor names) */
+  function abSearch(box, opts) {
+    const W = s => normName(s).split(" ").filter(Boolean);
+    const idx = opts.map(p => ({ p, n: normName(p.name), w: W(p.name) }));
+    let pop = document.getElementById("abAc");
+    if (!pop) { pop = document.createElement("div"); pop.id = "abAc"; pop.style.cssText = "position:fixed;z-index:2147483500;background:#fff;border:1px solid #E7E1D3;border-radius:12px;box-shadow:0 16px 48px rgba(15,30,53,.18);max-height:340px;overflow:auto;display:none;font:13px/1.35 Inter,system-ui,sans-serif"; document.body.append(pop); }
+    let cur = null, hits = [], hi = 0;
+    const find = (q, sold) => {
+      const qw = W(q);
+      if (qw.length) return idx.filter(x => qw.every(t => x.w.some(w => w.startsWith(t)) || x.n.includes(t)))
+        .sort((a, b) => (b.n.startsWith(qw[0]) - a.n.startsWith(qw[0])) || a.n.localeCompare(b.n)).slice(0, 25);
+      const sw = new Set(W(sold).filter(t => t.length > 2 && !/^\d/.test(t)));   // nothing typed: best guesses from the sold name
+      return idx.map(x => ({ x, s: x.w.filter(w => sw.has(w)).length })).filter(o => o.s >= 2).sort((a, b) => b.s - a.s).slice(0, 12).map(o => o.x);
+    };
+    const show = () => {
+      if (!cur) return;
+      hits = find(cur.value, cur.dataset.sold);
+      if (!hits.length) { pop.innerHTML = `<div style="padding:12px 14px;color:#8B909B">${cur.value.trim() ? "No product with that name — try a shorter word" : "Type the product name"}</div>`; }
+      else pop.innerHTML = (cur.value.trim() ? "" : `<div style="padding:8px 14px 4px;font-size:11px;color:#8B909B;text-transform:uppercase;letter-spacing:.06em">Suggested</div>`) +
+        hits.map((x, i) => `<div data-i="${i}" style="padding:8px 14px;cursor:pointer;border-bottom:1px solid #F0ECE2;${i === hi ? "background:#F6EEDB" : ""}"><div style="font-weight:600;color:#14213D;font-family:Lexend,Inter,sans-serif">${esc(x.p.name)}</div><div style="font-size:11.5px;color:#8B909B">${esc(x.p.sup || "")}${x.p.cost != null ? " · " + inr(x.p.cost, 2) : ""}</div></div>`).join("");
+      const r = cur.getBoundingClientRect(), w = Math.max(r.width, 420);
+      pop.style.width = w + "px"; pop.style.left = Math.min(r.left, innerWidth - w - 8) + "px";
+      const below = innerHeight - r.bottom > 260; pop.style.top = below ? r.bottom + 4 + "px" : ""; pop.style.bottom = below ? "" : innerHeight - r.top + 4 + "px";
+      pop.style.display = "block";
+      const h = pop.querySelector(`[data-i="${hi}"]`); h && h.scrollIntoView({ block: "nearest" });
+    };
+    const hide = () => { pop.style.display = "none"; cur = null; };
+    const pick = i => { const x = hits[i]; if (!x || !cur) return; cur.value = x.p.name; const inp = cur; hide(); const s2 = inp.closest("tr").querySelector(".abMult"); s2 && s2.focus(); };
+    pop.onmousedown = e => { const o = e.target.closest("[data-i]"); if (o) { e.preventDefault(); pick(+o.dataset.i); } };
+    box.querySelectorAll(".abPick").forEach(inp => {
+      inp.onfocus = () => { cur = inp; hi = 0; show(); };
+      inp.oninput = () => { cur = inp; hi = 0; show(); };
+      inp.onblur = () => setTimeout(() => { if (cur === inp) hide(); }, 150);
+      inp.onkeydown = e => {
+        if (pop.style.display !== "block") return;
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); hi = Math.max(0, Math.min(hits.length - 1, hi + (e.key === "ArrowDown" ? 1 : -1))); show(); }
+        else if (e.key === "Enter" && hits.length) { e.preventDefault(); pick(hi); }
+        else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); hide(); }
+      };
+    });
+    box.closest(".ab-body") && box.closest(".ab-body").addEventListener("scroll", () => cur && show(), { passive: true });
+  }
+
   /* same product naming rules as the Purchase & Sales tool */
   function withSize(name, pack) {
     name = String(name || "").trim(); const pk = String(pack || "").trim();
@@ -514,7 +557,7 @@
   .ab-t .sub{font-size:11.5px}
   .ab-t tr.warn td{background:var(--warn-soft)!important}
   .ab-t tr.bad td{background:var(--bad-soft)!important}
-  .ab-um input[list]{width:100%;min-width:220px;text-align:left;font-family:var(--f-body)}
+  .ab-um input.abPick,.ab-um input[list]{width:100%;min-width:220px;text-align:left;font-family:var(--f-body)}
   .ab-um input.abMult{text-align:center}
   .ab-foot{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 22px;border-top:1px solid var(--line);background:var(--surface)}
   .ab-foot .msg{margin-right:auto;font-size:13px}
@@ -606,9 +649,8 @@
     const prodOpts = [...D.prods.values()].sort((a, b) => a.name.localeCompare(b.name));
     box.innerHTML = `
       ${d.unmatched.size ? `<div class="ab-sec"><h4>Not matched — pick the purchased product once (remembered)</h4></div>
-      <datalist id="abProds">${prodOpts.map(p => `<option value="${esc(p.name)}">${esc(p.sup)} · ${inr(p.cost, 2)}</option>`).join("")}</datalist>
       <div class="tablebox ab-um"><table class="ab-t"><thead><tr><th>Sold as</th><th class="r">Qty</th><th>Purchased product</th><th>Units per sale</th><th></th></tr></thead><tbody>
-      ${[...d.unmatched.values()].map((u, i) => `<tr data-i="${i}"><td><span class="pn">${esc(u.name)}</span><div class="sub">${esc([u.asin, u.sku].filter(Boolean).join(" · "))}</div></td><td class="r num">${u.qty}</td><td><input list="abProds" class="abPick" placeholder="Type product name"></td><td><input class="abMult" type="number" min="1" step="1" value="1" style="width:64px"></td><td style="white-space:nowrap"><button class="btn small primary abSave">Save</button> <button class="btn small abSkip" title="Not billed (gift, freebie, own stock)">Skip</button></td></tr>`).join("")}
+      ${[...d.unmatched.values()].map((u, i) => `<tr data-i="${i}"><td><span class="pn">${esc(u.name)}</span><div class="sub">${esc([u.asin, u.sku].filter(Boolean).join(" · "))}</div></td><td class="r num">${u.qty}</td><td><input class="abPick" autocomplete="off" placeholder="Type product name" data-sold="${esc(u.name)}"></td><td><input class="abMult" type="number" min="1" step="1" value="1" style="width:64px"></td><td style="white-space:nowrap"><button class="btn small primary abSave">Save</button> <button class="btn small abSkip" title="Not billed (gift, freebie, own stock)">Skip</button></td></tr>`).join("")}
       </tbody></table></div>` : ""}
       ${d.blockedBy ? `<div class="banner">Preview only — approve ${esc(d.co.label)}'s bill of ${dayName(d.blockedBy)} ${fmtD(d.blockedBy)} first. Bills go in date order so the ₹49,999 split stays correct.</div>` : ""}
       ${d.total > 50000 ? `<div class="banner bad">Over ₹50,000 — make an e-way bill for this invoice on ewaybillgst.gov.in before the goods move.</div>` : ""}
@@ -637,6 +679,8 @@
       e[k] = k === "hsn" ? inp.value.trim() : num(inp.value);
       PLAN = null; draw();
     });
+    // product search for not-matched rows: searches product NAMES only (vendor shown small underneath)
+    abSearch(box, prodOpts);
     // unmatched picks
     const um = [...d.unmatched.values()];
     box.querySelectorAll(".abSave").forEach(b => b.onclick = async () => {
