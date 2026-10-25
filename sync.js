@@ -407,19 +407,32 @@ async function main() {
 // OMS Guru exports at most ~15 days at a time, so the archive asks for 14-day windows and joins them.
 async function archiveMain() {
   const all = [], seen = new Set();
+  const keyOf = (o) => [o.channelSubOrderId || o.channelOrderId, o.sku, o.channel].join('|');
   for (let ago = 0; ago < DAYS_BACK; ago += 14) {
-    console.log(`Archive window: ${ago + 14} to ${ago} days ago...`);
-    const link = await requestExport(14, ago);
-    const rows = parseOrders(await pollAndDownload(link)).map(slimOrder);
     const to = new Date(Date.now() + 5.5 * 3600e3 - ago * 864e5).toISOString().slice(0, 10);
     const from = new Date(Date.now() + 5.5 * 3600e3 - (ago + 15) * 864e5).toISOString().slice(0, 10);
-    const inWin = rows.filter((o) => { const d = toIso(o.orderDate); return d && d >= from && d <= to; });
-    if (rows.length && !inWin.length) console.log(`  This export did not match ${from}..${to} (OMS gave another file) — skipped.`);
+    console.log(`Archive window ${from} .. ${to}`);
+    let inWin = [];
+    // OMS Guru can hand back the PREVIOUS export while the new one is still being made: check the dates, wait, try again.
+    for (let attempt = 1; attempt <= 6 && !inWin.length; attempt++) {
+      if (attempt === 1 || attempt === 4) var link = await requestExport(14, ago);
+      const rows = parseOrders(await pollAndDownload(link)).map(slimOrder);
+      const ok = rows.filter((o) => { const d = toIso(o.orderDate); return d && d >= from && d <= to; });
+      if (rows.length && ok.length >= rows.length * 0.8) inWin = ok;
+      else { console.log(`  attempt ${attempt}: got a different file (${ok.length}/${rows.length} rows in range) — waiting`); await new Promise(r => setTimeout(r, 20000)); }
+    }
     let added = 0;
-    inWin.forEach((o) => { const k = [o.channelSubOrderId || o.channelOrderId, o.sku, o.channel].join('|'); if (seen.has(k)) return; seen.add(k); all.push(o); added++; });
-    console.log(`  ${rows.length} rows, ${added} new.`);
-    await new Promise(r => setTimeout(r, 20000));   // let OMS Guru finish one export before asking the next
+    inWin.forEach((o) => { const k = keyOf(o); if (seen.has(k)) return; seen.add(k); all.push(o); added++; });
+    console.log(`  ${inWin.length} rows in range, ${added} new.`);
+    await new Promise(r => setTimeout(r, 20000));
   }
+  // keep every older row already in the archive (a bad export can never erase saved days)
+  const svc = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  if (!admin.apps.length) admin.initializeApp({ credential: admin.credential.cert(svc) });
+  const old = await admin.firestore().collection('aikm_admin').doc(ARCHIVE_DOC).collection('chunks').get();
+  let kept = 0;
+  old.forEach((d) => (d.data().orders || []).forEach((o) => { const k = keyOf(o); if (seen.has(k)) return; seen.add(k); all.push(o); kept++; }));
+  console.log(`Kept ${kept} older archived row(s).`);
   // keep only what billing needs, so the archive stays small and quick to read
   const shipped = all.filter((o) => String(o.shipmentDate || '').trim()).map((o) => ({
     orderDate: o.orderDate, shipmentDate: o.shipmentDate, channel: o.channel, channelOrderId: o.channelOrderId, channelSubOrderId: o.channelSubOrderId,
