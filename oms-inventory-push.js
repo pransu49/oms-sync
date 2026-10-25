@@ -225,7 +225,8 @@ async function main() {
       // OOS: Amazon must show 0 = In Stock - Blocked. Already 0 or less -> leave In Stock as it is; else set In Stock = Blocked.
       return { ...o, free, oos, target: oos ? (cur0 <= bl ? cur0 : bl) : o.units };
     });
-    const best = opts.reduce((a, b) => ((b.oos ? -1 : b.free) < (a.oos ? -1 : a.free) ? b : a));
+    // never oversell: any link that says out of stock wins; otherwise the link giving the FEWEST Amazon units
+    const best = opts.find((o) => o.oos) || opts.reduce((a, b) => (b.units < a.units ? b : a));
     const differ = new Set(opts.map((o) => (o.oos ? 0 : o.free))).size > 1;
     if (differ) conflicts++;
     const cur = omsQty[g.sku], newQty = best.target;
