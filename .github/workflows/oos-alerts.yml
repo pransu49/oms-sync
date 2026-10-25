@@ -1,0 +1,56 @@
+name: LOTS low stock alert (Telegram)
+
+# Daily full report at 2 pm and 9 pm IST: top-selling low-stock SKUs (text) + full list (PDF).
+# Sent once per slot (the robot remembers which slot it already sent).
+on:
+  # main trigger: piggy-back on the OMS sync (started every 10 min by cron-job.org)
+  workflow_run:
+    workflows: ['Sync OMS Guru Orders']
+    types: [completed]
+  schedule:
+    - cron: '45 8,15 * * *'   # backup only (2:15 pm and 9:15 pm IST) - GitHub's own timer often skips
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'true = send the full report now'
+        default: 'true'
+
+concurrency:
+  group: oos-alerts
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+      slot: ${{ steps.g.outputs.slot }}
+    steps:
+      - id: g
+        shell: bash
+        run: |
+          h=$((10#$(TZ=Asia/Kolkata date +%H))); mi=$((10#$(TZ=Asia/Kolkata date +%M))); d=$(TZ=Asia/Kolkata date +%F)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "go=1" >> $GITHUB_OUTPUT; exit 0; fi
+          # 2 pm and 9 pm IST; the first hour after it also counts, so a late GitHub timer still sends (once)
+          if [ $h -eq 14 ] || [ $h -eq 21 ]; then echo "go=1" >> $GITHUB_OUTPUT; echo "slot=$d-$h" >> $GITHUB_OUTPUT; echo "report slot $d-$h"
+          else echo "go=0" >> $GITHUB_OUTPUT; echo "skip: reports go at 2 pm and 9 pm IST"; fi
+
+  oos:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund firebase-admin pdf-lib@1.17.1
+      - run: node oos-alerts.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}   # sales of the last 30 days
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SLOT: ${{ needs.gate.outputs.slot || '' }}
+          FORCE: ${{ inputs.force || 'false' }}

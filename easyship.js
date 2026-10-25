@@ -3,7 +3,7 @@
 //   1. Logs into OMS Guru and reads the "New" orders of the 5 Amazon accounts
 //   2. Easy Ship order = NO "Self Fulfilled Order" tag AND buyer phone = NA (both must agree,
 //      otherwise the order goes to the "Check manually" list and is NOT touched)
-//   3. Takes only orders whose SLA date is today (or already passed)
+//   3. Takes only orders whose SLA date is due. Bulky orders (>4 units or >3 kg) are packed when PREPAID; COD bulky ones are skipped
 //   4. Packs them in OMS Guru with the 2:00 PM pickup slot ON the SLA date (today for overdue) — never earlier
 //   5. Downloads every label, merges them into one PDF per account (sorted by product),
 //      and saves the PDFs + a summary (picklist, failed list) to the console's Firestore
@@ -18,6 +18,7 @@
 const cheerio = require('cheerio');
 const { PDFDocument } = require('pdf-lib');
 const admin = require('firebase-admin');
+const { picklistPdf, sendTelegramPdf } = require('./picklist-pdf');
 
 const EMAIL = process.env.OMS_EMAIL, PASSWORD = process.env.OMS_PASSWORD;
 const DRY = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
@@ -32,8 +33,8 @@ const H = {
 const ACCOUNTS = { 45608: 'AIKM Pharma', 45614: 'E Commerce Munda', 45619: 'Praso Enterprises', 45611: 'Sasta Store', 45616: 'Vishal E Commerce' };
 const WAREHOUSE = 22452;            // DEFAULT 310803 (own warehouse)
 const SLOT_TIME = '2:00 PM';
-const MAX_QTY = 4;                  // skip orders with more than 4 units in total
-const MAX_WEIGHT_G = 3000;          // skip orders heavier than 3 kg (OMS weight)        // pickup slot start — always the 2 PM slot
+const MAX_QTY = 4;                  // COD orders with more than 4 units are skipped (prepaid are always packed)
+const MAX_WEIGHT_G = 3000;          // COD orders heavier than 3 kg are skipped (prepaid are always packed)
 const BATCH = 25;                   // orders per Pack request
 const CONC = 3;                     // parallel page reads (OMS 'busy' replies are retried)
 const KEEP_RUNS = 3;                // label PDFs kept in Firestore for the last N runs
@@ -163,6 +164,7 @@ async function readOrder(vid) {
   const dd = {};
   $('dt').each((_, el) => { const k = clean($(el).text()).replace(/:$/, '').toLowerCase(); if (k && !(k in dd)) dd[k] = clean($(el).next('dd').text()); });
   const inv = dd['invoice number'] || '';
+  const pay = dd['payment method'] || dd['payment mode'] || dd['payment type'] || dd['order type'] || dd['payment'] || '';
   // newest row of the "Invoice Failed Logs" table
   let lastFail = '', lastFailAt = 0;
   $('table').each((_, t) => {
@@ -181,7 +183,7 @@ async function readOrder(vid) {
     awb: ((dd['shipment tracker'] || '').match(/\d{6,}/) || [])[0] || '',
     sla: slaToIso(dd['sla date'] || ''),
     weightG: toGrams($('a[data-name="dead_weight"]').first().text() || dd['weight']), volWeightG: toGrams(dd['vol weight']),
-    items, labelId, lastFail, lastFailAt,
+    items, labelId, lastFail, lastFailAt, pay,
   };
 }
 function toGrams(v) {
@@ -195,6 +197,29 @@ function failReason(lastFail) {
   const m = lastFail.match(/"message\\?"\s*:\s*\\?"([^"\\]+)/) || lastFail.match(/message[^A-Za-z]+([A-Za-z][^"\\}]{10,200})/);
   const c = lastFail.match(/"code\\?"\s*:\s*\\?"(\w+)/);
   return clean((c ? c[1] + ': ' : '') + (m ? m[1] : lastFail.replace(/^\S+ \d+, \d{4} [\d:]+ [AP]M\s*/, '')));
+}
+
+// ---------- payment type (COD / Prepaid) ----------
+// From the OMS order export saved by sync.js (same Firebase project). Read only when a bulky order needs it.
+let PAY = null;
+async function payMap() {
+  if (PAY) return PAY;
+  PAY = {};
+  try {
+    (await db.collection('aikm_admin').doc('omsOrders').collection('chunks').get()).forEach((d) => (d.data().orders || []).forEach((o) => {
+      const id = String(o.channelOrderId || '').trim().replace(/_\d+$/, ''); if (!id) return;
+      const cod = /\bcod\b|cash/i.test(o.orderType || '') || (parseFloat(String(o.codCollectible || '').replace(/[^\d.]/g, '')) || 0) > 0;
+      if (o.orderType || o.codCollectible) PAY[id] = PAY[id] === 'cod' || cod ? 'cod' : 'prepaid';
+    }));
+  } catch (e) { console.log('Could not read payment types:', e.message); }
+  return PAY;
+}
+function payOf(o) {
+  const p = PAY && PAY[o.orderId];
+  if (p) return p;
+  if (/\bcod\b|cash/i.test(o.pay || '')) return 'cod';
+  if (/prepaid|online/i.test(o.pay || '')) return 'prepaid';
+  return '';
 }
 
 // ---------- 2. pack ----------
@@ -353,7 +378,8 @@ async function main() {
     console.log(`Packed / Ready To Ship (SLA ${TARGET}, Easy Ship): ${rts.length} orders · ${got.length} with labels`);
     const byA = {}; rts.forEach((r, i) => { const d = det[i] || {}; const k = `${r.account} ${d.labelId ? 'label' : 'NO label'}`; byA[k] = (byA[k] || 0) + 1; });
     Object.entries(byA).forEach(([k, n]) => console.log(`  ${k}: ${n}`));
-    const summary = { runId: RUN_ID, target: TARGET, dryRun: false, limit: 0, trigger: TRIGGER, collect: true, startedAt: new Date(t0).toISOString(), found: got.length, check: [], skipped: [] };
+    const prevLast = ((await mainRef.get()).get('last')) || {};
+    const summary = { runId: RUN_ID, target: TARGET, dryRun: false, limit: 0, trigger: TRIGGER, collect: true, startedAt: new Date(t0).toISOString(), found: got.length, check: [], skipped: [], upcoming: prevLast.upcoming || {} };
     return finish(summary, got, [], [], t0);
   }
 
@@ -370,6 +396,8 @@ async function main() {
   await status({ state: 'running', step: `Checking ${due.length} due orders` });
   const details = await pool(due, (r) => readOrder(r.vid));
   const easy = [], check = [], skipped = [];
+  const bulky = (o) => (o.items || []).reduce((a, x) => a + (x.qty || 0), 0) > MAX_QTY || o.weightG > MAX_WEIGHT_G;
+  if (due.some((r, i) => details[i] && !details[i].error && bulky(details[i]))) await payMap();
   due.forEach((r, i) => {
     const d = details[i] || {};
     if (d.error) { check.push({ ...r, reason: 'Could not open order page: ' + d.error }); return; }
@@ -377,8 +405,10 @@ async function main() {
     if (o.invoice || o.labelId) { check.push({ ...o, reason: 'Already has an invoice/label but is still in New' }); return; }
     if (!/^NA$/i.test(o.phone)) { check.push({ ...o, reason: 'Buyer mobile present — looks like Self-Ship, not packed' }); return; }
     const units = (o.items || []).reduce((a, x) => a + (x.qty || 0), 0);
-    if (units > MAX_QTY || o.weightG > MAX_WEIGHT_G) {
-      skipped.push({ ...o, reason: [units > MAX_QTY ? `${units} units (more than ${MAX_QTY})` : '', o.weightG > MAX_WEIGHT_G ? `${(o.weightG / 1000).toFixed(2)} kg (more than 3 kg)` : ''].filter(Boolean).join(' · ') });
+    // bulky (more than 4 units or over 3 kg): prepaid orders are still packed; COD / unknown payment are skipped
+    if ((units > MAX_QTY || o.weightG > MAX_WEIGHT_G) && payOf(o) !== 'prepaid') {
+      const pt = payOf(o);
+      skipped.push({ ...o, reason: [units > MAX_QTY ? `${units} units (more than ${MAX_QTY})` : '', o.weightG > MAX_WEIGHT_G ? `${(o.weightG / 1000).toFixed(2)} kg (more than 3 kg)` : '', pt === 'cod' ? 'COD' : 'payment type not found'].filter(Boolean).join(' · ') });
       return;
     }
     easy.push(o);
@@ -386,7 +416,7 @@ async function main() {
   if (process.env.PROBE === 'true') { const want = (process.env.PROBE_VIDS || '').split(',').filter(Boolean); if (want.length) { const res = await packBatch(want, TARGET); console.log(res); return; } }
   let toPack = easy.sort((a, b) => (a.sla + a.cc).localeCompare(b.sla + b.cc));
   if (LIMIT) toPack = toPack.slice(0, LIMIT);
-  console.log(`Confirmed Easy Ship: ${easy.length} · skipped (qty>4 or >3 kg): ${skipped.length} · check manually: ${check.length} · will pack: ${toPack.length}`);
+  console.log(`Confirmed Easy Ship: ${easy.length} · skipped (COD with qty>4 or >3 kg): ${skipped.length} · check manually: ${check.length} · will pack: ${toPack.length}`);
 
   const summary = {
     runId: RUN_ID, target: TARGET, dryRun: DRY, limit: LIMIT, trigger: TRIGGER,
@@ -403,7 +433,7 @@ async function main() {
     Object.entries(lastErr).forEach(([k, n]) => console.log(`  earlier OMS error ×${n}: ${k}`));
     summary.byAccount = {}; toPack.forEach((o) => { summary.byAccount[o.account] = summary.byAccount[o.account] || { packed: 0, wouldPack: 0, labels: 0 }; summary.byAccount[o.account].wouldPack++; });
     summary.finishedAt = new Date().toISOString(); summary.state = 'done';
-    await mainRef.set({ live: { runId: RUN_ID, state: 'done', step: 'Dry run finished', updatedAt: summary.finishedAt }, lastDry: summary }, { merge: true });
+    await mainRef.set({ live: { runId: RUN_ID, state: 'done', step: 'Dry run finished', updatedAt: summary.finishedAt }, lastDry: summary }, { mergeFields: ['live', 'lastDry'] });
     console.log('Dry run done.');
     return;
   }
@@ -486,6 +516,17 @@ async function finish(summary, packed, failed, batchNotes, t0) {
   const pick = {};
   packed.forEach((o) => o.items.forEach((x) => { pick[x.sku] = (pick[x.sku] || 0) + x.qty; }));
   summary.picklist = Object.entries(pick).sort((a, b) => b[1] - a[1]).map(([sku, qty]) => ({ sku, qty }));
+  // picklist as a premium PDF on Telegram (same design for every robot)
+  if (packed.length) {
+    const byAccSku = {};
+    packed.forEach((o) => o.items.forEach((x) => { const r = (byAccSku[x.sku] = byAccSku[x.sku] || {}); r[o.account] = (r[o.account] || 0) + x.qty; }));
+    try {
+      const pl = await picklistPdf({ title: 'Amazon Easy Ship', date: TARGET, orders: packed.length, rows: summary.picklist.map((x) => ({ name: x.sku, qty: x.qty, accounts: byAccSku[x.sku] })), note: `SLA date ${TARGET} - 2:00 PM pickup` });
+      const units = summary.picklist.reduce((a, x) => a + x.qty, 0);
+      const ok = await sendTelegramPdf(`Picklist_Amazon_EasyShip_SLA-${TARGET}.pdf`, pl, `🧾 Picklist — Amazon Easy Ship — SLA ${TARGET}\n${packed.length} orders · ${units} units · ${summary.picklist.length} products`);
+      console.log(`Picklist PDF ${ok ? 'sent to Telegram' : 'not sent'}.`);
+    } catch (e) { console.log('Picklist PDF failed:', e.message); }
+  }
   summary.packed = packed.length;
   summary.packedOrders = packed.map((o) => ({ orderId: o.orderId, account: o.account, sla: o.sla, awb: o.awb, invoice: o.invoice, sku: o.items.map((x) => `${x.sku} ×${x.qty}`).join(', ') }));
   summary.failed = failed.map((o) => ({ orderId: o.orderId, account: o.account, sla: o.sla, sku: (o.items || []).map((x) => `${x.sku} ×${x.qty}`).join(', '), reason: o.packError }));
@@ -497,7 +538,8 @@ async function finish(summary, packed, failed, batchNotes, t0) {
   const prev = await mainRef.get();
   const history = ((prev.exists && prev.get('history')) || []).filter((h) => h.runId !== RUN_ID);
   const keep = [{ runId: RUN_ID, target: TARGET, packed: packed.length, failed: failed.length, finishedAt: summary.finishedAt, labelFiles: summary.labelFiles }, ...history].slice(0, KEEP_RUNS);
-  await mainRef.set({ last: summary, history: keep, live: { runId: RUN_ID, state: 'done', step: `Done — ${packed.length} packed, ${failed.length} failed`, updatedAt: summary.finishedAt } }, { merge: true });
+  // mergeFields = replace these fields completely (plain merge kept old accounts' labels and old SLA dates)
+  await mainRef.set({ last: summary, history: keep, live: { runId: RUN_ID, state: 'done', step: `Done — ${packed.length} packed, ${failed.length} failed`, updatedAt: summary.finishedAt } }, { mergeFields: ['last', 'history', 'live'] });
   const removed = await pruneOldLabels(keep.map((h) => h.runId));
   console.log(`Saved. Old label parts removed: ${removed}. Took ${Math.round((Date.now() - t0) / 1000)}s.`);
 }

@@ -14,17 +14,23 @@
   // LOTS item codes that are mapped to an Amazon ASIN (same rules as the page's own "Mapped on Amazon")
   (function watchMap() {
     if (typeof fbDb === "undefined" || !fbDb) return void setTimeout(watchMap, 2000);
-    fbDb.collection("aikm_admin").doc("spapiAsinLotsMap").onSnapshot(function (d) {
-      var map = (d.exists && d.data().map) || {}, m = {};
-      Object.keys(map).forEach(function (asin) {
+    // main mapping record + overflow record (spapiAsinLotsMap2, used when the main one is full - 24 Oct 2026)
+    var maps = { a: {}, b: {} };
+    function rebuild() {
+      var m = {};
+      [maps.a, maps.b].forEach(function (map) { Object.keys(map).forEach(function (asin) {
         var r = map[asin]; if (!r) return;
         if (r.vendorName && String(r.vendorName).toUpperCase() !== "LOTS") return;
         var parts = Array.isArray(r.parts) && r.parts.length ? r.parts : (r.code ? [{ code: r.code }] : []);
         parts.forEach(function (x) { if (x && x.code) m[String(x.code)] = 1; });
-      });
+      }); });
       mapped = m;
       if (on) redraw();
-    }, function (e) { console.warn("Price mismatch: Amazon mapping read failed", e); });
+    }
+    ["spapiAsinLotsMap", "spapiAsinLotsMap2"].forEach(function (id, k) {
+      fbDb.collection("aikm_admin").doc(id).onSnapshot(function (d) { maps[k ? "b" : "a"] = (d.exists && d.data().map) || {}; rebuild(); },
+        function (e) { console.warn("Price mismatch: Amazon mapping read failed", e); });
+    });
   })();
   function isMapped(p) { return !!mapped[String(p.code)]; }
   function rank(p) { return isMapped(p) ? 0 : 1; }

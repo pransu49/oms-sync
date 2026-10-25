@@ -12,6 +12,6 @@
   `console/refund-tab.js` (`aikmLossJs`). Keep that block when replacing `refund-tab.js`.
 - The RTO Check tab (`console/rto-tab.js`) is loaded by the block at the end of `console/refund-tab.js` (`aikmRtoJs`).
   Keep that block when replacing `refund-tab.js`. Its data comes from `rto-sync.js` (aikm_admin/rtoIndex).
-- The Meesho tab on the Amazon page (`console/meesho-tab.js`) is loaded by the block at the end of
-  `console/amazon-name-search.js` (`aikmMeeshoJs`). Keep that block when replacing `amazon-name-search.js`.
+- The Meesho Listing tab on the Amazon page (`console/meesho-listing.js`) is loaded by the block at the end of
+  `console/amazon-name-search.js` (`aikmMeeshoListingJs`). (Different from `console/meesho-tab.js`, the Meesho + Snapdeal packing page.) Keep that block when replacing `amazon-name-search.js`.
   Its Amazon details come from `meesho-robot.js` (workflow `meesho-robot.yml`, on command only) -> spapiSnapshots/meesho_<ASIN>.

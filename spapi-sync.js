@@ -689,6 +689,13 @@ async function syncCompetitivePricing(asinList) {
   if (changedCount > 0) await batch.commit();
   console.log(`Competitive pricing synced: ${changedCount} changed, ${skippedCount} unchanged of ${asinList.length} ASINs`);
   console.log(`Buy box summary — Held: ${buyBoxHeld} | Lost: ${buyBoxLost} | No offer: ${buyBoxNone} | Duplicates: ${duplicatesFound}`);
+  // Daily numbers for the 9 pm Telegram summary (owner, 24 Oct 2026): latest Buy Box counts + today's orders (IST)
+  try {
+    const ist = (t) => new Date(t + 5.5 * 3600e3).toISOString().slice(0, 10), today = ist(Date.now());
+    const orders = Object.values(SNAP.orders).filter((o) => o && (!o.account || o.account === ACCOUNT_LABEL) && !o.isCanceled
+      && !/^cancel/i.test(o.status || '') && o.purchaseDate && ist(Date.parse(o.purchaseDate)) === today).length;
+    await dbMain.collection('aikm_admin').doc('bbDaily').set({ [ACCOUNT_LABEL]: { [today]: { held: buyBoxHeld, lost: buyBoxLost, none: buyBoxNone, orders, at: Date.now() } } }, { merge: true });
+  } catch (e) { console.warn('Daily Buy Box numbers not saved:', e.message || e); }
 }
 
 // ── RELIST ROBOT: "Not selling" listings are relisted under a new SKU ────────────────────
@@ -725,13 +732,41 @@ const RELIST_OFFER_ATTRS = ['condition_type', 'condition_note', 'list_price', 'm
 // other-vendor bill cost, or a hand-entered cost) - never a name guess. No cost known = no change.
 const PRICE_FIX_MARGIN = 5;
 let costData = null;
+// Read saver (24 Oct 2026): the LOTS catalogue (~25 documents) only changes when the LOTS price sync
+// or a manual upload saves it, so it is kept in a file between runs (GitHub cache, see the workflow)
+// and re-read only when its "savedAt" stamp changed, or at least every 3 hours as a safety net.
+// Each run now costs 1 read for the stamp instead of ~25 for the whole catalogue.
+const LOTS_CACHE_FILE = '.cache/lots-catalog.json';
+const LOTS_CACHE_MAX_AGE = 3 * 3600e3;
+async function loadLotsCatalog(A) {
+  const fs = require('fs');
+  const parent = await A.doc('lotsCatalog').get();
+  const stamp = parent.exists ? JSON.stringify(parent.get('savedAt') ?? null) : null;
+  let cached = null;
+  try { cached = JSON.parse(fs.readFileSync(LOTS_CACHE_FILE, 'utf8')); } catch (e) { /* no cache yet */ }
+  if (cached && stamp && stamp !== 'null' && cached.stamp === stamp && Date.now() - (cached.readAt || 0) < LOTS_CACHE_MAX_AGE && cached.lots) {
+    console.log(`LOTS catalogue: unchanged since last read - used saved copy (${Object.keys(cached.lots).length} products, 1 read).`);
+    return cached.lots;
+  }
+  const chunks = await A.doc('lotsCatalog').collection('chunks').get();
+  const lots = {};
+  chunks.docs.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code) lots[String(p.code)] = p; }));
+  console.log(`LOTS catalogue: read fresh (${chunks.size} document(s), ${Object.keys(lots).length} products).`);
+  try { fs.mkdirSync('.cache', { recursive: true }); fs.writeFileSync(LOTS_CACHE_FILE, JSON.stringify({ stamp, readAt: Date.now(), lots })); } catch (e) { console.warn('LOTS cache not saved:', e.message || e); }
+  return lots;
+}
 async function loadCostData() {
   if (costData) return costData;
   const A = dbMain.collection('aikm_admin');
-  const [chunks, map, man] = await Promise.all([A.doc('lotsCatalog').collection('chunks').get(), A.doc('spapiAsinLotsMap').get(), A.doc('spapiManualCosts').get()]);
-  const lots = {};
-  chunks.docs.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code) lots[String(p.code)] = p; }));
-  costData = { lots, map: (map.exists && map.data().map) || {}, manual: (man.exists && man.data().costs) || {} };
+  const [lots, map, map2, man] = await Promise.all([loadLotsCatalog(A), A.doc('spapiAsinLotsMap').get(), A.doc('spapiAsinLotsMap2').get().catch(() => null), A.doc('spapiManualCosts').get()]);
+  // Owner, 24 Oct 2026: mappings were "not getting saved" - spapiAsinLotsMap is one Firestore document (1 MB limit).
+  // The Amazon page now writes to spapiAsinLotsMap2 when the main one is full; the newer record of an ASIN wins.
+  const m1 = (map.exists && map.data().map) || {}, m2 = (map2 && map2.exists && map2.data().map) || {};
+  const merged = { ...m1 };
+  Object.entries(m2).forEach(([a, r]) => { if (!merged[a] || String((r && r.savedAt) || '') >= String((merged[a] && merged[a].savedAt) || '')) merged[a] = r; });
+  const kb = Math.round(JSON.stringify(m1).length / 1024);
+  console.log(`ASIN mappings: ${Object.keys(m1).length} in the main record (~${kb} KB of 1024 KB)${Object.keys(m2).length ? `, ${Object.keys(m2).length} in the overflow record` : ''}.`);
+  costData = { lots, map: merged, manual: (man.exists && man.data().costs) || {} };
   return costData;
 }
 function bestSlab(p) { const s = (p && p.slabs) || []; let b = null; s.forEach((x) => { const v = Number(x.price); if (v > 0 && (b == null || v < b)) b = v; }); return b; }
@@ -768,8 +803,8 @@ function pricedOut(i, o) {
 }
 async function fixSuppressedPrice(sellerId, i, old, productType, why) {
   // Owner, 21 Oct 2026: blocked listings must come back live at a profitable price.
-  // Target = ₹1 under the Buy Box (landed, incl. shipping). If that earns under ₹15/order, go live at the lowest
-  // price that earns ₹15 instead (listed and earning beats suppressed). The listing's own min/max price limits are
+  // Target = ₹1 under the Buy Box (landed, incl. shipping). If that earns under the rule (₹15 or 10%), go live at the lowest
+  // price that meets it instead (listed and earning beats suppressed). The listing's own min/max price limits are
   // moved to fit (Amazon error 18155 "below your minimum price threshold" was blocking 4 listings).
   const L = (o) => (o.price || 0) + (o.shipping || 0);
   const offers = (relistFresh.get(i.asin) || []).filter((o) => !o.isMine && o.price > 0).sort((x, y) => L(x) - L(y));
@@ -781,10 +816,10 @@ async function fixSuppressedPrice(sellerId, i, old, productType, why) {
   const floor = Math.ceil(noLossFloor(i, kc.cost, i.price, ship));
   let target = ref ? Math.floor(L(ref) - 1 - ship) : Math.max(i.price, floor);
   let basis = ref ? `${bb ? 'Buy Box' : 'lowest seller'} ₹${Math.round(L(ref))} incl. shipping − ₹1` : 'no other seller';
-  if (orderProfit(i, kc.cost, target, ship) < MIN_PROFIT) { target = floor; basis = `lowest price that earns ₹${MIN_PROFIT}/order (Buy Box too cheap to match)`; }
+  if (!priceOk(i, kc.cost, target, ship)) { target = floor; basis = `lowest price that earns ${RULE_TXT}/order (Buy Box too cheap to match)`; }
   if (/low pricing error/i.test(why || '') && target <= i.price) { target = Math.ceil(i.price) + 1; basis = 'Amazon flagged the price as too low - re-submitted ₹1 higher'; }
   if (mrp && target > mrp) {
-    if (floor > mrp) return { done: false, note: `Earning ₹${MIN_PROFIT}/order needs ₹${floor}, above MRP ₹${mrp} - check the cost (${kc.src} ₹${kc.cost}).` };
+    if (floor > mrp) return { done: false, note: `Earning ${RULE_TXT}/order needs ₹${floor}, above MRP ₹${mrp} - check the cost (${kc.src} ₹${kc.cost}).` };
     target = Math.floor(mrp);
   }
   await setOfferPrice(sellerId, i, old, productType, target);   // also moves min/max limits so the price fits
@@ -1051,8 +1086,29 @@ function closingFee(p) { return p <= 300 ? 2 : p <= 500 ? 23 : p <= 1000 ? 48 : 
 //   Praso ships mostly Easy Ship -> Amazon's Easy Ship weight fee. Rs 3 per order kept aside for returns (RTO ~3%).
 const SELF_SHIP_ACCOUNTS = new Set(['sastastore']);
 // Owner, 21 Oct 2026: reseller of branded goods - margin comes mostly from the shipping charge.
-// Never go below Rs 15 profit per order; Rs 20 is the target (flagged in the log when a change lands between 15 and 20).
-const MIN_PROFIT = 15, TARGET_PROFIT = 20;
+// (21 Oct: Rs 15 minimum / Rs 20 target; 24 Oct: Rs 5; 24 Oct later: Rs 15 OR 10% of price - see profitOk.)
+// Owner, 24 Oct 2026: "maximum Buy Box with profit, never a loss - more Buy Boxes bring more sales".
+// TARGET_PROFIT is only a label now (was the loss-guard target).
+const MIN_PROFIT = 5, TARGET_PROFIT = 20;
+// Owner, 24 Oct 2026 (later the same day): "minimum 15 per order or 10% profit per order".
+// An order price is OK when its profit is at least Rs 15 OR at least 10% of the order value (price + the shipping
+// charge the buyer pays) - whichever is lower, so cheap items can still win the Buy Box at 10%, never at a loss.
+// Also never below the product's own cost (owner sees that as a loss even when the shipping charge covers it).
+// (MIN_PROFIT above is no longer the floor; it stays only for old log wording.)
+const FLOOR_RS = 15, FLOOR_PCT = 0.10;
+const RULE_TXT = `₹${FLOOR_RS} or ${FLOOR_PCT * 100}%`;
+function minProfitAt(price, ship) { return Math.min(FLOOR_RS, FLOOR_PCT * ((Number(price) || 0) + (Number(ship) || 0))); }
+function profitOk(i, cost, price, ship) {
+  const sh = ship == null ? myShipCharge(i) : ship;
+  return orderProfit(i, cost, price, sh) >= minProfitAt(price, sh) - 1e-9;
+}
+// lowest price whose profit meets the rule (null if none up to the limit) - never below the product's own cost
+function floorPrice(i, cost, ship, limit) {
+  const lim = limit || cost * 4 + 500;
+  for (let p = Math.max(1, Math.ceil(cost)); p <= lim; p++) if (profitOk(i, cost, p, ship)) return p;
+  return null;
+}
+function priceOk(i, cost, price, ship) { return price >= cost && profitOk(i, cost, price, ship); }
 function courierCost(kg) { const n = Math.max(Number(kg) || 0.5, 0.5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
 function shipCostFor(i) { return SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? courierCost(i.weightKg) : Math.max(easyShipFee(i.weightKg), 45); }
 function myShipCharge(i) { const m = (relistFresh.get(i.asin) || []).find((o) => o.isMine); return m && m.shipping != null ? Number(m.shipping) : (SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? 74 : 80); }
@@ -1110,12 +1166,17 @@ async function refreshFeeEstimates() {
   await dbMain.collection('aikm_admin').doc(`spapiFees_${ACCOUNT_LABEL}`).set({ fees: FEES, updatedAt: now });
   console.log(`Fee estimates: ${got} of ${todo.length} refreshed from Amazon (${Object.keys(FEES).length} stored).`);
 }
-// lowest price that still earns MIN_PROFIT per order
+// lowest price that meets the profit rule (Rs 15 or 10% of price)
 function noLossFloor(i, cost, price, ship = myShipCharge(i)) {
-  return Math.ceil(price - orderProfit(i, cost, price, ship) + MIN_PROFIT);
+  return floorPrice(i, cost, ship, Math.max(price * 4, cost * 4) + 500) || Math.ceil(price - orderProfit(i, cost, price, ship) + FLOOR_RS);
 }
 const OUR_SELLER_IDS = new Set(['AI66SST976WPS', 'A1KF1CBHR5UA1W', process.env.SPAPI_SELLER_ID].filter(Boolean));
 const BB_MAX_PER_RUN = 80, BB_MAX_RAISE_PER_RUN = 30, BB_MAX_CUT = 0.3, BB_MAX_RAISE = 0.2, BB_COOL_MS = 2 * 3600e3;   // re-check each price every 2 h for maximum Buy Box
+// Owner, 24 Oct 2026: sales dipped after the robot started raising prices while holding the Buy Box (20 Oct evening:
+// ~30 raises per run, up to +20% each; Sasta Store Buy Boxes 306 -> 241). Raising while holding is now OFF unless
+// the workflow sets BB_RAISE=on. Raised listings that then lost the Buy Box go back to their price before the raise.
+const BB_RAISE_ON = String(process.env.BB_RAISE || '').toLowerCase() === 'on';
+const RAISE_UNDO_FROM = Date.parse('2026-10-20T12:00:00Z'), RAISE_UNDO_PER_RUN = 40;
 async function setOfferPrice(sellerId, i, old, productType, price) {
   const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
   delete po.start_at; delete po.end_at;
@@ -1155,8 +1216,8 @@ async function loadManualPrices() {
   return out;
 }
 async function runBuyBoxPricer(sellerId, eligible, st, log) {
-  // Owner, 21 Oct 2026: win the Buy Box at ANY gap as long as each order still earns MIN_PROFIT,
-  // never lower a price the owner set himself in the last 7 days, and lift loss-making prices to TARGET_PROFIT.
+  // Owner, 24 Oct 2026: win the Buy Box at ANY gap as long as each order still earns Rs 15 or 10% of the price,
+  // never lower a price the owner set himself in the last 7 days, and lift prices under that rule just up to it.
   // and raise the price when we hold the Buy Box and the next seller is Rs 3+ above us.
   const now = Date.now(), L = (o) => (o.price || 0) + (o.shipping || 0), lower = [], raise = [];
   for (const i of eligible) {
@@ -1181,62 +1242,87 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   console.log(`Buy Box pricer: ${lower.length} lost on price, ${raise.length} held (raise check).`);
   let lowered = 0, raised = 0, skipped = 0, guarded = 0;
   const manual = await loadManualPrices().catch(() => new Map());
+  // ── FORECAST (owner, 24 Oct 2026: "how many Buy Boxes will I get"): every listing that lost on price, sorted by why ──
+  try {
+    const fc = { win: 0, rule: 0, costOnly: 0, cut: 0, nocost: 0, owner: 0 };
+    for (const { i, mine, win } of lower) {
+      if (manual.has(i.sku)) { fc.owner++; continue; }
+      const kc = await knownCost(i).catch(() => null); if (!kc) { fc.nocost++; continue; }
+      const ship = Number(mine.shipping) || 0, target = Math.floor(L(win) - 1 - ship);
+      if (!priceOk(i, kc.cost, target, ship)) { fc.rule++; if (profitOk(i, kc.cost, target, ship)) fc.costOnly++; }
+      else if (target < i.price * (1 - BB_MAX_CUT)) fc.cut++;
+      else fc.win++;
+    }
+    const msg = `Buy Box forecast (listings checked this run): holding ${raise.length} · ${lower.length} lost on price -> ${fc.win} can be won within ${RULE_TXT} (robot cuts up to ${BB_MAX_PER_RUN} per run), ` +
+      `${fc.rule} only below ${RULE_TXT} / cost (kept; ${fc.costOnly} of them meet the profit rule but would sell under cost), ${fc.cut} need a cut over ${BB_MAX_CUT * 100}% (check cost), ${fc.nocost} have no cost (map them), ${fc.owner} your own price · possible ${raise.length + fc.win}.`;
+    console.log(msg);
+    const att = await buildAttentionLists(units30).catch((e) => { console.warn('Attention lists skipped:', e.message || e); return null; });
+    await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_bbForecast`).set({ at: Date.now(), held: raise.length, lostOnPrice: lower.length, ...fc, possible: raise.length + fc.win, ruleText: RULE_TXT,
+      ...(att || {}) }).catch((e) => console.warn('Forecast not saved:', e.message || e));
+  } catch (e) { console.warn('Buy Box forecast skipped:', e.message || e); }
   const patchPrice = async (i, target) => {
     const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
       query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries'] } });
     const productType = ((old.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, i.sku);
     await setOfferPrice(sellerId, i, old, productType, target);
   };
+  // ── UNDO: robot raises (since 20 Oct) that lost the Buy Box go back to the price before the raise ──
+  await undoLostRaises(eligible, st, log, patchPrice, manual).catch((e) => console.warn('Raise undo skipped:', e.message || e));
   // ── LEARNING: judge earlier price changes on real sales before making new ones ──
   await learnFromChanges(sellerId, eligible, st, log, patchPrice).catch((e) => console.warn('Robot learning skipped:', e.message || e));
 
   // LOSS GUARD (owner, 21 Oct 2026: "make the business profitable"): a listing whose current price earns under
-  // MIN_PROFIT per order is moved up to the TARGET_PROFIT price - never above MRP, never more than +30% in one step.
+  // the rule (Rs 15 or 10%) is moved up to the lowest price that meets it - never above MRP, never more than +30% in one step.
   const guardDone = new Set();
   for (const i of eligible) {
     if (guarded >= BB_MAX_RAISE_PER_RUN) break;
     if (st.bbCool[i.sku] > now || manual.has(i.sku)) continue;
     const kc = await knownCost(i).catch(() => null); if (!kc) continue;
     const ship = myShipCharge(i), profit = orderProfit(i, kc.cost, i.price, ship);
-    if (profit >= MIN_PROFIT) continue;
+    if (profitOk(i, kc.cost, i.price, ship)) continue;   // profit rule met - never raise just because the price is under cost (shipping charge covers it)
     guardDone.add(i.sku); st.bbCool[i.sku] = now + BB_COOL_MS;
     // Search the real price (fees and GST change with price: closing fee jumps at Rs 300 / 500 / 1000).
     const mrp = Number(i.mrp) || Infinity, cap = Math.floor(Math.min(mrp, i.price * 1.3));
     let target = null, okMin = null;
     for (let pz = Math.ceil(i.price) + 1; pz <= cap; pz++) {
       const pf = orderProfit(i, kc.cost, pz, ship);
-      if (okMin == null && pf >= MIN_PROFIT) okMin = pz;
-      if (pf >= TARGET_PROFIT) { target = pz; break; }
+      if (pf >= minProfitAt(pz, ship)) { okMin = pz; break; }   // smallest raise that stops the loss - keeps the Buy Box chance
     }
-    target = target || okMin;
-    if (!target) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. No price up to ₹${cap} (${cap === Math.floor(mrp) ? 'MRP' : '+30%'}) earns ₹${MIN_PROFIT}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
+    target = okMin;
+    if (!target) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. No price up to ₹${cap} (${cap === Math.floor(mrp) ? 'MRP' : '+30%'}) earns ${RULE_TXT}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
     try {
       const was = i.price; await patchPrice(i, target); guarded++; noteChange(st, i, 'raise', target, was);
       const np = orderProfit(i, kc.cost, target, ship);
       console.log(`Loss guard RAISE ${i.sku}: Rs ${was} -> Rs ${target} (was Rs ${profit}/order, now Rs ${np})`);
-      await log(i, { status: 'bb_raise', change: 'loss_guard', oldPrice: was, newPrice: target, profit: np, basis: `Was earning ₹${profit}/order (under ₹${MIN_PROFIT} minimum) · cost ₹${kc.cost} (${kc.src}) · now ₹${np}/order` });
+      await log(i, { status: 'bb_raise', change: 'loss_guard', oldPrice: was, newPrice: target, profit: np, basis: `Was earning ₹${profit}/order (under the ${RULE_TXT} minimum) · cost ₹${kc.cost} (${kc.src}) · now ₹${np}/order` });
     } catch (e) { console.warn(`Loss guard FAILED for ${i.sku}:`, e.message || e); }
     await new Promise((r) => setTimeout(r, 800));
   }
-  for (const { i, mine, win, gap } of lower.filter((x) => !guardDone.has(x.i.sku)).slice(0, BB_MAX_PER_RUN)) {
-    if (manual.has(i.sku)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. You set ₹${manual.get(i.sku).price} yourself - the robot leaves it for 7 days.` }); continue; }
+  // Go through ALL listings that lost on price (best sellers first) and stop after BB_MAX_PER_RUN real price cuts -
+  // before, only the first 80 were looked at, and when all 80 were unwinnable nothing was cut (24 Oct 2026).
+  let examined = 0; const logSkip = (i, rec) => (examined <= BB_MAX_PER_RUN ? log(i, rec) : null);   // same number of log writes as before
+  for (const { i, mine, win, gap } of lower.filter((x) => !guardDone.has(x.i.sku))) {
+    if (lowered >= BB_MAX_PER_RUN) break;
+    examined++;
+    if (manual.has(i.sku)) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. You set ₹${manual.get(i.sku).price} yourself - the robot leaves it for 7 days.` }); continue; }
     st.bbCool[i.sku] = now + BB_COOL_MS;
     try {
       const m = mem(i.sku);
       if (m.noLowerUntil > now) { skipped++; continue; }   // learned: cutting this one did not pay - resting
       if (m.warUntil > now) { skipped++; continue; }       // learned: price war - resting
       const kc = await knownCost(i), ship = Number(mine.shipping) || 0;
-      if (!kc) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no cost known. Map it on the Amazon page so the robot can price it.` }); continue; }
+      if (!kc) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap} - no cost known. Map it on the Amazon page so the robot can price it.` }); continue; }
       const target = Math.floor(L(win) - 1 - ship), profit = orderProfit(i, kc.cost, target, ship), floor = noLossFloor(i, kc.cost, target, ship);
-      if (profit < MIN_PROFIT) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ₹${MIN_PROFIT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
-      if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await log(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
+      if (!priceOk(i, kc.cost, target, ship)) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ${RULE_TXT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
+      if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
       const was = i.price; await patchPrice(i, target); lowered++; noteChange(st, i, 'lower', target, was);
-      console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${was} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order${profit < TARGET_PROFIT ? ', below Rs 20 target' : ''})`);
-      await log(i, { status: 'bb_price', change: 'lower', oldPrice: was, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, above ₹${MIN_PROFIT} minimum)` : ''}` });
-    } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await log(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
+      console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${was} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order)`);
+      await log(i, { status: 'bb_price', change: 'lower', oldPrice: was, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, meets the ${RULE_TXT} minimum)` : ''}` });
+    } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await logSkip(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
     await new Promise((r) => setTimeout(r, 800));
   }
-  for (const { i, mine, next } of raise) {
+  if (!BB_RAISE_ON && raise.length) console.log(`Buy Box pricer: raising while holding the Buy Box is OFF (${raise.length} held listings keep their price).`);
+  for (const { i, mine, next } of (BB_RAISE_ON ? raise : [])) {
     if (raised >= BB_MAX_RAISE_PER_RUN) break;
     if (guardDone.has(i.sku)) continue;
     const ship = Number(mine.shipping) || 0, mrp = Number(i.mrp) || Infinity;
@@ -1261,6 +1347,82 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
   console.log(`Buy Box pricer: ${guarded} loss-guard raises, ${lowered} lowered, ${raised} raised, ${skipped} kept (loss / no cost / big cut / your own price).`);
 }
 
+
+// ── ATTENTION LISTS for the Amazon page (owner, 24 Oct 2026: "more sales with profit") ─────────
+// noCost : in-stock self-ship listings the robot cannot price because no cost is known (Map them on the page).
+// noOffer: listings with no live offer from us, with the reason:
+//   restock_lots - Amazon stock 0 but LOTS has 10+ in stock -> update stock in OMS Guru (easy sale)
+//   not_selling  - in stock but Amazon hides the offer (the relist robot works on these)
+//   hidden_price - in stock, behind 20 cheaper offers (price problem)
+//   no_sellers   - nobody has a live offer (listing inactive / suppressed - check Seller Central)
+//   out_of_stock - Amazon stock 0 and LOTS low / unknown
+//   fba          - Amazon-fulfilled (Amazon controls it)
+// Uses data already loaded this run (no extra reads).
+async function buildAttentionLists(units30) {
+  const c = await loadCostData();
+  const lotsQ = (asin) => { const m = c.map[asin]; if (!m || (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS')) return null;
+    const code = m.code || (Array.isArray(m.parts) && m.parts[0] && m.parts[0].code); const p = code && c.lots[String(code)];
+    const q = p ? parseFloat(p.qty) : NaN; return isNaN(q) ? null : q; };
+  const statusOf = (offers) => { const w = offers.find((o) => o.isBuyBoxWinner), mine = offers.find((o) => o.isMine); return w && w.isMine ? 'held' : mine ? 'lost' : 'none'; };
+  const inv = Object.values(SNAP.inventory).filter((i) => i && i.account === ACCOUNT_LABEL && i.sku && i.asin && reportSkus.has(i.sku));
+  const noCost = [], noOffer = [];
+  for (const i of inv) {
+    const offers = relistFresh.get(i.asin); if (!offers) continue;
+    const fba = (i.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT', qty = Number(i.quantity) || 0, u30 = units30[i.asin] || 0;
+    const base = { sku: i.sku, asin: i.asin, name: String(i.name || '').slice(0, 90), price: i.price || null, qty, u30 };
+    if (!fba && qty > 0 && !(await knownCost(i).catch(() => null))) noCost.push({ ...base, st: statusOf(offers) });
+    if (offers.some((o) => o.isMine)) continue;
+    const lq = lotsQ(i.asin);
+    const r = fba ? 'fba' : qty <= 0 ? (lq != null && lq >= STOCK_GUARD_MIN ? 'restock_lots' : 'out_of_stock')
+      : pricedOut(i, offers) ? 'hidden_price' : !offers.length ? 'no_sellers' : 'not_selling';
+    noOffer.push({ ...base, r, lq });
+  }
+  const stRank = { lost: 0, none: 1, held: 2 }, rRank = { restock_lots: 0, not_selling: 1, hidden_price: 2, no_sellers: 3, out_of_stock: 4, fba: 5 };
+  noCost.sort((a, b) => (stRank[a.st] - stRank[b.st]) || (b.u30 - a.u30));
+  noOffer.sort((a, b) => (rRank[a.r] - rRank[b.r]) || (b.u30 - a.u30));
+  const counts = {}; noOffer.forEach((x) => { counts[x.r] = (counts[x.r] || 0) + 1; });
+  console.log(`Attention: ${noCost.length} in-stock listings have no cost (map them) · no offer ${noOffer.length}: ` +
+    Object.entries(counts).map(([k, v]) => `${v} ${k}`).join(', '));
+  return { noCostCount: noCost.length, noCost: noCost.slice(0, 500), noOfferCount: noOffer.length, noOfferBy: counts, noOffer: noOffer.slice(0, 600) };
+}
+
+// ── RAISE UNDO (owner, 24 Oct 2026: "sales dipped since the robot") ─────────────────────────
+// For each listing whose latest robot change is a Buy Box raise made since 20 Oct:
+//   • still holding the Buy Box at the higher price      -> keep (it works)
+//   • lost the Buy Box                                     -> back to the price before the raise(s), no raises for 14 days
+// Never touched: prices changed since (by hand or the page), owner-set prices (7-day rule), and loss-guard raises
+// (the old price earned under the rule Rs 15 or 10% - the owner's minimum stays).
+async function undoLostRaises(eligible, st, log, patchPrice, manual) {
+  const now = Date.now();
+  let undone = 0, kept = 0, skipped = 0;
+  for (const i of eligible) {
+    if (undone >= RAISE_UNDO_PER_RUN) break;
+    const m = st.learn[i.sku]; if (!m || !m.ch || !m.ch.length || (m.raiseUndo && m.raiseUndo !== 'loss_guard')) continue;
+    const ch = m.ch, last = ch[ch.length - 1];
+    if (last.kind !== 'raise' || last.at < RAISE_UNDO_FROM) continue;
+    let k = ch.length - 1; while (k > 0 && ch[k - 1].kind === 'raise' && ch[k - 1].at >= RAISE_UNDO_FROM) k--;
+    if (Math.abs(i.price - last.to) >= 1) { m.raiseUndo = 'changed'; skipped++; continue; }   // changed since - leave it
+    if (manual.has(i.sku)) { m.raiseUndo = 'owner'; skipped++; continue; }
+    const offers = relistFresh.get(i.asin) || [], win = offers.find((o) => o.isBuyBoxWinner);
+    if (win && win.isMine) { kept++; continue; }   // still winning at the higher price - check again next run
+    // Go back to the earliest price in this run of raises that still earns the minimum (skips loss-guard steps)
+    const kc = await knownCost(i).catch(() => null);
+    let orig = null;
+    for (let j = k; j < ch.length; j++) { const f = Number(ch[j].from); if (f > 0 && (!kc || profitOk(i, kc.cost, f))) { orig = f; break; } }
+    if (!orig || orig >= last.to) { m.raiseUndo = 'loss_guard'; skipped++; continue; }
+    try {
+      await patchPrice(i, orig); undone++;
+      m.raiseUndo = 'undone'; m.ceil = orig; m.ceilUntil = now + LEARN_REST_MS;
+      m.ch.push({ at: now, kind: 'revert', from: last.to, to: orig, judged: 'revert' });
+      st.bbCool[i.sku] = now + BB_COOL_MS;
+      console.log(`Raise undo ${i.sku}: Rs ${last.to} -> Rs ${orig} (robot raise lost the Buy Box)`);
+      await log(i, { status: 'learn_revert', oldPrice: last.to, newPrice: orig, profit: kc ? Math.round(orderProfit(i, kc.cost, orig)) : null,
+        basis: `Robot raised the price to ₹${last.to} and the Buy Box was lost - back to ₹${orig}. Raising while holding the Buy Box is now off.` });
+    } catch (e) { console.warn(`Raise undo failed for ${i.sku}:`, e.message || e); }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  console.log(`Raise undo: ${undone} put back to the price before the raise, ${kept} still winning at the higher price (kept), ${skipped} left alone (changed since / your price / ${RULE_TXT} minimum).`);
+}
 
 // ── ROBOT LEARNING (owner, 21 Oct 2026: "check trends and learn") ─────────────────────────
 // Every price change is remembered per SKU. 3 days later the robot compares real sales and profit
@@ -1593,7 +1755,7 @@ async function applyPendingHsnUpdates(sellerId) {
 // ── ADD ASIN (owner, 21 Oct 2026: "if we add an ASIN in the robot it should list on Amazon, making profit") ──
 // The Amazon page writes spapiAddAsin/{account_asin} = { account, asin, qty, cost?, mrp?, gst?, status:'pending' }.
 // Every sync (quick or full): check the ASIN, cost and competition, pick a PROFITABLE price, list it as a new offer.
-//   price = ₹1 under the Buy Box (incl. shipping) if that still earns ₹15+/order, else the price that earns ₹20/order;
+//   price = ₹1 under the Buy Box (incl. shipping) if that still earns ₹15 or 10%, else the lowest price that does;
 //           no other seller -> MRP. Never above MRP. No cost known -> waits for a cost (Map it on the page).
 // Result statuses: listed | exists | needs_cost | needs_mrp | blocked | loss | failed  (the page shows each, with Retry).
 const GST_CODE = { 0: 'A_GEN_EXEMPT', 0.25: 'A_GEN_MINIMUM', 3: 'A_GEN_JEWELLERY', 5: 'A_GEN_SUPERREDUCED', 18: 'A_GEN_STANDARD', 40: 'A_GEN_HIGHPEAK' };
@@ -1628,16 +1790,36 @@ async function mapByBarcode(asin, code) {
   const p = Object.values(c.lots).find((x) => x && x.barcode && strip(x.barcode) === strip(code));
   if (!p) return null;
   const rec = { code: String(p.code), name: p.name || '', vendorName: 'LOTS', parts: [{ code: String(p.code), name: p.name || '', qty: 1 }], savedAt: new Date().toISOString(), source: 'barcode' };
-  await dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').set({ map: { [asin]: rec } }, { merge: true });
+  await dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').set({ map: { [asin]: rec } }, { merge: true })
+    .catch(() => dbMain.collection('aikm_admin').doc('spapiAsinLotsMap2').set({ map: { [asin]: rec } }, { merge: true }));   // main record full -> overflow
   c.map[asin] = rec;
   console.log(`Add ASIN: barcode ${code} = LOTS ${p.code} (${p.name}) - mapped to ${asin}.`);
   return p;
 }
+// LOTS catalogue products can carry an ASIN; if exactly that ASIN has no mapping yet, map it to that LOTS product.
+async function mapByLotsAsin(asin) {
+  const c = await loadCostData(), A = String(asin || '').toUpperCase();
+  if (!A || c.map[A]) return null;
+  const p = Object.values(c.lots).find((x) => x && x.asin && String(x.asin).trim().toUpperCase() === A && bestSlab(x) != null);
+  if (!p) return null;
+  const rec = { code: String(p.code), name: p.name || '', vendorName: 'LOTS', parts: [{ code: String(p.code), name: p.name || '', qty: 1 }], savedAt: new Date().toISOString(), source: 'lots-asin' };
+  await dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').set({ map: { [A]: rec } }, { merge: true })
+    .catch(() => dbMain.collection('aikm_admin').doc('spapiAsinLotsMap2').set({ map: { [A]: rec } }, { merge: true }));
+  c.map[A] = rec;
+  console.log(`Add ASIN: ${A} = LOTS ${p.code} (${p.name}) from the LOTS catalogue ASIN - mapped.`);
+  return p;
+}
 async function applyAddAsinRequests(sellerId) {
   const snap = await db.collection('spapiAddAsin').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').limit(15).get();
-  if (snap.empty) { console.log('Add ASIN: nothing pending.'); return; }
-  console.log(`Add ASIN: ${snap.size} request(s).`);
-  for (const d of snap.docs) {
+  // Owner, 24 Oct 2026: a "Needs cost" row whose ASIN has been mapped since is retried automatically (no Retry click needed)
+  let mappedNow = [];
+  try {
+    const nc = await db.collection('spapiAddAsin').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'needs_cost').limit(60).get();
+    if (!nc.empty) { const c = await loadCostData(); mappedNow = nc.docs.filter((d) => { const a = String(d.data().asin || '').toUpperCase(); return a && (c.map[a] || Number(d.data().cost) > 0 || Object.values(c.lots).some((x) => x && x.asin && String(x.asin).trim().toUpperCase() === a)); }).slice(0, 15); }
+  } catch (e) { console.warn('Add ASIN: needs-cost check skipped:', e.message || e); }
+  if (snap.empty && !mappedNow.length) { console.log('Add ASIN: nothing pending.'); return; }
+  console.log(`Add ASIN: ${snap.size} request(s)${mappedNow.length ? ` + ${mappedNow.length} mapped since "Needs cost" (retried)` : ''}.`);
+  for (const d of snap.docs.concat(mappedNow)) {
     const r = d.data();
     let asin = String(r.asin || '').trim().toUpperCase();
     const done = (patch) => d.ref.set({ ...patch, doneAt: Date.now() }, { merge: true });
@@ -1682,6 +1864,10 @@ async function applyAddAsinRequests(sellerId) {
       let kc = Number(r.cost) > 0 ? { cost: Number(r.cost), src: 'typed' } : await knownCost(i);
       for (const o of oldOnes) { if (kc) break; kc = await knownCost({ ...i, sku: o.sku }); if (kc) kc.src += ' (old SKU)'; }
       if (kc && lotsHit && !(Number(r.cost) > 0)) kc.src = 'LOTS barcode match';
+      if (!kc) {   // 25 Oct 2026: a LOTS product that lists this ASIN in the catalogue maps itself (no Map click needed)
+        const auto = await mapByLotsAsin(asin);
+        if (auto) { const k2 = await knownCost(i); if (k2) { kc = k2; kc.src = 'LOTS (catalogue ASIN)'; } }
+      }
       if (!kc) { await done({ status: 'needs_cost', name, img: img ? img.link : null, error: 'No cost known. Click Map (or type the cost) and press Retry.' }); continue; }
       const mrpCat = Number(((((ca.maximum_retail_price || [])[0] || {}).value) ?? (((ca.list_price || [])[0] || {}).value)) || 0) || null;
       const oldMrp = (oldOnes.find((o) => Number(o.mrp) > 0) || {}).mrp;
@@ -1699,26 +1885,31 @@ async function applyAddAsinRequests(sellerId) {
       } catch (e) { console.warn(`Add ASIN offers failed for ${asin}:`, e.message || e); }
       const L = (o) => o.price + o.shipping, ship = myUsualShip();
       const ref = offers.find((o) => o.bb) || offers.slice().sort((a, b) => L(a) - L(b))[0];
-      const p15 = priceForProfit(i, kc.cost, ship, MIN_PROFIT), p20 = priceForProfit(i, kc.cost, ship, TARGET_PROFIT);
-      if (p15 == null || p15 > mrp) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Earning ₹${MIN_PROFIT}/order needs ₹${p15 || '?'}, above MRP ₹${mrp} (cost ₹${kc.cost}). Not listed.` }); continue; }
+      const p15 = floorPrice(i, kc.cost, ship);
+      if (p15 == null || p15 > mrp) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Earning ${RULE_TXT}/order needs ₹${p15 || '?'}, above MRP ₹${mrp} (cost ₹${kc.cost}). Not listed.` }); continue; }
       let price, basis;
       if (!ref) { price = Math.floor(mrp); basis = 'No other seller - listed at MRP'; }
       else {
         const win = Math.floor(L(ref) - 1 - ship);
-        if (orderProfit(i, kc.cost, win, ship) >= MIN_PROFIT) { price = win; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} incl. shipping − ₹1`; }
-        else { price = p20 && p20 <= mrp ? p20 : p15; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} is too cheap to match with profit - listed at the ₹${price === p20 ? TARGET_PROFIT : MIN_PROFIT}/order price`; }
+        if (priceOk(i, kc.cost, win, ship)) { price = win; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} incl. shipping − ₹1`; }
+        else { price = p15; basis = `${ref.bb ? 'Buy Box' : 'Lowest seller'} ₹${Math.round(L(ref))} is too cheap to match without loss - listed at the lowest price that earns ${RULE_TXT}/order`; }
       }
       price = Math.min(price, Math.floor(mrp));
-      // Owner's own price from the page (name search "Your price"): used as is (capped at MRP), but never below Rs MIN_PROFIT/order.
+      // Owner's own price from the page (name search "Your price"): used as is (capped at MRP), but never below the rule (Rs 15 or 10%).
       const want = Number(r.wantPrice);
       if (want > 0) {
         const wp = Math.min(Math.floor(want), Math.floor(mrp)), wpProfit = Math.round(orderProfit(i, kc.cost, wp, ship));
-        if (wpProfit < MIN_PROFIT) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Your price ₹${wp} earns only ₹${wpProfit}/order (minimum ₹${MIN_PROFIT}, needs ₹${p15}+). Change the price or clear it for auto price, then Retry.` }); continue; }
+        if (!priceOk(i, kc.cost, wp, ship)) { await done({ status: 'loss', name, img: img ? img.link : null, cost: kc.cost, mrp, error: `Your price ₹${wp} earns only ₹${wpProfit}/order (minimum ${RULE_TXT}, needs ₹${p15}+). Change the price or clear it for auto price, then Retry.` }); continue; }
         basis = `Your price ₹${wp}${wp < want ? ` (capped at MRP)` : ''} · robot's auto price would be ₹${price}`; price = wp;
       }
       const profit = Math.round(orderProfit(i, kc.cost, price, ship));
       // 5) list it (dry run first)
-      const qty = Math.max(1, Math.min(999, parseInt(r.qty) || 10));
+      let qty = Math.max(1, Math.min(999, parseInt(r.qty) || 10));
+      // Owner, 24 Oct 2026: a NEW listing whose LOTS-GN stock is under 12 goes live with stock 0 (OMS Guru can add stock later)
+      const lm = (await loadCostData()).map[asin], lcode = lm && (!lm.vendorName || String(lm.vendorName).toUpperCase() === 'LOTS') && (lm.code || (Array.isArray(lm.parts) && lm.parts[0] && lm.parts[0].code));
+      const lp = lcode ? (await loadCostData()).lots[String(lcode)] : null, lotsGn = lp ? parseFloat(lp.qty) : NaN;
+      let stockNote = '';
+      if (!isNaN(lotsGn) && lotsGn < NEW_LISTING_MIN_LOTS) { qty = 0; stockNote = `LOTS-GN stock ${lotsGn} is under ${NEW_LISTING_MIN_LOTS} - listed with stock 0`; }
       const attributes = {
         condition_type: [{ value: 'new_new', marketplace_id: MARKETPLACE_ID }],
         merchant_suggested_asin: [{ value: asin, marketplace_id: MARKETPLACE_ID }],
@@ -1754,6 +1945,7 @@ async function applyAddAsinRequests(sellerId) {
       if (replaced.length) basis = `Relisted - old ${replaced.join(', ')} deleted · ${basis}`;
       if (notDeleted.length) basis = `⚠ Old ${notDeleted.join(', ')} could NOT be deleted - delete it in Seller Central · ${basis}`;
       if (fbaOnes.length) basis += ` · FBA listing ${fbaOnes.map((x) => x.sku).join(', ')} left as is`;
+      if (stockNote) { basis = `${stockNote} · ${basis}`; console.log(`Add ASIN ${sku}: ${stockNote}.`); }
       await done({ status: 'listed', sku, name, img: img ? img.link : null, price, mrp, qty, cost: kc.cost, costSrc: kc.src, profit, basis, ship, replaced, notDeleted });
       const at = Date.now();
       await dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${asin}_${at}`).set({ account: ACCOUNT_LABEL, asin, name, oldSku: replaced[0] || sku, newSku: sku, price, mrp, qty, at,
@@ -1850,37 +2042,42 @@ async function applyPendingListingDeletions(sellerId) {
 
 // ── STOCK GUARD: follow LOTS stock on Amazon ────────────────────────────────────
 // Rule (asked for by the owner):
-//   • LOTS stock below STOCK_GUARD_MIN (10)  → set the Amazon listing to 0 (out of stock),
+//   • LOTS-GN stock below STOCK_GUARD_MIN (12) → set the Amazon listing to 0 (out of stock),
 //     remembering the Amazon stock it had.
-//   • LOTS stock back at 10 or more          → put that remembered Amazon stock back.
+//   • LOTS-GN stock back at 12 or more         → put that remembered Amazon stock back (only if Amazon is still 0).
 // Safety:
 //   • Only listings whose LOTS link is CONFIRMED (saved ASIN mapping or saved name mapping) -
 //     never on a name guess, so a wrong match can't switch off a good product.
 //   • Only self-ship / Easy Ship listings (FBA stock is controlled by Amazon, not us).
 //   • Only when this run's Amazon listings report was read (never on stale numbers).
-//   • Circuit breaker: if LOTS looks broken (catalogue missing, or it would switch off more than
-//     STOCK_GUARD_MAX_ZERO listings in one run) nothing is changed and the reason is logged.
+//   • Circuit breaker: if LOTS looks broken (catalogue missing, or 60%+ of linked in-stock listings would go
+//     to 0) nothing is changed and the reason is logged; at most STOCK_GUARD_MAX_ZERO changes per run.
 // State lives in spapiStockGuard/<account> (1 read + 1 write per run).
 // SWITCHED OFF (owner decision, 1 Oct 2026): OMS Guru also pushes stock to Amazon, so two systems
 // were fighting. OMS Guru owns Amazon stock. This tool now only reads LOTS stock for the page, and
 // one time puts back any listing it had set to 0 earlier. Set to true only if OMS Guru's Amazon
 // inventory sync is turned off.
-const STOCK_GUARD_ENABLED = false;
-const STOCK_GUARD_MIN = 10;
-const STOCK_GUARD_MAX_ZERO = 60;
+// OFF again (owner, 24 Oct 2026, same day): the "LOTS-GN under 12 -> stock 0" rule is wanted ONLY for new listings the
+// robot creates (Add ASIN - see NEW_LISTING_MIN_LOTS), not for existing listings. While off, any listing this guard set
+// to 0 gets its previous Amazon stock put back (undo below). STOCK_GUARD=on in the workflow switches it on.
+const STOCK_GUARD_ENABLED = String(process.env.STOCK_GUARD || 'off').toLowerCase() === 'on';
+const STOCK_GUARD_MIN = 12;
+const NEW_LISTING_MIN_LOTS = 12;   // Add ASIN: LOTS-GN stock under this -> the new listing goes live with stock 0
+const STOCK_GUARD_MAX_ZERO = 100;          // most listings set to 0 in one run (the rest follow next run)
+const STOCK_GUARD_BROKEN_SHARE = 0.6;      // if 60%+ of LOTS-linked in-stock listings would go to 0, LOTS data looks broken - stop
 function normalizeName(e) { return String(e).toLowerCase().replace(/[|/,_\-()]/g, ' ').replace(/[^a-z0-9. ]/g, ' ').replace(/\s+/g, ' ').trim(); }
 
 async function loadLotsForGuard() {
   const [lotsSnap, mapSnap, asinDoc] = await Promise.all([
     dbMain.collection('aikm_admin').doc('lotsCatalog').collection('chunks').get(),
     dbMain.collection('aikm_admin').doc('masterMapping').collection('chunks').get(),
-    dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').get(),
+    Promise.resolve(null),
   ]);
   const lotsByCode = {};
   lotsSnap.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code != null) lotsByCode[String(p.code)] = p; }));
   const nameMap = {};
   mapSnap.forEach((d) => Object.assign(nameMap, d.data().map || {}));
-  const asinMap = asinDoc.exists ? (asinDoc.data().map || {}) : {};
+  const asinMap = (await loadCostData()).map;   // main + overflow mapping records (same as the price robot)
   return { lotsByCode, nameMap, asinMap };
 }
 
@@ -1903,109 +2100,97 @@ async function setAmazonQuantity(sellerId, sku, qty) {
   }));
 }
 
-async function runStockGuard(sellerId) {
-  if (!sellerId) { console.log('Stock guard skipped: SPAPI_SELLER_ID not set.'); return; }
-  if (!inventoryFresh) { console.log('Stock guard skipped: Amazon listings report not read this run.'); return; }
-  const guardRef = db.collection('spapiStockGuard').doc(ACCOUNT_LABEL);
-  const guardDoc = await guardRef.get();
-  const guard = guardDoc.exists ? (guardDoc.data().items || {}) : {};
-  // Rule is off and nothing left to put back -> skip reading the LOTS catalogue (saves ~25 console reads per full sync)
-  if (!STOCK_GUARD_ENABLED && !Object.keys(guard).length) { console.log('Stock guard: off, nothing to undo.'); return; }
+// ── ONE-TIME REPAIR (25 Oct 2026) ─────────────────────────────────────────────────────────────
+// On 24 Oct 07:3x-08:0x UTC the stock rule was on for ALL listings for ~30 min and set up to 100 listings per account
+// to 0; the undo then skipped them (stale listings report) and forgot them. Each such listing still carries
+// lastStockPush {qty: 0, reason: "LOTS stock N is below 12"} from that window. If it is STILL 0 on Amazon, put back
+// stock = its current LOTS-GN stock (max 50), so it sells again. Listings already restocked (OMS Guru) or relisted
+// under a new SKU are left alone. Up to 150 per run; each repaired listing gets a new lastStockPush, so it runs once.
+async function repairStockRule24(sellerId) {
+  if (!sellerId || !inventoryFresh) return;
+  const from = Date.parse('2026-10-24T07:20:00Z'), to = Date.parse('2026-10-24T08:30:00Z');
+  const hit = Object.values(SNAP.inventory).filter((it) => it && it.account === ACCOUNT_LABEL && it.sku && reportSkus.has(it.sku)
+    && (it.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && it.lastStockPush && it.lastStockPush.qty === 0
+    && /^LOTS stock .* below/.test(it.lastStockPush.reason || '') && it.lastStockPush.at >= from && it.lastStockPush.at <= to);
+  if (!hit.length) { console.log('Stock repair (24 Oct): nothing left to repair.'); return; }
+  const L = await loadLotsForGuard();
+  let fixed = 0, skipped = 0, failed = 0;
+  for (const it of hit.slice(0, 150)) {
+    const docId = `${ACCOUNT_LABEL}_${it.sku}`, amz = parseInt(it.quantity, 10) || 0;
+    const lots = confirmedLotsFor(it, L), lq = lots ? Math.floor(parseFloat(lots.qty)) : NaN;
+    const mark = (rec) => snapPatch('inventory', docId, { lastStockPush: { ...rec, at: Date.now() } });
+    if (amz > 0) { mark({ status: 'applied', qty: amz, reason: 'Repair 24 Oct: already back in stock - left alone' }); skipped++; continue; }
+    if (!(lq > 0)) { mark({ status: 'applied', qty: 0, reason: `Repair 24 Oct: LOTS-GN stock ${isNaN(lq) ? 'unknown' : lq} - left at 0` }); skipped++; continue; }
+    const q = Math.min(lq, 50);
+    try {
+      await setAmazonQuantity(sellerId, it.sku, q);
+      await db.collection('spapiInventory').doc(docId).set({ quantity: q }, { merge: true });
+      snapPatch('inventory', docId, { quantity: q, stockGuard: null });
+      mark({ status: 'applied', qty: q, reason: `Repair 24 Oct: stock rule set this to 0 by mistake - put back to LOTS-GN stock ${lq}` });
+      fixed++;
+    } catch (e) { failed++; console.warn(`Stock repair: could not set ${it.sku} to ${q}:`, e.message || e); }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  console.log(`Stock repair (24 Oct): ${fixed} put back in stock, ${skipped} left alone (already in stock / no LOTS-GN stock), ${failed} failed, ${Math.max(0, hit.length - 150)} left for next run.`);
+}
 
+// OWNER RULE (25 Oct 2026): "Inventory is managed by OMS Guru. The robot only marks out of stock the products that
+// have NO stock in LOTS." Then (same day): "change zero to below 10". So: a LOTS-linked self-ship listing whose LOTS-GN stock is below 10 and still shows stock
+// on Amazon is set to 0. The robot NEVER puts stock back and never sets any other number - OMS Guru does that when
+// LOTS has stock again. Old "put back" memory from earlier rules is simply dropped (no stock pushes).
+// Safety: confirmed LOTS link only; FBA untouched; only on a fresh listings report; stops if the LOTS catalogue looks
+// incomplete or 60%+ of linked in-stock listings would go to 0 (broken LOTS upload); at most 100 per run.
+// STOCK_GUARD=off in the workflow switches it off.
+const OOS_RULE_ON = String(process.env.STOCK_GUARD || 'on').toLowerCase() !== 'off';
+const OOS_LOTS_BELOW = 10;   // owner, 25 Oct 2026: LOTS stock below 10 -> Amazon out of stock
+async function runStockGuard(sellerId) {
+  if (!OOS_RULE_ON) { console.log('Out-of-stock rule: off (STOCK_GUARD=off).'); return; }
+  if (!sellerId) { console.log('Out-of-stock rule skipped: SPAPI_SELLER_ID not set.'); return; }
+  if (!inventoryFresh) { console.log('Out-of-stock rule skipped: Amazon listings report not read this run.'); return; }
+  const guardRef = db.collection('spapiStockGuard').doc(ACCOUNT_LABEL);
   const L = await loadLotsForGuard();
   const lotsCount = Object.keys(L.lotsByCode).length;
-  if (lotsCount < 500) { console.warn(`Stock guard STOPPED: LOTS catalogue has only ${lotsCount} products - looks incomplete.`); return; }
+  if (lotsCount < 500) { console.warn(`Out-of-stock rule STOPPED: LOTS catalogue has only ${lotsCount} products - looks incomplete.`); return; }
 
-  const toZero = [], toRestore = [], release = [];
+  const toZero = [];
+  let linkedInStock = 0;
   for (const item of Object.values(SNAP.inventory)) {
-    if (!item.sku || item.account !== ACCOUNT_LABEL || !reportSkus.has(item.sku)) continue; // only live listings
-    if ((item.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT') continue; // FBA - Amazon controls stock
-    const lots = confirmedLotsFor(item, L);
-    const g = guard[item.sku];
-    const lotsQty = lots ? parseFloat(lots.qty) : NaN;
-    const amzQty = parseInt(item.quantity, 10) || 0;
+    if (!item || !item.sku || item.account !== ACCOUNT_LABEL || !reportSkus.has(item.sku)) continue; // live listings only
+    if ((item.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT') continue;                            // FBA - Amazon controls stock
     const docId = `${ACCOUNT_LABEL}_${item.sku}`;
+    const lots = confirmedLotsFor(item, L), lotsQty = lots ? parseFloat(lots.qty) : NaN;
+    const amzQty = parseInt(item.quantity, 10) || 0;
     SNAP.inventory[docId].lotsQty = isNaN(lotsQty) ? null : lotsQty;
-    SNAP.inventory[docId].stockGuard = g ? { zeroed: true, prevQty: g.prevQty, since: g.since } : null;
-    if (isNaN(lotsQty)) { if (g) release.push(item.sku); continue; } // link removed / no LOTS stock - stop managing it
-    if (lotsQty < STOCK_GUARD_MIN) {
-      if (amzQty > 0) toZero.push({ item, lotsQty, amzQty, prevQty: g ? g.prevQty : amzQty, since: g ? g.since : Date.now() });
-    } else if (g) {
-      toRestore.push({ item, lotsQty, amzQty, prevQty: g.prevQty });
-    }
+    SNAP.inventory[docId].stockGuard = null;
+    if (isNaN(lotsQty) || amzQty <= 0) continue;
+    linkedInStock++;
+    if (lotsQty < OOS_LOTS_BELOW) toZero.push({ item, lotsQty, amzQty });
   }
-  release.forEach((sku) => { delete guard[sku]; });
-
-  if (!STOCK_GUARD_ENABLED) {
-    // Undo: put back the Amazon stock of listings this tool had set to 0, then stop managing them.
-    let undone = 0, undoFailed = 0;
-    for (const [sku, g] of Object.entries(guard)) {
-      const docId = `${ACCOUNT_LABEL}_${sku}`, item = SNAP.inventory[docId];
-      const amzQty = item ? (parseInt(item.quantity, 10) || 0) : 0;
-      try {
-        if (item && reportSkus.has(sku) && amzQty === 0 && g.prevQty > 0) {
-          await setAmazonQuantity(sellerId, sku, g.prevQty);
-          await db.collection('spapiInventory').doc(docId).set({ quantity: g.prevQty }, { merge: true });
-          snapPatch('inventory', docId, { quantity: g.prevQty, lastStockPush: { status: 'applied', at: Date.now(), qty: g.prevQty, reason: 'Stock rule switched off - previous Amazon stock put back' } });
-          undone++;
-        }
-        if (item) snapPatch('inventory', docId, { stockGuard: null });
-        delete guard[sku];
-      } catch (e) {
-        undoFailed++;
-        if (item) snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: g.prevQty, error: e.message || String(e) } });
-        console.warn(`Stock guard undo: could not put back ${sku} to ${g.prevQty}:`, e.message || e);
-      }
-      await new Promise((r) => setTimeout(r, 800));
-    }
-    await guardRef.set({ items: guard, disabled: true, updatedAt: Date.now() });
-    console.log(`Stock guard is OFF (OMS Guru owns Amazon stock): ${undone} listing(s) put back, ${undoFailed} failed, ${Object.keys(guard).length} still to put back.`);
+  if (toZero.length >= 20 && toZero.length > linkedInStock * 0.6) {
+    console.warn(`Out-of-stock rule STOPPED: ${toZero.length} of ${linkedInStock} LOTS-linked listings are below ${OOS_LOTS_BELOW} in LOTS - LOTS stock looks broken. Nothing changed.`);
+    await guardRef.set({ items: {}, blocked: { at: Date.now(), wouldZero: toZero.length, of: linkedInStock }, rule: 'lots_zero', updatedAt: Date.now() });
     return;
   }
-
-  if (toZero.length > STOCK_GUARD_MAX_ZERO) {
-    console.warn(`Stock guard STOPPED: would switch off ${toZero.length} listings at once (limit ${STOCK_GUARD_MAX_ZERO}). Check the LOTS stock upload; nothing was changed.`);
-    await guardRef.set({ items: guard, blocked: { at: Date.now(), wouldZero: toZero.length }, updatedAt: Date.now() });
-    return;
-  }
-
-  let zeroed = 0, restored = 0, failed = 0;
+  if (toZero.length > 100) console.log(`Out-of-stock rule: ${toZero.length} to mark - doing 100 now, the rest next run.`);
+  toZero.splice(100);
+  let zeroed = 0, failed = 0;
   for (const z of toZero) {
     const docId = `${ACCOUNT_LABEL}_${z.item.sku}`;
     try {
       await setAmazonQuantity(sellerId, z.item.sku, 0);
-      guard[z.item.sku] = { prevQty: z.prevQty, since: z.since, lotsQtyAtZero: z.lotsQty };
-      snapPatch('inventory', docId, { quantity: 0, stockGuard: { zeroed: true, prevQty: z.prevQty, since: z.since },
-        lastStockPush: { status: 'applied', at: Date.now(), qty: 0, reason: `LOTS stock ${z.lotsQty} is below ${STOCK_GUARD_MIN}` } });
+      snapPatch('inventory', docId, { quantity: 0, lastStockPush: { status: 'applied', at: Date.now(), qty: 0,
+        reason: `LOTS stock ${z.lotsQty} is below ${OOS_LOTS_BELOW} - marked out of stock (Amazon had ${z.amzQty}). OMS Guru restocks it.` } });
       await db.collection('spapiInventory').doc(docId).set({ quantity: 0 }, { merge: true });
       zeroed++;
     } catch (e) {
       failed++;
       snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: 0, error: e.message || String(e) } });
-      console.warn(`Stock guard: could not set ${z.item.sku} to 0:`, e.message || e);
+      console.warn(`Out-of-stock rule: could not set ${z.item.sku} to 0:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
   }
-  for (const r2 of toRestore) {
-    const docId = `${ACCOUNT_LABEL}_${r2.item.sku}`;
-    try {
-      if (r2.amzQty === 0 && r2.prevQty > 0) {
-        await setAmazonQuantity(sellerId, r2.item.sku, r2.prevQty);
-        await db.collection('spapiInventory').doc(docId).set({ quantity: r2.prevQty }, { merge: true });
-        snapPatch('inventory', docId, { quantity: r2.prevQty, lastStockPush: { status: 'applied', at: Date.now(), qty: r2.prevQty, reason: `LOTS stock back to ${r2.lotsQty}` } });
-        restored++;
-      }
-      delete guard[r2.item.sku];
-      snapPatch('inventory', docId, { stockGuard: null });
-    } catch (e) {
-      failed++;
-      snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: r2.prevQty, error: e.message || String(e) } });
-      console.warn(`Stock guard: could not restore ${r2.item.sku} to ${r2.prevQty}:`, e.message || e);
-    }
-    await new Promise((r) => setTimeout(r, 800));
-  }
-  await guardRef.set({ items: guard, blocked: null, updatedAt: Date.now() });
-  console.log(`Stock guard: ${zeroed} set out of stock, ${restored} restored, ${failed} failed, ${Object.keys(guard).length} currently held at 0.`);
+  await guardRef.set({ items: {}, blocked: null, rule: 'lots_zero', updatedAt: Date.now() });
+  console.log(`Out-of-stock rule (LOTS stock below ${OOS_LOTS_BELOW} -> Amazon 0): ${zeroed} marked out of stock, ${failed} failed, ${linkedInStock} LOTS-linked in-stock listings checked.`);
 }
 
 // Listings deleted/replaced on Amazon disappear from the listings report. Drop them from the
@@ -2063,7 +2248,7 @@ async function publishListingIndex() {
     if (!i || i.account !== ACCOUNT_LABEL || !i.sku) return;
     skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null, i: i.img || '' };
   });
-  // f = lowest price that still earns MIN_PROFIT, t = price that earns TARGET_PROFIT (same maths as the robot)
+  // f = lowest price that meets the rule (Rs 15 or 10%), t = price that earns TARGET_PROFIT (same maths as the robot)
   try {
     await loadCostData();
     for (const i of Object.values(SNAP.inventory)) {
@@ -2072,7 +2257,7 @@ async function publishListingIndex() {
       const pr = orderProfit(i, kc.cost, i.price);
       const lim = Math.floor(Math.max(Number(i.mrp) || 0, i.price * 1.5));
       const first = (goal) => { for (let pz = 1; pz <= lim; pz++) if (orderProfit(i, kc.cost, pz) >= goal) return pz; return Math.ceil(i.price - pr + goal); };
-      skus[i.sku].f = first(MIN_PROFIT); skus[i.sku].t = first(TARGET_PROFIT); skus[i.sku].e = Math.round(pr);
+      skus[i.sku].f = (() => { for (let pz = 1; pz <= lim; pz++) if (profitOk(i, kc.cost, pz)) return pz; return first(FLOOR_RS); })(); skus[i.sku].t = first(TARGET_PROFIT); skus[i.sku].e = Math.round(pr);
       // per-unit numbers so the console can work out each ORDER's profit with the same maths
       skus[i.sku].c = Math.round(kc.cost * 100) / 100; skus[i.sku].k = shipCostFor(i); skus[i.sku].g = gstRate(i);
       skus[i.sku].fp = Math.round(feeFor(i, i.price) * 100) / 100;
@@ -2219,7 +2404,7 @@ async function run() {
     await syncCompetitivePricing(asinsFromInventory);
   } else console.log('Step 3: quick sync - competitor prices skipped (done in the full sync).');
 
-  console.log('Step 3a: stock guard (LOTS stock below 10 -> out of stock on Amazon)...');
+  console.log('Step 3a: out-of-stock rule (LOTS stock below 10 -> Amazon 0; OMS Guru owns all other stock)...');
   if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
 
   console.log('Step 3a1: relist robot ("Not selling" -> new SKU, old SKU deleted)...');

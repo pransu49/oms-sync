@@ -1,0 +1,49 @@
+name: Loss orders alert (Telegram, every 2 h)
+
+# Every 2 hours, 10 am - 10 pm IST: new loss orders of today -> Telegram (silent when there are none).
+on:
+  # main trigger: piggy-back on the OMS sync (started every 10 min by cron-job.org) - the gate keeps 1 run per 2 h
+  workflow_run:
+    workflows: ['Sync OMS Guru Orders']
+    types: [completed]
+  schedule:
+    - cron: '20 4-16/2 * * *'   # backup only (9:50 am - 9:50 pm IST) - GitHub's own timer often skips
+  workflow_dispatch: {}         # "Run workflow" button = check now
+
+concurrency:
+  group: loss-alerts
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - id: g
+        shell: bash
+        run: |
+          m=$((10#$(date -u +%M))); h=$((10#$(TZ=Asia/Kolkata date +%H))); mi=$((10#$(TZ=Asia/Kolkata date +%M)))
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "go=1" >> $GITHUB_OUTPUT; exit 0; fi
+          # even IST hours 10,12,...,22 in the first 10 minutes (one run per 2 h)
+          if [ $h -ge 10 ] && [ $h -le 22 ] && [ $((h % 2)) -eq 0 ] && [ $mi -lt 10 ]; then echo "go=1" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "schedule" ] && [ $h -ge 9 ] && [ $h -le 22 ]; then echo "go=1" >> $GITHUB_OUTPUT
+          else echo "go=0" >> $GITHUB_OUTPUT; echo "skip: not a 2-hour slot (IST $h:$mi)"; fi
+
+  loss:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund firebase-admin
+      - run: node loss-alerts.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

@@ -1,25 +1,34 @@
 // telegram.js - sends a message to Prabhat's Telegram (bot: AIKM_OPS_ALERTS_bot).
 // Needs GitHub secrets TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID. If they are missing it does nothing.
 // Never throws - an alert problem must never break a sync.
-async function notify(text) {
+async function notify(text, opts = {}) {
   const token = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
   if (!text) return false;
   if (!token || !chat) {
     console.log(`Telegram alert not sent: GitHub secret missing (${!token ? 'TELEGRAM_BOT_TOKEN ' : ''}${!chat ? 'TELEGRAM_CHAT_ID' : ''}).`);
     return false;
   }
-  const body = String(text).slice(0, 4000);
-  try {
+  const send = async (body, html) => {
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chat, text: body, disable_web_page_preview: true }),
+      body: JSON.stringify({ chat_id: chat, text: body, disable_web_page_preview: true, ...(html ? { parse_mode: 'HTML' } : {}) }),
     });
-    const j = await res.json().catch(() => ({}));
-    if (!j.ok) console.log('Telegram alert not sent:', j.description || res.status);
+    return res.json().catch(() => ({ ok: false, description: String(res.status) }));
+  };
+  try {
+    let j = await send(String(text).slice(0, 4000), !!opts.html);
+    // formatting problem -> send the same text without formatting rather than nothing
+    if (!j.ok && opts.html) j = await send(plain(text).slice(0, 4000), false);
+    if (!j.ok) console.log('Telegram alert not sent:', j.description || 'unknown error');
     else console.log('Telegram alert sent.');
     return !!j.ok;
   } catch (e) { console.log('Telegram alert not sent:', e.message); return false; }
 }
+
+// Safe text for HTML messages
+const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const plain = (s) => String(s).replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const LINE = '────────────';
 
 // Today in India as YYYY-MM-DD and the hour (0-23)
 function istNow() {
@@ -27,7 +36,7 @@ function istNow() {
   return { date: d.toISOString().slice(0, 10), hour: d.getUTCHours() };
 }
 
-module.exports = { notify, istNow };
+module.exports = { notify, istNow, esc, LINE };
 
 // Run directly to send a message: node telegram.js "text"
 if (require.main === module) notify(process.argv.slice(2).join(' ')).then((ok) => process.exit(ok ? 0 : 1));

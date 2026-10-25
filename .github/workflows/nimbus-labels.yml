@@ -39,3 +39,12 @@ jobs:
           NIMBUS_API_SECRET: ${{ secrets.NIMBUS_API_SECRET }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+      # premium picklist PDF -> Telegram (only when labels were made)
+      - name: Picklist PDF
+        if: ${{ hashFiles('picklist.json') != '' }}
+        run: |
+          npm install --no-save --no-audit --no-fund pdf-lib@1.17.1
+          node picklist-pdf.js picklist.json
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

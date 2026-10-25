@@ -1,0 +1,53 @@
+name: Attendance alerts (Telegram)
+
+# Saves Firebase reads. Shifts: 10 am - 7 pm and 1 pm - 10 pm (IST).
+#   every ~15 min within 1 hour of a shift start/end: 9-11 am, 12-2 pm, 6-8 pm, 9-11 pm
+#   every ~30 min the rest of the day (11 am - 12 pm, 2 - 6 pm); no runs 11 pm - 9 am
+on:
+  # main trigger: piggy-back on the OMS sync (started every 10 min by cron-job.org); the gate below thins it out
+  workflow_run:
+    workflows: ['Sync OMS Guru Orders']
+    types: [completed]
+  schedule:
+    - cron: '15,45 3-17 * * *'   # backup only (8:45 am - 11:15 pm IST) - GitHub's own timer often skips
+  workflow_dispatch: {}       # "Run workflow" button = check now
+
+concurrency:
+  group: attendance-alerts
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - id: g
+        shell: bash
+        run: |
+          m=$((10#$(date -u +%M))); h=$((10#$(TZ=Asia/Kolkata date +%H)))
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then echo "go=1" >> $GITHUB_OUTPUT; exit 0; fi
+          if [ $h -lt 9 ] || [ $h -ge 23 ]; then echo "go=0" >> $GITHUB_OUTPUT; echo "skip: outside 9 am - 11 pm IST"; exit 0; fi
+          # shift-change hours (IST): 9,10 (10 am start) 12,13 (1 pm start) 18,19 (7 pm end) 21,22 (10 pm end)
+          case " 9 10 12 13 18 19 21 22 " in *" $h "*) slot=15 ;; *) slot=30 ;; esac
+          if [ "${{ github.event_name }}" = "workflow_run" ] && [ $((m % slot)) -ge 10 ]; then echo "go=0" >> $GITHUB_OUTPUT; echo "skip: not a ${slot}-min slot"; exit 0; fi
+          echo "running (${slot}-min slot, IST hour $h)"
+          echo "go=1" >> $GITHUB_OUTPUT
+
+  attendance:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == '1' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund firebase-admin
+      - run: node attendance-alerts.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_ATTENDANCE: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_ATTENDANCE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

@@ -34,6 +34,16 @@ jobs:
       - name: Install dependencies
         run: npm install amazon-sp-api firebase-admin
 
+      # Saved copy of the LOTS catalogue (saves ~25 console Firebase reads per run; the script
+      # re-reads it only when it changed). Shared by both Amazon accounts.
+      - name: Restore saved LOTS catalogue
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/lots-catalog.json
+          key: lots-catalog-${{ github.run_id }}
+          restore-keys: lots-catalog-
+
       - name: Run SP-API sync
         env:
           # Same Amazon developer app as Praso - only the refresh token and seller ID differ per account.
@@ -49,6 +59,14 @@ jobs:
           ACCOUNT_LABEL: sastastore
         shell: bash
         run: node spapi-sync.js 2>&1 | tee run.log
+
+      - name: Keep LOTS catalogue copy for the next run
+        if: always() && hashFiles('.cache/lots-catalog.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/lots-catalog.json
+          key: lots-catalog-${{ hashFiles('.cache/lots-catalog.json') }}
 
       - name: Report sync health to console
         if: always()

@@ -101,6 +101,8 @@ jobs:
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}   # aikm-oms-sync project (own free quota)
           FIREBASE_SERVICE_ACCOUNT_MAIN: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}   # console project - off days list
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}   # picklist PDF
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           LIMIT: ${{ inputs.limit || '0' }}
           SLA_DATE: ${{ inputs.sla_date || '' }}
