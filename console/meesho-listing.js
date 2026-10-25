@@ -358,11 +358,11 @@
       while (start <= hr + 12 && !isEmpty(start)) start++;
       // columns Meesho fills itself with a formula (e.g. Wrong/Defective price, Importer "Not Required")
       cols.forEach(function (c) { for (var fr = start; fr < start + 4; fr++) { var x = (main.rows[fr] || {})[c.idx]; if (x && x.f) { c.formula = true; break; } } });
-      var autoCols = cols.filter(function (c) { return c.formula; }).length;
+      var fcols = cols.filter(function (c) { return c.formula; }), autoCols = fcols.length;
       cols = cols.filter(function (c) { return !c.formula; });
       for (var h = hr + 1; h < start; h++) { var hrw = main.rows[h] || {}; cols.forEach(function (c) { var x = hrw[c.idx]; if (x && x.v) { if (!c.type && cls(x.v) === "req") c.req = true; if (!c.hint && !cls(x.v)) c.hint = x.v.slice(0, 160); } }); }
       var cat = (first((main.rows[1] || {})[0] && main.rows[1][0].v).replace(/\s*template.*$/i, "") || best.sh.name.replace(/[-_ ]*fill this.*$/i, "")).replace(/[-_]+/g, " ").trim();
-      tpl = { name: file.name, zip: zip, path: best.sh.path, sheet: best.sh.name, doc: main.doc, hr: hr, start: start, cols: cols, cat: cat };
+      tpl = { name: file.name, zip: zip, path: best.sh.path, sheet: best.sh.name, doc: main.doc, hr: hr, start: start, cols: cols, fcols: fcols, cat: cat };
       grid = null; $("msRes").style.display = "none";
       var dd = cols.filter(function (c) { return c.options; }).length, rq = cols.filter(function (c) { return c.req; }).length;
       box.innerHTML = '<div class="ms-tpl"><b>✓ ' + esc(file.name) + "</b><br>Sheet “" + esc(best.sh.name) + "” · " + cols.length + " columns to fill" + (rq ? " · " + rq + " required" : "") + (sysCols + autoCols ? " · " + (sysCols + autoCols) + " filled by Meesho itself, skipped" : "") + (dd ? " · " + dd + " with Meesho choices" : "") + " · products start at row " + start + "</div>";
@@ -457,8 +457,12 @@
     if (pc < (Number(S.minPct) || 15)) return (p._pi = { v: "", was: note + " — left empty (below your minimum profit). Type a price to list anyway.", low: true });
     return (p._pi = { v: P, was: note });
   }
+  function tidy(x) {   // Meesho rejects emojis / odd symbols; drop Amazon leftovers like "allergen_info" or "g pack"
+    return String(x || "").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}\u{2B00}-\u{2BFF}]/gu, "").replace(/[™®©]/g, "").replace(/\s+/g, " ").trim();
+  }
   function descr(p, d) {
-    var b = (d && d.bullets) || [], t = (d && d.description) || "";
+    var b = ((d && d.bullets) || []).map(tidy).filter(function (x) { return x.length >= 12 && !/^[a-z]+_[a-z_]+$/i.test(x) && !/^country of origin/i.test(x); }),
+      t = tidy(d && d.description);
     var s = b.map(function (x) { return "• " + x; }).join("\n");
     if (t && s.indexOf(t.slice(0, 40)) < 0) s += (s ? "\n\n" : "") + t;
     return (s || (d && d.title) || p.name || "").slice(0, 3000);
@@ -474,7 +478,28 @@
     return Math.round(g || (x.d && x.d.weightG) || (x.p.weightKg ? x.p.weightKg * 1000 : 0));
   }
   function packOf(x) { var t = (x.d && x.d.title) || x.p.name || "", m = /pack\s*of\s*(\d+)/i.exec(t) || /(\d+)\s*[x×]\s*\d/i.exec(t), o = (x.d && x.d.other) || {};
-    return m ? m[1] : (parseInt(o.number_of_items || o.unit_count || o.number_of_pieces, 10) || "1"); }
+    var n = parseInt(o.number_of_items || o.number_of_pieces, 10);
+    return m ? m[1] : (n > 0 && n <= 100 ? String(n) : "1"); }
+  // Amazon's contact text -> { name, address }. Names like "+91-80-2520..", "1134" or "No. 1134" were
+  // phone numbers / door numbers: find the real company name, else use Amazon's manufacturer field.
+  var CO = /\b(pvt|private|ltd|limited|llp|foods?|industr\w*|enterprises?|company|corporation|bakers?|bakes|bakery|agro|products|traders?|mills?|inc)\b/i;
+  function company(c, d) {
+    var t = String(c.text && c.text.length > 8 ? c.text : [c.name, c.address].filter(Boolean).join(", "))
+      .replace(/[.\s]*fssai[^,]*/gi, "").replace(/\b(pin\s*code|pincode|pin)\b\s*[:.-]?\s*/gi, "").replace(/(lic(ence|ense)?\.?\s*no\.?|branch address|address)\s*:?-?/gi, "")
+      .replace(/(\+91[\s-]?)?(\(?0?\d{2,4}\)?[\s-]?)?\d{6,8}(-\d{1,4})?(?!\d)/g, function (m) { return /^[1-9]\d{2}\s?\d{3}$/.test(m.trim()) ? m : ""; })
+      .replace(/\b(ph|phone|tel|mob(ile)?|contact( no)?|email|e-mail|customer care)\b\s*[:.]?\s*[^,]*/gi, "");
+    var parts = t.split(/,|;|\n/).map(function (x) { return x.trim(); }).filter(function (x) { return /[a-z]/i.test(x); });
+    var clean = function (n) { return n.replace(/^(no\.?\s*)?[\d\s\-–:.\/]+(?=[a-z])/i, "").replace(/\s+[-–]\s*[\w\/&]*\d[\w\/&-]*$/, "").replace(/\s+[A-Z]{0,2}-?\d[\d\-\/&]*$/, "").replace(/^[\s\-–:]+|[\s\-–:.]+$/g, "").trim(); };
+    var i = -1; parts.some(function (x, j) { if (CO.test(x)) { i = j; return true; } return false; });
+    var name = i >= 0 ? clean(parts[i]) : "";
+    var dm = clean(String((d && d.manufacturer) || ""));
+    var p0 = clean(parts[0] || ""), p0ok = p0 && !/\d/.test(p0) && p0.split(/\s+/).length >= 2;
+    if (!name || name.length < 4) name = (dm && /[a-z]{3}/i.test(dm) ? dm : "") || (p0ok ? p0 : "") || (d && d.brand) || p0;
+    if (i < 0 && p0ok && name === p0) i = 0;
+    var addr = parts.filter(function (x, j) { return j !== i; }).join(", ").replace(/\s{2,}/g, " ").replace(/^[\s,\-–]+|[\s,\-–.]+$/g, "");
+    if (!/[a-z]{3}/i.test(addr)) addr = "";            // no real address (e.g. only a phone number)
+    return { name: name, address: addr };
+  }
   var RULES = [
     [/volumetric|group id|catalog id|meesho id|variation|parent sku|\bean\b|barcode|gtin|\bupc\b|size chart|video/, function () { return ""; }],
     [/wrong|defective/, function (x) { return priceInfo(x.p, x.d).v; }],
@@ -499,8 +524,12 @@
     }],
     [/net quantity|pack of|no\.? of (pieces|items)|number of (pieces|items)/, function (x) { return packOf(x); }],
     [/fssai/, function () { return String(PF().fssai || "").replace(/\s/g, ""); }, "text"],
-    [/veg/, function (x) { var t = ((x.d && x.d.title) || x.p.name || "") + " " + JSON.stringify((x.d && x.d.other) || {});
-      return /non[\s_-]?veg|\begg|chicken|mutton|fish|meat/i.test(t) ? "Non Veg" : /\bveg(etarian)?\b|vegan/i.test(t) ? "Veg" : ""; }],
+    [/veg/, function (x) {
+      var o = (x.d && x.d.other) || {}, k = Object.keys(o).filter(function (a) { return /veg|diet/.test(a); }), a = k.map(function (y) { return o[y]; }).join(" ");
+      if (/non[\s_-]?veg/i.test(a)) return "Non Veg"; if (/veg|vegan|eggless/i.test(a)) return "Veg";
+      var t = (x.d && x.d.title) || x.p.name || "";
+      return /non[\s_-]?veg|chicken|mutton|fish|meat|\begg\b(?!less)/i.test(t) ? "Non Veg" : /\bveg(etarian)?\b|vegan|eggless/i.test(t) ? "Veg" : "";
+    }],
     [/shelf life|best before|expiry/, function (x) {
       var days = Number(S.shelfDays) || 365, o = x.c.options;
       if (!o) return days + " Days";
@@ -513,7 +542,7 @@
       return hit ? { v: hit } : ((x.d && x.d.other && (x.d.other.item_type_name || x.d.other.generic_name)) || ""); }],
     [/inventory|stock|available quantity|quantity available|^qty/, function (x) { return x.p.quantity > 0 ? x.p.quantity : (Number(S.stock) || 0); }],
     [/sku|style id|style code|product id/, function (x) { return x.p.sku || x.p.asin; }, "text"],
-    [/product name|title|catalog name|^name$/, function (x) { return (x.d && x.d.title) || x.p.name || ""; }, "text"],
+    [/product name|title|catalog name|^name$/, function (x) { return tidy((x.d && x.d.title) || x.p.name || ""); }, "text"],
     [/image|photo|picture/, function (x) { var im = (x.d && x.d.images && x.d.images.length ? x.d.images : (x.p.img ? [x.p.img] : [])); return im[x.slot] || ""; }, "text"],
     [/brand/, function (x) { return S.brand || (x.d && x.d.brand) || ""; }, "text"],
     [/country/, function (x) { return (x.d && x.d.countryOfOrigin) || S.country || "India"; }],
@@ -524,7 +553,9 @@
       // 1st: what your Amazon listing says (packer falls back to manufacturer), 2nd: the account's saved details
       var h = x.h, cs = (x.d && x.d.contacts) || {}, c = /packer/.test(h) ? (cs.packer || cs.manufacturer) : (cs.manufacturer || cs.packer), P = PF();
       var pinOf = function (k) { if (!k) return ""; if (/^\d{6}$/.test(k.pin || "")) return k.pin; var m = String(k.text || k.address || "").match(/\b[1-9]\d{2}\s?\d{3}\b/g); return m ? m[m.length - 1].replace(/\s/g, "") : ""; };
-      if (c) return /pin|zip|postal/.test(h) ? pinOf(c) || pinOf(cs.manufacturer) || pinOf(cs.packer) || P.bizPin || "" : /address/.test(h) ? c.address : /name/.test(h) ? c.name : c.text;
+      if (c) { var cc = company(c, x.d), other = c === cs.packer ? cs.manufacturer : cs.packer;
+        if (!cc.address && other) cc.address = company(other, x.d).address;
+        return /pin|zip|postal/.test(h) ? pinOf(c) || pinOf(cs.manufacturer) || pinOf(cs.packer) || P.bizPin || "" : /address/.test(h) ? cc.address : /name/.test(h) ? cc.name : cc.name + ", " + cc.address; }
       if (/pin|zip|postal/.test(h)) return P.bizPin || "";
       if (/address/.test(h)) return P.bizAddr || "";
       if (/name/.test(h)) return P.bizName || (x.d && x.d.manufacturer) || "";
@@ -651,7 +682,7 @@
   }
 
   /* ---------- 6. write the file ---------- */
-  function setCell(doc, sd, rows, rn, ci, val, asText) {
+  function setCell(doc, sd, rows, rn, ci, val, asText, force) {
     var row = rows[rn];
     if (!row) {
       row = doc.createElementNS(NS, "row"); row.setAttribute("r", rn);
@@ -665,7 +696,7 @@
       var nxt = cs.filter(function (x) { var p = ref(x.getAttribute("r") || ""); return p && p.c > ci; })[0];
       row.insertBefore(c, nxt || null);
     }
-    if (kids(c, "f").length) return false;          // never overwrite a formula
+    if (kids(c, "f").length && !force) return false;          // never overwrite a formula (unless we computed its value)
     while (c.firstChild) c.removeChild(c.firstChild);
     c.removeAttribute("t");
     if (!asText && /^-?\d+(\.\d+)?$/.test(val) && val.length < 15) { var v = doc.createElementNS(NS, "v"); v.textContent = val; c.appendChild(v); }
@@ -684,9 +715,26 @@
       var doc = X(new XMLSerializer().serializeToString(tpl.doc)), sd = all(doc, "sheetData")[0], rows = {};
       all(sd, "row").forEach(function (r) { rows[+r.getAttribute("r")] = r; });
       var maxC = 0;
+      // Meesho reads the saved value of a cell, not its formula, and a fresh file has none.
+      // So Meesho's own formula columns get their value written in: Importer "Not Required" for India,
+      // Wrong/Defective price = Meesho price - 7.
+      var colBy = function (re) { return tpl.cols.filter(function (c) { return re.test(c.head); })[0]; };
+      var cCountry = colBy(/country/i), cPrice = tpl.cols.filter(function (c) { return /price/i.test(c.head) && !/wrong|defective/i.test(c.head); })[0], wroteF = false;
       grid.rows.forEach(function (r, i) {
         tpl.cols.forEach(function (c) { var v = r.vals[c.idx]; if (v.v === "") return; setCell(doc, sd, rows, tpl.start + i, c.idx, v.v, v.text); if (c.idx > maxC) maxC = c.idx; });
+        (tpl.fcols || []).forEach(function (c) {
+          var h = c.head.toLowerCase(), val = "";
+          if (/importer/.test(h)) { var ctry = cCountry ? r.vals[cCountry.idx].v : "India"; val = /^india$/i.test(ctry) ? "Not Required" : ""; }
+          else if (/wrong|defective/.test(h)) { var pr = cPrice ? parseFloat(r.vals[cPrice.idx].v) : NaN; val = pr > 7 ? String(Math.round((pr - 7) * 100) / 100) : ""; }
+          else return;
+          if (val !== "" && setCell(doc, sd, rows, tpl.start + i, c.idx, val, /importer/.test(h), true)) wroteF = true;
+        });
       });
+      if (wroteF && tpl.zip.file("xl/calcChain.xml")) {   // formulas replaced -> drop Excel's formula list so it opens without a repair prompt
+        tpl.zip.remove("xl/calcChain.xml");
+        var ct = await tpl.zip.file("[Content_Types].xml").async("string"); tpl.zip.file("[Content_Types].xml", ct.replace(/<Override[^>]*calcChain[^>]*\/>/g, ""));
+        var wr = await tpl.zip.file("xl/_rels/workbook.xml.rels").async("string"); tpl.zip.file("xl/_rels/workbook.xml.rels", wr.replace(/<Relationship[^>]*calcChain[^>]*\/>/g, ""));
+      }
       var dim = all(doc, "dimension")[0], lastRow = tpl.start + grid.rows.length - 1;
       if (dim) { var g = range(dim.getAttribute("ref") || "A1"); if (g) dim.setAttribute("ref", "A1:" + colLet(Math.max(g.c2 > 16000 ? 0 : g.c2, maxC)) + Math.max(g.r2 > 1e6 ? 0 : g.r2, lastRow)); }
       var out = new XMLSerializer().serializeToString(doc);
