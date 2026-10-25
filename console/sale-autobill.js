@@ -763,6 +763,26 @@
   const STOP = new Set(["the", "and", "of", "with", "pack", "new", "mrp", "rs", "pk", "pouch", "jar", "bottle", "box", "free", "offer"]);
   const toks = name => new Set(String(name || "").toLowerCase().replace(SIZE_RE, " ").replace(/[^a-z0-9]+/g, " ").split(" ").filter(w => w.length > 1 && !STOP.has(w) && !/^\d+$/.test(w)));
   let DUP = null;
+  /* Merge whole groups into their first item (latest purchase). Reads the saved list fresh so nothing is lost. */
+  async function mergeGroups(list) {
+    const cur = ((await sb("GET", "docs?kind=eq.setting&id=eq.product_merge&select=data"))[0] || {}).data || {};
+    const m = { map: cur.map || {}, names: cur.names || {}, labels: cur.labels || {}, info: cur.info || {} };
+    list.forEach(grp => { const keep = grp.items[0];
+      grp.items.slice(1).forEach(x => { if (x.key !== keep.key) { m.map[x.key] = keep.key; m.labels[x.key] = x.name; if (m.info[x.key] && !m.info[keep.key]) m.info[keep.key] = m.info[x.key]; } });
+      if (m.map[keep.key]) delete m.map[keep.key];
+      if (!m.names[keep.key]) m.names[keep.key] = keep.name; });
+    await sbPut([{ kind: "setting", id: "product_merge", data: { ...m, savedAt: nowIso() } }]);
+  }
+  /* Same name + same size = one product, whatever the barcode. Runs by itself each time the tool opens,
+     so a new barcode on a new bill is folded into the existing product automatically. */
+  async function autoMergeSame() {
+    await loadDups();
+    const sure = DUP.groups.filter(g => g.sure);
+    if (!sure.length) return 0;
+    await mergeGroups(sure);
+    DUP.groups = DUP.groups.filter(g => !g.sure); D = null;
+    return sure.length;
+  }
   async function loadDups() {
     const rows = await sbAll(`kind=in.(bill,setting,dup_ignore)&select=kind,id,data`);
     const merge = (rows.find(r => r.kind === "setting" && r.id === "product_merge") || {}).data || { map: {}, names: {}, labels: {}, info: {} };
@@ -823,7 +843,7 @@
       dupRender(true);
     };
     nav.querySelectorAll(".tab").forEach(b => { if (b !== t) b.addEventListener("click", () => { sec.hidden = true; t.setAttribute("aria-selected", "false"); }); });
-    setTimeout(() => loadDups().then(() => { const c = $("#cDups"); if (c) c.textContent = DUP.groups.length; }).catch(() => {}), 2500);
+    setTimeout(() => autoMergeSame().then(n => { const c = $("#cDups"); if (c) c.textContent = DUP.groups.length; if (n) { toast(`${n} same-name product${n > 1 ? "s" : ""} joined into one (different barcodes ignored). The tool refreshes within 30 seconds.`, 6000); if (!$("#p-dups").hidden) dupRender(false); } }).catch(e => console.warn("auto merge", e)), 2500);
     return true;
   }
   const iv2 = setInterval(() => { if (dupMount()) clearInterval(iv2); }, 700);
@@ -833,7 +853,7 @@
     const c = $("#cDups"); if (c) c.textContent = DUP.groups.length;
     const g = DUP.groups;
     sec.innerHTML = `
-      <div class="banner info">Same product saved twice (new barcode, different spelling). Pick the one to <b>keep</b> — the latest purchase is pre-selected — then <b>Merge</b>. Different sizes are never grouped. Stock, prices and auto bills follow the merge. Nothing changes until you press Merge.</div>
+      <div class="banner info">Same product saved twice (new barcode, different spelling). <b>Same name + same size is now joined automatically</b> (barcode ignored). Below are only <b>similar</b> names — pick the one to <b>keep</b>, then <b>Merge</b>. Different sizes are never grouped. Stock, prices and auto bills follow the merge. Nothing changes until you press Merge.</div>
       ${g.some(x => x.sure) ? `<div class="row between"><span class="note">${g.filter(x => x.sure).length} groups have exactly the same name · ${g.filter(x => !x.sure).length} are similar (check those one by one)</span><button class="btn small" id="dAllSure">Merge all "Same name" into latest</button></div>` : ""}
       ${g.length ? g.map((grp, gi) => `<div class="tablebox" data-g="${gi}"><table class="ab-t"><thead><tr><th style="width:60px">Keep</th><th>${grp.sure ? '<span class="pill bad">Same name</span>' : '<span class="pill warn">Similar name — check</span>'}</th><th>Barcode</th><th>Last bought</th><th class="r">Bought</th><th class="r">Rate</th><th class="r">MRP</th></tr></thead><tbody>
         ${grp.items.map((x, i) => `<tr><td><input type="radio" name="keep${gi}" value="${i}" ${i === 0 ? "checked" : ""} style="width:18px;height:18px"></td><td><span class="pn">${esc(x.name)}</span><div class="sub">${esc(x.sup)}</div></td><td class="mono sub">${esc(x.barcode || "—")}</td><td class="num">${x.last ? fmtD(x.last) + " " + x.last.slice(2, 4) : "—"}</td><td class="r num">${+x.qty.toFixed(2)} <span class="sub">(${x.bills} bills)</span></td><td class="r num">${x.rate ? inr(x.rate, 2) : "—"}</td><td class="r num">${x.mrp ? inr(x.mrp, 2) : "—"}</td></tr>`).join("")}
@@ -843,14 +863,8 @@
       const sure = g.filter(x => x.sure);
       if (!(await askYes(`Merge ${sure.length} "Same name" groups, each into its latest purchase?`, `Merge ${sure.length} groups`))) return;
       all.disabled = true; all.textContent = "Merging…";
-      try {
-        const cur = ((await sb("GET", "docs?kind=eq.setting&id=eq.product_merge&select=data"))[0] || {}).data || {};
-        const m = { map: cur.map || {}, names: cur.names || {}, labels: cur.labels || {}, info: cur.info || {} };
-        sure.forEach(grp => { const keep = grp.items[0]; grp.items.slice(1).forEach(x => { if (x.key !== keep.key) { m.map[x.key] = keep.key; m.labels[x.key] = x.name; } }); if (m.map[keep.key]) delete m.map[keep.key]; if (!m.names[keep.key]) m.names[keep.key] = keep.name; });
-        await sbPut([{ kind: "setting", id: "product_merge", data: { ...m, savedAt: nowIso() } }]);
-        DUP.groups = g.filter(x => !x.sure); D = null;
-        toast(`Merged ${sure.length} groups. The tool refreshes within 30 seconds.`, 5000); dupRender(false);
-      } catch (e) { all.disabled = false; all.textContent = "Merge all \"Same name\" into latest"; toast("Not merged: " + e.message, 6000); }
+      try { await mergeGroups(sure); DUP.groups = g.filter(x => !x.sure); D = null; toast(`Merged ${sure.length} groups. The tool refreshes within 30 seconds.`, 5000); dupRender(false); }
+      catch (e) { all.disabled = false; all.textContent = "Merge all \"Same name\" into latest"; toast("Not merged: " + e.message, 6000); }
     };
     sec.querySelectorAll("[data-g]").forEach(box => {
       const grp = g[+box.dataset.g], msg = box.querySelector(".msg");
