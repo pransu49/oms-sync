@@ -33,7 +33,9 @@ const strip = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<sty
       } catch (e) { console.log('template fetch failed', h, e.message); }
     }
   }
-  for (const p of ['/inventories', '/inventory', '/products', '/inventory/index', '/reports/export_data']) {
-    const r = await req(p); console.log(`PAGE ${p}: ${r.status} ${r.loc || ''} ::`, strip(r.text).slice(0, 1200));
-  }
+  const home = await req('/reports/export_data');
+  const menu = [...new Set([...home.text.matchAll(/href="(https:\/\/client\.omsguru\.com)?(\/[a-z_\/]+)"/g)].map((m) => m[2]))].filter((h) => /product|inventor|stock|warehouse|listing|sku/i.test(h));
+  console.log('MENU LINKS:', menu.join(' , '));
+  const w = await req('/warehouses'); console.log('WAREHOUSES:', w.status, strip(w.text).replace(/^.*?Logout/, '').slice(0, 2500));
+  for (const m of menu.slice(0, 8)) { const r = await req(m); console.log(`PAGE ${m}: ${r.status} ::`, strip(r.text).replace(/^.*?Logout/, '').slice(0, 1500)); }
 })().catch((e) => { console.error('probe failed', e); process.exit(1); });
