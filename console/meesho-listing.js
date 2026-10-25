@@ -24,7 +24,7 @@
   var q = "", tpl = null, grid = null, onlyNeed = true, busy = false;
   var S = loadSet();
   function loadSet() {
-    var d = { pct: 0, stock: 10, brand: "", country: "India", minPct: 15, tgtPct: 20, ship: 70, shipStep: 25, shelfDays: 365,
+    var d = { pct: 0, stock: 10, brand: "", country: "India", minPct: 15, tgtPct: 20, shelfDays: 365,
       profile: "Vishal E-commerce", profiles: { "Vishal E-commerce": { fssai: "22723923000545", bizName: "", bizAddr: "", bizPin: "", importer: "" } } };
     try { var s = JSON.parse(localStorage.getItem(SK) || "{}"); Object.keys(d).forEach(function (k) { if (s[k] != null) d[k] = s[k]; });
       if (!s.profiles && (s.bizName || s.fssai)) d.profiles["Vishal E-commerce"] = { fssai: s.fssai || "22723923000545", bizName: s.bizName || s.mfr || "", bizAddr: s.bizAddr || "", bizPin: s.bizPin || "", importer: s.importer || "" };
@@ -155,11 +155,9 @@
             '<label class="w">Address<textarea id="msBizAddr" placeholder="Shop / building, street, area, city, state"></textarea></label>' +
             '<label>Pincode<input id="msBizPin" inputmode="numeric" placeholder="6 digits"></label>' +
             '<label>Shelf life (days)<input id="msShelf" type="number" min="1" step="1"></label>' +
-            '<label class="w" style="margin-top:4px;color:var(--ink);font-weight:600">Meesho price <span style="font-weight:400;color:var(--muted)">— worked out from your cost (LOTS / manual cost)</span></label>' +
+            '<label class="w" style="margin-top:4px;color:var(--ink);font-weight:600">Meesho price <span style="font-weight:400;color:var(--muted)">— from your cost (LOTS / manual cost). Meesho takes no commission or shipping.</span></label>' +
             '<label>Target profit (% of price)<input id="msTgt" type="number" step="1"></label>' +
             '<label>Minimum profit (% of price)<input id="msMin" type="number" step="1"></label>' +
-            '<label>Meesho shipping per order, up to 500 g (₹)<input id="msShip" type="number" step="1"></label>' +
-            '<label>Shipping per extra 500 g (₹)<input id="msShipStep" type="number" step="1"></label>' +
             '<label>No cost known: Amazon price + %<input id="msPct" type="number" step="1" placeholder="0 = same price"></label>' +
             '<label>Stock when Amazon shows 0<input id="msStock" type="number" min="0" step="1"></label>' +
             '<label>Brand (empty = Amazon brand)<input id="msBrand" placeholder="e.g. Generic"></label>' +
@@ -189,8 +187,8 @@
     ["dragleave", "drop"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("over"); }); });
     drop.addEventListener("drop", function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) readTemplate(f); });
     $("msFile").addEventListener("change", function (e) { var f = e.target.files && e.target.files[0]; if (f) readTemplate(f); e.target.value = ""; });
-    var DEF = { pct: 0, stock: 10, minPct: 15, tgtPct: 20, ship: 70, shipStep: 25, shelfDays: 365 };
-    var map = { msPct: "pct", msStock: "stock", msBrand: "brand", msCountry: "country", msTgt: "tgtPct", msMin: "minPct", msShip: "ship", msShipStep: "shipStep", msShelf: "shelfDays" };
+    var DEF = { pct: 0, stock: 10, minPct: 15, tgtPct: 20, shelfDays: 365 };
+    var map = { msPct: "pct", msStock: "stock", msBrand: "brand", msCountry: "country", msTgt: "tgtPct", msMin: "minPct", msShelf: "shelfDays" };
     Object.keys(map).forEach(function (id) {
       var el = $(id), k = map[id]; el.value = S[k] == null ? "" : S[k];
       el.addEventListener("input", function () { S[k] = el.type === "number" ? (el.value === "" ? DEF[k] : +el.value) : el.value; saveSet(); });
@@ -439,24 +437,23 @@
     try { var c = getEffectiveSpapiUnitCost(p.name, p.sku); if (c && c.value > 0) return Number(c.value); } catch (e) {}
     return null;
   }
-  // Meesho price for the wanted profit: profit = price - cost - Meesho shipping - GST on the margin
-  function shipFor(g) { var base = Number(S.ship) || 0, step = Number(S.shipStep) || 0; return g > 500 ? base + step * Math.ceil((g - 500) / 500) : base; }
-  function profitAt(P, cost, ship, r) { return P - cost - ship - (r > 0 ? (P - cost) * r / (1 + r) : 0); }
+  // Meesho price for the wanted profit. Meesho charges no commission and no shipping,
+  // so profit = price - cost - GST on the margin.
+  function profitAt(P, cost, r) { return P - cost - (r > 0 ? (P - cost) * r / (1 + r) : 0); }
   function priceInfo(p, d) {
     if (p._pi) return p._pi;
     var mrp = Number(p.mrp) || 0, cost = costOf(p), gst = Number(gstOf(p)), r = (isNaN(gst) ? 5 : gst) / 100;
-    var g = (d && d.weightG) || (p.weightKg ? p.weightKg * 1000 : 500), ship = shipFor(g);
     if (!cost) {
       var v = Number(p.price) || 0; if (!v) return (p._pi = { v: "", was: "no cost & no Amazon price" });
       v = Math.round(v * (1 + (Number(S.pct) || 0) / 100));
       return (p._pi = { v: mrp && v > mrp ? Math.floor(mrp) : v, was: "No cost known — Amazon price used. Add cost (LOTS mapping / manual cost) for profit pricing." });
     }
-    var want = function (pct) { for (var P = Math.ceil(cost); P < cost * 5 + 1000; P++) if (profitAt(P, cost, ship, r) >= P * pct / 100) return P; return null; };
+    var want = function (pct) { for (var P = Math.ceil(cost); P < cost * 5 + 1000; P++) if (profitAt(P, cost, r) >= P * pct / 100) return P; return null; };
     var tgt = want(Number(S.tgtPct) || 20), min = want(Number(S.minPct) || 15), P = tgt, note = "";
     if (!P) P = mrp ? Math.floor(mrp) : Math.ceil(cost * 1.6);
     if (mrp && P > mrp) P = Math.floor(mrp);          // never above MRP (profit may then be lower)
-    var pf = profitAt(P, cost, ship, r), pc = Math.round(pf / P * 100);
-    note = "Cost ₹" + Math.round(cost) + " · Meesho shipping ₹" + ship + " · profit ₹" + Math.round(pf) + " (" + pc + "%)" + (pc < (Number(S.minPct) || 15) ? " — BELOW " + S.minPct + "%: MRP too low" : "");
+    var pf = profitAt(P, cost, r), pc = Math.round(pf / P * 100);
+    note = "Cost ₹" + Math.round(cost) + " · GST on margin ₹" + Math.round(P - cost - pf) + " · profit ₹" + Math.round(pf) + " (" + pc + "%)" + (pc < (Number(S.minPct) || 15) ? " — BELOW " + S.minPct + "%: MRP too low" : "");
     if (pc < (Number(S.minPct) || 15)) return (p._pi = { v: "", was: note + " — left empty (below your minimum profit). Type a price to list anyway.", low: true });
     return (p._pi = { v: P, was: note });
   }
