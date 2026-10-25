@@ -39,15 +39,19 @@ const strip = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<sty
   const w = { status: 0, text: '' }; console.log('WAREHOUSES:', w.status, strip(w.text).replace(/^.*?Logout/, '').slice(0, 2500));
   const sw = await req('/orders/setCurWarehouse/22452'); console.log('SETWH', sw.status, sw.loc);
   const dl = async (page, re, label) => {
-    const r = await req(page); const m = r.text.match(re); if (!m) { const k = r.text.search(/download_skus|exportInventory/); console.log(label, "link not found", r.status, r.text.slice(Math.max(0,k-300), k+200).replace(/\s+/g," ")); return; }
-    const t0 = Date.now(); const f = await fetch(BASE + m[1], { headers: { ...H, Cookie: ck() }, redirect: 'manual' }); upd(f);
+    const r = await req(page); const m = r.text.match(re); if (!m) { console.log(label, 'form not found'); return; }
+    const formHtml = m[0]; const action = m[1];
+    const fields = [...formHtml.matchAll(/<input[^>]*name="([^"]+)"[^>]*value="([^"]*)"/g)].map((x) => [x[1], x[2]]);
+    console.log(label, 'fields:', fields.map((f) => f[0]).join(','));
+    const t0 = Date.now(); const f = await fetch(BASE + action, { method: 'POST', body: new URLSearchParams(fields).toString(), headers: { ...H, Cookie: ck(), 'Content-Type': 'application/x-www-form-urlencoded', Referer: BASE + page, Origin: BASE }, redirect: 'manual' }); upd(f);
     const ct = f.headers.get('content-type') || '', cd = f.headers.get('content-disposition') || '', loc = f.headers.get('location') || '';
     const buf = Buffer.from(await f.arrayBuffer());
-    console.log(`${label}: ${m[1]} -> ${f.status} [${ct}] [${cd}] ${loc} ${buf.length}b ${Date.now() - t0}ms`);
+    console.log(`${label}: ${action} -> ${f.status} [${ct}] [${cd}] ${loc} ${buf.length}b ${Date.now() - t0}ms`);
     const txt = buf.toString('utf8'); const lines = txt.split(/\r?\n/);
     console.log(`${label} LINES=${lines.length} HEAD:`, /html/.test(ct) ? strip(txt).slice(0, 800) : lines.slice(0, 6).join(' || ').slice(0, 1500));
     if (!/html/.test(ct)) { const amz = lines.filter((l) => /amazon/i.test(l)).slice(0, 5); console.log(`${label} AMAZON ROWS:`, amz.join(' || ').slice(0, 1500)); }
+    if (loc) { const g = await req(loc); console.log(label, 'REDIRECT PAGE:', strip(g.text.slice(g.text.indexOf('id="content-wrapper"'))).slice(0, 600)); }
   };
-  await dl('/channel_listings', /href="[^"]*?(\/skus\/download_skus\/\d+)"/, 'MAPPED_LISTINGS');
-  await dl('/skus/inventory', /href="[^"]*?(\/skus\/exportInventory\/\d+)"/, 'INVENTORY');
+  await dl('/channel_listings', /<form action="(\/skus\/download_skus\/\d+)"[\s\S]*?<\/form>/, 'MAPPED_LISTINGS');
+  await dl('/skus/inventory', /<form action="(\/skus\/exportInventory\/\d+)"[\s\S]*?<\/form>/, 'INVENTORY');
 })().catch((e) => { console.error('probe failed', e); process.exit(1); });
