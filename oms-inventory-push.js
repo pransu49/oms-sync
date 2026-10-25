@@ -393,7 +393,7 @@ async function main() {
   const json = JSON.stringify({ rows: pack, unlinked: unlinked.slice(0, 4000) });
   const parts = []; for (let i = 0; i < json.length; i += 900000) parts.push(json.slice(i, i + 900000));
   await Promise.all(parts.map((p, i) => C.doc(`${base}_rows_${i}`).set({ data: p, at: runAt })));
-  await C.doc(base).set({ ...doc, chunks: parts.length, v: 2, autoMap: { at: runAt, ...autoMap, mapped: autoMap.mapped.slice(0, 300) } });
+  await C.doc(base).set({ ...doc, chunks: parts.length, v: 2, autoMap: { at: runAt, note: autoMap.note || '', mappedJson: JSON.stringify(autoMap.mapped.slice(0, 300)), skippedJson: JSON.stringify(autoMap.skipped.slice(0, 300)) } });
   if (!DRY) {
     const hist = C.doc('omsInventory_history');
     const h = await hist.get(); const runs = ((h.exists && h.data().runs) || []).filter((x) => x.status !== 'test').slice(-47);
