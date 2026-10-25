@@ -37,5 +37,9 @@ const strip = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<sty
   const menu = [...new Set([...home.text.matchAll(/href="(https:\/\/client\.omsguru\.com)?(\/[a-z_\/]+)"/g)].map((m) => m[2]))].filter((h) => /product|inventor|stock|warehouse|listing|sku/i.test(h));
   console.log('MENU LINKS:', menu.join(' , '));
   const w = { status: 0, text: '' }; console.log('WAREHOUSES:', w.status, strip(w.text).replace(/^.*?Logout/, '').slice(0, 2500));
-  for (const m of ['/skus/inventory','/channel_listings','/skus/list_products','/map_skus']) { const r = await req(m); console.log(`PAGE ${m}: ${r.status} ::`, strip(r.text).replace(/^[\s\S]*?What's New Settings/, '').slice(0, 2500)); }
+  const inv = await req('/skus/inventory');
+  const k = inv.text.indexOf('Please select a warehouse');
+  console.log('RAWSEL:', inv.text.slice(Math.max(0, k - 2500), k + 2500).replace(/\s+/g, ' '));
+  const sel = [...inv.text.matchAll(/(href|action|data-url|data-href)="([^"]*(warehouse|select)[^"]*)"/gi)].map((m) => m[2]);
+  console.log('SEL LINKS:', [...new Set(sel)].join(' , '));
 })().catch((e) => { console.error('probe failed', e); process.exit(1); });
