@@ -728,6 +728,134 @@
     };
   }
 
+  /* =====================================================================
+     DUPLICATES TAB — finds the same product saved under 2+ names/barcodes (e.g. a new barcode on a LOTS bill)
+     so they can be merged after checking. Uses the tool's own merge list (setting "product_merge"),
+     so the main tool, stock and auto bills all follow the merge.
+     ===================================================================== */
+  const SIZE_RE = /(\d+(?:\.\d+)?)\s*(kgs?|gms?|grams?|gr|g|ml|ltrs?|litres?|liters?|l|pcs?|pc|n|u|s|tabs?|caps?|cap)\b/gi;
+  const UNITN = { kg: "kg", kgs: "kg", g: "g", gm: "g", gms: "g", gram: "g", grams: "g", gr: "g", ml: "ml", l: "l", ltr: "l", ltrs: "l", litre: "l", litres: "l", liter: "l", liters: "l", pc: "pc", pcs: "pc", n: "pc", u: "pc", s: "pc", tab: "tab", tabs: "tab", cap: "cap", caps: "cap" };
+  function sizeSig(name) {
+    const out = []; let m; SIZE_RE.lastIndex = 0;
+    while ((m = SIZE_RE.exec(String(name || "")))) { let v = +m[1], u = UNITN[m[2].toLowerCase()] || m[2].toLowerCase(); if (u === "kg") { v *= 1000; u = "g"; } if (u === "l") { v *= 1000; u = "ml"; } out.push(v + u); }
+    return out.sort().join(",");
+  }
+  const STOP = new Set(["the", "and", "of", "with", "pack", "new", "mrp", "rs", "pk", "pouch", "jar", "bottle", "box", "free", "offer"]);
+  const toks = name => new Set(String(name || "").toLowerCase().replace(SIZE_RE, " ").replace(/[^a-z0-9]+/g, " ").split(" ").filter(w => w.length > 1 && !STOP.has(w) && !/^\d+$/.test(w)));
+  let DUP = null;
+  async function loadDups() {
+    const rows = await sbAll(`kind=in.(bill,setting,dup_ignore)&select=kind,id,data`);
+    const merge = (rows.find(r => r.kind === "setting" && r.id === "product_merge") || {}).data || { map: {}, names: {}, labels: {}, info: {} };
+    const ignore = new Set(rows.filter(r => r.kind === "dup_ignore").map(r => r.id));
+    const to = k => { let i = 0; while (merge.map && merge.map[k] && merge.map[k] !== k && i++ < 20) k = merge.map[k]; return k; };
+    const P = new Map();          // final key -> product
+    for (const r of rows) {
+      if (r.kind !== "bill") continue;
+      const b = r.data; if (!b || !b.items || b.docType === "credit") continue;
+      b.items.forEach(it => {
+        if (!it.name) return;
+        const key = to(pkey(it)), u = num(it.qty) + num(it.free);
+        const x = P.get(key) || { key, name: "", barcode: key.startsWith("bc:") ? key.slice(3) : "", last: "", sup: "", qty: 0, bills: 0, rate: 0, mrp: 0 };
+        x.qty += u; x.bills++;
+        if ((b.billDate || "") >= x.last) Object.assign(x, { last: b.billDate || "", sup: b.supplier || "", name: withSize(it.name, it.pack), rate: num(it.rate), mrp: num(it.mrp) || x.mrp });
+        P.set(key, x);
+      });
+    }
+    for (const x of P.values()) { const nm = (merge.names || {})[x.key]; if (nm) x.name = nm; x.sz = sizeSig(x.name); x.tk = toks(x.name); }
+    // group: same name & size = sure; very similar name & same size = possible
+    const list = [...P.values()], parent = new Map(list.map(x => [x.key, x.key])), why = new Map();
+    const find = k => { while (parent.get(k) !== k) k = parent.get(k); return k; };
+    const join = (a, b, w) => { const ra = find(a.key), rb = find(b.key); if (ra !== rb) parent.set(rb, ra); why.set(a.key, w); why.set(b.key, w); };
+    const byName = new Map(); list.forEach(x => { const k = normName(x.name).replace(/\s+/g, ""); (byName.get(k) || byName.set(k, []).get(k)).push(x); });
+    byName.forEach(g => { for (let i = 1; i < g.length; i++) join(g[0], g[i], "same name"); });
+    const byTok = new Map(); list.forEach(x => x.tk.forEach(t => (byTok.get(t) || byTok.set(t, []).get(t)).push(x)));
+    const seen = new Set();
+    list.forEach(a => {
+      const cand = new Set(); a.tk.forEach(t => { const l = byTok.get(t); if (l && l.length < 60) l.forEach(b => cand.add(b)); });
+      cand.forEach(b => {
+        if (b.key <= a.key || a.sz !== b.sz || !a.sz) return;
+        const pk = a.key + "|" + b.key; if (seen.has(pk)) return; seen.add(pk);
+        let hit = 0; a.tk.forEach(t => { if (b.tk.has(t)) hit++; });
+        const sim = hit / Math.max(a.tk.size, b.tk.size);
+        if (sim >= 0.8) join(a, b, why.get(a.key) === "same name" ? "same name" : "similar name");
+      });
+    });
+    const groups = new Map(); list.forEach(x => { const r = find(x.key); (groups.get(r) || groups.set(r, []).get(r)).push(x); });
+    const out = [...groups.values()].filter(g => g.length > 1).map(g => {
+      g.sort((a, b) => b.last.localeCompare(a.last) || b.qty - a.qty);
+      const sig = g.map(x => x.key).sort().join("|");
+      return { items: g, sig, sure: g.every(x => normName(x.name).replace(/\s+/g, "") === normName(g[0].name).replace(/\s+/g, "")), id: "dup:" + sig.slice(0, 180) };
+    }).filter(g => !ignore.has(g.id)).sort((a, b) => (b.sure - a.sure) || a.items[0].name.localeCompare(b.items[0].name));
+    DUP = { merge, groups: out };
+    return DUP;
+  }
+  function dupMount() {
+    const nav = document.querySelector("nav.tabs"), wrap = document.querySelector(".wrap");
+    if (!nav || !wrap || document.getElementById("tabDups")) return !!document.getElementById("tabDups");
+    const t = document.createElement("button");
+    t.className = "tab"; t.id = "tabDups"; t.type = "button"; t.setAttribute("role", "tab"); t.dataset.tab = "dups"; t.setAttribute("aria-selected", "false");
+    t.innerHTML = `Duplicates<span class="c" id="cDups">…</span>`;
+    nav.append(t);
+    const sec = document.createElement("section"); sec.className = "panel"; sec.id = "p-dups"; sec.hidden = true; wrap.append(sec);
+    t.onclick = () => {
+      document.querySelectorAll(".wrap > section.panel").forEach(p => p.hidden = p !== sec);
+      document.querySelectorAll("nav.tabs .tab").forEach(b => b.setAttribute("aria-selected", String(b === t)));
+      dupRender(true);
+    };
+    nav.querySelectorAll(".tab").forEach(b => { if (b !== t) b.addEventListener("click", () => { sec.hidden = true; t.setAttribute("aria-selected", "false"); }); });
+    setTimeout(() => loadDups().then(() => { const c = $("#cDups"); if (c) c.textContent = DUP.groups.length; }).catch(() => {}), 2500);
+    return true;
+  }
+  const iv2 = setInterval(() => { if (dupMount()) clearInterval(iv2); }, 700);
+  async function dupRender(reload) {
+    const sec = $("#p-dups");
+    if (reload || !DUP) { sec.innerHTML = `<div class="ab-load">Looking for duplicate products…</div>`; try { await loadDups(); } catch (e) { sec.innerHTML = `<div class="ab-load">Could not load: ${esc(e.message)}</div>`; return; } }
+    const c = $("#cDups"); if (c) c.textContent = DUP.groups.length;
+    const g = DUP.groups;
+    sec.innerHTML = `
+      <div class="banner info">Same product saved twice (new barcode, different spelling). Pick the one to <b>keep</b> — the latest purchase is pre-selected — then <b>Merge</b>. Different sizes are never grouped. Stock, prices and auto bills follow the merge. Nothing changes until you press Merge.</div>
+      ${g.some(x => x.sure) ? `<div class="row between"><span class="note">${g.filter(x => x.sure).length} groups have exactly the same name · ${g.filter(x => !x.sure).length} are similar (check those one by one)</span><button class="btn small" id="dAllSure">Merge all "Same name" into latest</button></div>` : ""}
+      ${g.length ? g.map((grp, gi) => `<div class="tablebox" data-g="${gi}"><table class="ab-t"><thead><tr><th style="width:60px">Keep</th><th>${grp.sure ? '<span class="pill bad">Same name</span>' : '<span class="pill warn">Similar name — check</span>'}</th><th>Barcode</th><th>Last bought</th><th class="r">Bought</th><th class="r">Rate</th><th class="r">MRP</th></tr></thead><tbody>
+        ${grp.items.map((x, i) => `<tr><td><input type="radio" name="keep${gi}" value="${i}" ${i === 0 ? "checked" : ""} style="width:18px;height:18px"></td><td><span class="pn">${esc(x.name)}</span><div class="sub">${esc(x.sup)}</div></td><td class="mono sub">${esc(x.barcode || "—")}</td><td class="num">${x.last ? fmtD(x.last) + " " + x.last.slice(2, 4) : "—"}</td><td class="r num">${+x.qty.toFixed(2)} <span class="sub">(${x.bills} bills)</span></td><td class="r num">${x.rate ? inr(x.rate, 2) : "—"}</td><td class="r num">${x.mrp ? inr(x.mrp, 2) : "—"}</td></tr>`).join("")}
+        </tbody></table><div class="row" style="padding:10px 12px;justify-content:flex-end"><span class="msg note" style="margin-right:auto"></span><button class="btn small dIgn">Not duplicate</button><button class="btn small primary dMerge">Merge into kept</button></div></div>`).join("")
+      : `<div class="ab-load">No duplicate products found. 👍</div>`}`;
+    const all = $("#dAllSure"); if (all) all.onclick = async () => {
+      const sure = g.filter(x => x.sure);
+      if (!confirm(`Merge ${sure.length} "Same name" groups, each into its latest purchase?`)) return;
+      all.disabled = true; all.textContent = "Merging…";
+      try {
+        const cur = ((await sb("GET", "docs?kind=eq.setting&id=eq.product_merge&select=data"))[0] || {}).data || {};
+        const m = { map: cur.map || {}, names: cur.names || {}, labels: cur.labels || {}, info: cur.info || {} };
+        sure.forEach(grp => { const keep = grp.items[0]; grp.items.slice(1).forEach(x => { if (x.key !== keep.key) { m.map[x.key] = keep.key; m.labels[x.key] = x.name; } }); if (m.map[keep.key]) delete m.map[keep.key]; if (!m.names[keep.key]) m.names[keep.key] = keep.name; });
+        await sbPut([{ kind: "setting", id: "product_merge", data: { ...m, savedAt: nowIso() } }]);
+        DUP.groups = g.filter(x => !x.sure); D = null;
+        toast(`Merged ${sure.length} groups. The tool refreshes within 30 seconds.`, 5000); dupRender(false);
+      } catch (e) { all.disabled = false; all.textContent = "Merge all \"Same name\" into latest"; toast("Not merged: " + e.message, 6000); }
+    };
+    sec.querySelectorAll("[data-g]").forEach(box => {
+      const grp = g[+box.dataset.g], msg = box.querySelector(".msg");
+      box.querySelector(".dIgn").onclick = async () => {
+        try { await sbPut([{ kind: "dup_ignore", id: grp.id, data: { keys: grp.items.map(x => x.key), at: nowIso() } }]); DUP.groups.splice(DUP.groups.indexOf(grp), 1); toast("Marked as different products"); dupRender(false); }
+        catch (e) { msg.textContent = "Not saved: " + e.message; }
+      };
+      box.querySelector(".dMerge").onclick = async () => {
+        const keep = grp.items[+box.querySelector("input[type=radio]:checked").value], rest = grp.items.filter(x => x !== keep);
+        if (!confirm(`Merge ${rest.length} product${rest.length > 1 ? "s" : ""} into:\n${keep.name} (${keep.barcode || "no barcode"})?\n\n${rest.map(x => "• " + x.name + " (" + (x.barcode || "no barcode") + ")").join("\n")}`)) return;
+        box.querySelectorAll("button").forEach(b => b.disabled = true); msg.textContent = "Merging…";
+        try {
+          const cur = ((await sb("GET", "docs?kind=eq.setting&id=eq.product_merge&select=data"))[0] || {}).data || {};
+          const m = { map: cur.map || {}, names: cur.names || {}, labels: cur.labels || {}, info: cur.info || {} };
+          rest.forEach(x => { if (x.key !== keep.key) { m.map[x.key] = keep.key; m.labels[x.key] = x.name; if (m.info[x.key] && !m.info[keep.key]) m.info[keep.key] = m.info[x.key]; } });
+          if (m.map[keep.key]) delete m.map[keep.key];
+          if (!m.names[keep.key]) m.names[keep.key] = keep.name;
+          await sbPut([{ kind: "setting", id: "product_merge", data: { ...m, savedAt: nowIso() } }]);
+          DUP.groups.splice(DUP.groups.indexOf(grp), 1); D = null;
+          toast(`Merged into ${keep.name}. The tool refreshes within 30 seconds.`, 5000); dupRender(false);
+        } catch (e) { box.querySelectorAll("button").forEach(b => b.disabled = false); msg.textContent = "Not merged: " + e.message; }
+      };
+    });
+  }
+
   async function runSave(list) {
     if (S.busy) return; S.busy = true;
     const msg = $("#abFoot .msg"); $("#abFoot").querySelectorAll("button").forEach(b => b.disabled = true);
