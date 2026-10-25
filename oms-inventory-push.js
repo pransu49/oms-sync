@@ -265,6 +265,7 @@ async function uploadInventory(rows) {
   return { ok: null, errors: {}, note: 'Sent - OMS Guru has not reported the result yet (check its notifications).' };
 }
 
+let unmapDbg = false;
 async function main() {
   const runAt = Date.now();
   const L = await loadLots();
@@ -304,6 +305,13 @@ async function main() {
     } else if (plan.length) { autoMap.mapped = plan.map((x) => [x.sku, x.channel, x.master, x.how, runAt]); autoMap.note = 'Test run - not sent'; }
   } catch (e) { autoMap.note = 'Auto-map skipped: ' + (e.message || e); console.warn(autoMap.note); }
 
+  { // DEBUG Tata Tea Agni
+    const L2 = L; Object.values(L2.lots).filter((p) => /agni/i.test(p.name || '')).forEach((p) => console.log('DBG LOTS', p.code, '|', p.name, '| qty', p.qty));
+    ['B079H8Y973', 'B07DCKVFTW'].forEach((a) => console.log('DBG ASINMAP', a, JSON.stringify(L2.asinMap[a] || null).slice(0, 300)));
+    listings.filter((r) => /B079H8Y973|B07DCKVFTW|VZ-IVW5-2NSE|N-B07DCKVFTW/i.test(r['Extra Data'] + ' ' + r['Channel Listing SKU Code']) || /agni/i.test(r['Product Name'] || ''))
+      .forEach((r) => console.log('DBG OMS', r['Channel Listing SKU Code'], '|', r['Extra Data'], '|', r['Channel Name'], '| master:', r['Product SkuCode'], '| mapped', r['Is Mapped'], '| combo', r['Is Combo Product'], '| title:', (r['Channel Listing Title'] || '').slice(0, 50)));
+    unmapDbg = true;
+  }
   const omsQty = {}, blocked = {};
   inventory.forEach((r) => { const k = r['Item SkuCode']; if (!k || (r['Warehouse Id'] && r['Warehouse Id'] !== WAREHOUSE_ID)) return; omsQty[k] = parseInt(r['In Stock'], 10) || 0; blocked[k] = Math.max(0, parseInt(r.Blocked, 10) || 0); });
   // group Amazon listings by master SKU
@@ -338,6 +346,7 @@ async function main() {
     if (differ) conflicts++;
     const cur = omsQty[g.sku], newQty = best.target;
     const why = best.oos ? (best.lotsQty < OOS_BELOW ? `LOTS ${best.lotsQty} is below ${OOS_BELOW}` : `LOTS ${best.lotsQty} - blocked ${bl}${best.units !== best.lotsQty && bl ? ' (in LOTS units)' : ''} = ${best.free}, below ${OOS_BELOW}`) + ' - Amazon 0' : '';
+    if (/agni/i.test(g.name || '') || /agni/i.test(g.sku)) console.log('DBG ROW', g.sku, '| inStock', cur0, 'blocked', bl, '| opts', JSON.stringify(opts.map((o) => ({ a: o.asin, lots: o.codes, q: o.lotsQty, units: o.units, oos: o.oos, via: o.via }))));
     rows.push({ sku: g.sku, name: g.name, asin: best.asin, lots: best.codes, lotsName: best.lotsName, lotsQty: best.lotsQty, via: best.via, omsQty: cur, newQty, blocked: bl, oos: best.oos,
       change: newQty === cur ? 'same' : best.oos ? 'zero' : newQty > cur ? 'up' : 'down',
       note: [why, differ ? `Listings linked differently (${opts.map((o) => (o.oos ? 0 : o.free)).join(' / ')} free) - lowest used` : ''].filter(Boolean).join(' · ') });
