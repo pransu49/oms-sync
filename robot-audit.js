@@ -93,7 +93,8 @@ function lotsFor(asin, L) {
       const free = Math.floor((l.low - bl * l.need) / l.need);
       const id = `${acct}:${i.sku}`;
       if (amz <= 0 && l.low >= MIN && free >= MIN) { wrongOos.push({ i, l, bl, free }); seen['oos:' + id] = 1; }
-      if (amz > 0 && (l.low < MIN || amz > Math.max(0, l.units - bl) + 2)) { oversell.push({ i, l, amz, bl }); seen['over:' + id] = 1; }
+      // Amazon already holds back its own pending orders, so compare with LOTS units directly
+      if (amz > 0 && (l.low < MIN || amz > l.units + 2)) { oversell.push({ i, l, amz, bl }); seen['over:' + id] = 1; }
     }
     console.log(`${acct}: raw wrong-OOS ${wrongOos.length}, raw oversell ${oversell.length}`); wrongOos.slice(0, 6).forEach((x) => console.log(`   OOS? ${x.i.sku} ${String(x.i.name || '').slice(0, 40)} LOTS ${x.l.low} blocked ${x.bl} free ${x.free}`)); oversell.slice(0, 6).forEach((x) => console.log(`   OVER? ${x.i.sku} ${String(x.i.name || '').slice(0, 40)} amz ${x.amz} LOTS ${x.l.low} units ${x.l.units} blocked ${x.bl}`));
     // only what was also seen in the previous check (give robots + OMS Guru one cycle to catch up)
@@ -104,7 +105,7 @@ function lotsFor(asin, L) {
     if (oosConf.length) findings.push({ key: `oos_${acct}`, n: oosConf.length, text: `🔴 <b>${label} · ${oosConf.length} wrongly OUT OF STOCK</b> (LOTS has stock, Amazon shows 0)\n` +
       oosConf.sort(bySales).slice(0, 8).map((x) => `• ${esc((x.i.name || x.i.sku).slice(0, 38))} — LOTS ${x.l.low}${x.bl ? `, blocked ${x.bl}` : ''} · sold ${sold30[x.i.asin] || 0}/30d\n   <code>${esc(x.i.sku)}</code>`).join('\n') });
     if (overConf.length) findings.push({ key: `over_${acct}`, n: overConf.length, text: `🟠 <b>${label} · ${overConf.length} OVERSELL risk</b> (Amazon shows more than LOTS has)\n` +
-      overConf.sort(bySales).slice(0, 8).map((x) => `• ${esc((x.i.name || x.i.sku).slice(0, 38))} — Amazon ${x.amz}, LOTS ${x.l.low}${x.bl ? `, blocked ${x.bl}` : ''}\n   <code>${esc(x.i.sku)}</code>`).join('\n') });
+      overConf.sort(bySales).slice(0, 8).map((x) => `• ${esc((x.i.name || x.i.sku).slice(0, 38))} — Amazon ${x.amz}, LOTS ${x.l.low}${x.l.need !== 1 ? ` (= ${x.l.units} Amazon units)` : ''}\n   <code>${esc(x.i.sku)}</code>`).join('\n') });
 
     // 3 + 4: robot price changes in the last 24 h
     const bySku = Object.fromEntries(self.map((i) => [i.sku, i]));
@@ -118,6 +119,8 @@ function lotsFor(asin, L) {
       if (l && l.cost && x.newPrice < l.cost - 0.5) below.push({ i, x, l });
       if (x.oldPrice > 0 && x.newPrice < x.oldPrice * 0.75) bigCut.push({ i, x });
     });
+    below.forEach((y) => console.log(`   BELOW COST ${acct} ${y.i.sku} ${String(y.i.name || '').slice(0, 40)}: ${y.x.oldPrice} -> ${y.x.newPrice}, LOTS cost ${y.l.cost} (${y.l.name})`));
+    bigCut.forEach((y) => console.log(`   BIG CUT ${acct} ${y.i.sku} ${String(y.i.name || '').slice(0, 40)}: ${y.x.oldPrice} -> ${y.x.newPrice}`));
     if (below.length) findings.push({ key: `below_${acct}`, n: below.length, now: true, text: `🔴 <b>${label} · ${below.length} robot price(s) BELOW LOTS COST</b>\n` +
       below.slice(0, 8).map((y) => `• ${esc((y.i.name || y.i.sku).slice(0, 38))} — ${inr(y.x.oldPrice || 0)} → <b>${inr(y.x.newPrice)}</b>, cost ${inr(y.l.cost)}\n   <code>${esc(y.i.sku)}</code>`).join('\n') });
     if (bigCut.length) findings.push({ key: `cut_${acct}`, n: bigCut.length, now: true, text: `🟠 <b>${label} · ${bigCut.length} robot price cut(s) over 25%</b>\n` +
@@ -144,6 +147,17 @@ function lotsFor(asin, L) {
     const full = S.meta.fullSyncedAt || 0;
     if (now - full > 4 * 3600e3) findings.push({ key: `stale_${acct}`, now: true, text: `⛔ <b>${label}</b>: no full Amazon robot run for ${Math.round((now - full) / 3600e3)} h — prices, relists and the out-of-stock rule are not running.` });
   }
+  // any robot workflow whose last 2 runs failed
+  try {
+    const H = { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json' }, repo = process.env.GITHUB_REPOSITORY;
+    const flows = { 'spapi-sync.yml': 'Amazon robot (Praso)', 'spapi-sync-sastastore.yml': 'Amazon robot (Sasta Store)', 'oms-inventory-push.yml': 'OMS stock robot', 'sync-workflow.yml': 'OMS Guru order sync', 'nimbus-sync.yml': 'NimbusPost sync' };
+    for (const [f, name] of Object.entries(flows)) {
+      const r = await (await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${f}/runs?branch=main&status=completed&per_page=6`, { headers: H })).json();
+      const runs = (r.workflow_runs || []).filter((x) => x.conclusion !== 'cancelled' && x.conclusion !== 'skipped');
+      if (runs.length >= 2 && runs[0].conclusion === 'failure' && runs[1].conclusion === 'failure')
+        findings.push({ key: `fail_${f}`, now: true, text: `⛔ <b>${name}</b>: last 2 runs FAILED (latest ${Math.round((now - Date.parse(runs[0].created_at)) / 60e3)} min ago). Its work is not being done.` });
+    }
+  } catch (e) { console.warn('Run check skipped:', e.message || e); }
   if (!omsDoc || now - (omsDoc.at || 0) > 3 * 3600e3) findings.push({ key: 'oms_stale', now: true, text: `⛔ <b>OMS stock robot</b>: no run for ${omsDoc ? Math.round((now - omsDoc.at) / 3600e3) + ' h' : 'a long time'} — LOTS stock is not reaching OMS Guru.` });
   else if (['failed', 'error', 'stopped', 'partial'].includes(omsDoc.status)) findings.push({ key: `oms_${omsDoc.status}`, now: true, text: `⛔ <b>OMS stock robot ${omsDoc.status}</b>: ${esc(omsDoc.note || '')}` });
 
