@@ -388,6 +388,10 @@ async function main() {
     console.log('DEBUG — actual column headers in this export:', Object.keys(rawRows[0]).join(' | '));
   }
   const orders = rawRows.map(slimOrder);
+  // Safety: OMS Guru sometimes hands back an older export file. Never overwrite live orders with it.
+  const newest = orders.map((o) => toIso(o.orderDate)).filter(Boolean).sort().pop() || '';
+  const oldestOk = new Date(Date.now() + 5.5 * 3600e3 - 3 * 864e5).toISOString().slice(0, 10);
+  if (orders.length && newest && newest < oldestOk) throw new Error(`Export looks old (newest order ${newest}) — live orders NOT overwritten. Will retry next run.`);
   if (ARCHIVE_DOC) {
     const shipped = orders.filter((o) => String(o.shipmentDate || '').trim());
     await pushToFirestore(shipped, ARCHIVE_DOC);
@@ -407,10 +411,14 @@ async function archiveMain() {
     console.log(`Archive window: ${ago + 14} to ${ago} days ago...`);
     const link = await requestExport(14, ago);
     const rows = parseOrders(await pollAndDownload(link)).map(slimOrder);
+    const to = new Date(Date.now() + 5.5 * 3600e3 - ago * 864e5).toISOString().slice(0, 10);
+    const from = new Date(Date.now() + 5.5 * 3600e3 - (ago + 15) * 864e5).toISOString().slice(0, 10);
+    const inWin = rows.filter((o) => { const d = toIso(o.orderDate); return d && d >= from && d <= to; });
+    if (rows.length && !inWin.length) console.log(`  This export did not match ${from}..${to} (OMS gave another file) — skipped.`);
     let added = 0;
-    rows.forEach((o) => { const k = [o.channelSubOrderId || o.channelOrderId, o.sku, o.channel].join('|'); if (seen.has(k)) return; seen.add(k); all.push(o); added++; });
+    inWin.forEach((o) => { const k = [o.channelSubOrderId || o.channelOrderId, o.sku, o.channel].join('|'); if (seen.has(k)) return; seen.add(k); all.push(o); added++; });
     console.log(`  ${rows.length} rows, ${added} new.`);
-    await new Promise(r => setTimeout(r, 3000));
+    await new Promise(r => setTimeout(r, 20000));   // let OMS Guru finish one export before asking the next
   }
   const shipped = all.filter((o) => String(o.shipmentDate || '').trim());
   await pushToFirestore(shipped, ARCHIVE_DOC);

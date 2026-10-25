@@ -215,7 +215,8 @@
     for (const pt of parts) {
       const p = prodForCode(pt.code) || lotsOnly(pt.code) || (pt.name && D.byName.get(normName(pt.name)) ? D.prods.get(D.byName.get(normName(pt.name))) : null);
       if (!p) return null;
-      out.push({ p, units: (num(pt.qty) || 1) * packMult(pt.orderPackQty ? pt : r), via });
+      // lotsPack: the LOTS item is a bigger pack (e.g. 144 sticks) split into smaller Amazon packs -> bill the fraction of the pack
+      out.push({ p, units: (num(pt.qty) || 1) * packMult(pt.orderPackQty ? pt : r) / (num(pt.lotsPack) > 1 ? num(pt.lotsPack) : 1), via });
     }
     return out;
   }
@@ -265,8 +266,10 @@
         u.qty += q; d.unmatched.set(k, u); continue;
       }
       for (const { p, units, via } of m) {
-        const L = d.lines.get(p.key) || { key: p.key, p, qty: 0, via, orders: 0 };
-        L.qty += q * units; L.orders++; d.lines.set(p.key, L);
+        const L = d.lines.get(p.key) || { key: p.key, p, qty: 0, via, orders: 0, src: new Map() };
+        L.qty = Math.round((L.qty + q * units) * 1000) / 1000; L.orders++;
+        const sk = String(o.productName || o.sku).slice(0, 70), sv = L.src.get(sk) || { q: 0, u: units }; sv.q += q; L.src.set(sk, sv);
+        d.lines.set(p.key, L);
       }
     }
     for (const d of drafts) {
@@ -497,7 +500,7 @@
         <div class="ab-sum"><span>Cost <b>${inr(d.cost)}</b></span><span>Taxable <b>${inr(d.taxable)}</b></span><span>GST <b>${inr(d.gst)}</b></span><span>Profit <b>${inr(d.profit)}</b> (${d.avgPct.toFixed(1)}%)</span></div></div>
       <div class="tablebox"><table class="ab-t"><thead><tr><th>Product</th><th class="hm">HSN</th><th class="r">Qty</th><th class="r hm">Cost/unit</th><th class="r">Rate (ex-GST)</th><th class="r">Profit %</th><th class="r hm">MRP</th><th class="r hm">GST</th><th class="r">Amount</th></tr></thead><tbody>
       ${d.items.map((i, n) => `<tr data-n="${n}" class="${i.overMrp || i.hsnBad ? "bad" : i.pct < MIN_PCT - 0.05 ? "warn" : ""}">
-        <td><span class="pn">${esc(i.p.name)}</span><div class="sub">${esc(i.p.noBill ? "No purchase bill yet — LOTS list price" : i.p.sup + (i.p.date ? " · " + fmtD(i.p.date) : ""))} · ${esc(i.L.via)}</div></td>
+        <td><span class="pn">${esc(i.p.name)}</span><div class="sub">${esc(i.p.noBill ? "No purchase bill yet — LOTS list price" : i.p.sup + (i.p.date ? " · " + fmtD(i.p.date) : ""))} · ${esc(i.L.via)}</div><div class="sub" title="${esc([...i.L.src].map(([k, v]) => v.q + " × " + k + (v.u !== 1 ? " (" + (+v.u.toFixed(3)) + " each)" : "")).join("\n"))}">Sold: ${esc([...i.L.src].slice(0, 2).map(([k, v]) => v.q + " × " + k + (v.u !== 1 ? " (×" + (+v.u.toFixed(3)) + ")" : "")).join(" · "))}${i.L.src.size > 2 ? " · +" + (i.L.src.size - 2) + " more" : ""}</div></td>
         <td class="hm"><input class="h${i.hsnBad ? " bad" : ""}" data-k="hsn" value="${esc(i.hsn)}" inputmode="numeric" placeholder="HSN"></td>
         <td class="r"><input data-k="qty" value="${i.qty}" inputmode="decimal" style="width:60px"></td>
         <td class="r num hm">${inr(i.p.cost, 2)}</td>

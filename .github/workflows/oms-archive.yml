@@ -1,15 +1,13 @@
 name: OMS Archive (for Auto sale bills)
 
 # Saves the last N days of SHIPPED orders to aikm_admin/omsArchive so Auto sale bills
-# can bill dates older than the live 15-day window. Runs on command, and once a day.
+# can bill dates older than the live 15-day window. Runs on command only (never on a timer: two OMS exports close together can mix up files).
 on:
   workflow_dispatch:
     inputs:
       days:
         description: 'How many days back'
         default: '40'
-  schedule:
-    - cron: '41 20 * * *'   # ~2:11 AM India time
 
 # Same group as the live OMS sync, so the two never log in to OMS Guru at the same time.
 concurrency:
