@@ -349,6 +349,18 @@
         break;
       }
       // columns never filled: Meesho's own (system use, error status/message) and row-label columns
+      var errCol = cols.filter(function (c) { return /^error message$/i.test(c.head); })[0];
+      if (errCol) {
+        var words = {}, bad = 0;
+        Object.keys(main.rows).forEach(function (rn) { if (+rn <= hr) return; var x = main.rows[rn][errCol.idx]; if (!x || !x.v) return; bad++;
+          (x.v.match(/([A-Za-z][A-Za-z'-]*)\s*\((?:Warning|Error)\)/g) || []).forEach(function (m) { words[m.replace(/\s*\(.*$/, "").toLowerCase()] = 1; }); });
+        if (bad) {
+          learnWords(Object.keys(words)); tpl = null; grid = null; $("msRes").style.display = "none";
+          box.innerHTML = '<div class="ms-tpl"><b>This is Meesho\'s error file</b> (' + bad + " rows with messages). " + (Object.keys(words).length ? "Learned " + Object.keys(words).length + " blocked words — they'll be replaced next time: <b>" + esc(Object.keys(words).join(", ")) + "</b>. " : "") +
+            "Now drop a <b>fresh</b> Meesho template and click Fill again.</div>";
+          drawSteps(); return;
+        }
+      }
       cols.forEach(function (c) { if (c.type === "sys" || /for system use|don'?t modify/i.test(c.raw) || /→|->|:$/.test(c.head) || /^fields?\b|^error (status|message)$|^status$|^remarks?$|^tutorial/i.test(c.head)) c.sys = true; });
       var sysCols = cols.filter(function (c) { return c.sys; }).length;
       cols = cols.filter(function (c) { return !c.sys; });
@@ -401,7 +413,7 @@
   async function details(asins) {
     note("Checking saved Amazon details…", 5);
     var have = await getDocs(asins), now = Date.now();
-    var miss = asins.filter(function (a) { return !have[a] || !(now - (have[a].at || 0) < FRESH_MS) || !(have[a].v >= 2); });
+    var miss = asins.filter(function (a) { return !have[a] || !(now - (have[a].at || 0) < FRESH_MS) || !(have[a].v >= 3); });
     if (!miss.length) return { d: have };
     var tok = await token();
     if (!tok) return { d: have, warn: "Robot not connected (GitHub token missing) — filled from basic Amazon data only. Click any “Sync OMS now” button once in the console to connect it." };
@@ -433,6 +445,11 @@
     n = parseFloat(p.taxPercent); return isNaN(n) ? "" : n;
   }
   function toCm(x) { if (!x || x.v == null) return ""; var f = { mm: 0.1, m: 100, in: 2.54, inches: 2.54 }[String(x.u).toLowerCase()] || 1; return Math.round(x.v * f * 10) / 10; }
+  function mrpOf(p, d) {
+    var m = Number(p.mrp) || Number(d && d.mrp) || 0; if (m) return m;
+    try { var lm = resolveSpapiLotsMatch(p.name, p.asin), pr = lm && lotsPriceByCode[lm.code]; m = Number(pr && pr.mrp) || 0; } catch (e) {}
+    return m;
+  }
   function costOf(p) {
     try { var c = getEffectiveSpapiUnitCost(p.name, p.sku); if (c && c.value > 0) return Number(c.value); } catch (e) {}
     return null;
@@ -442,7 +459,7 @@
   function profitAt(P, cost, r) { return P - cost - (r > 0 ? (P - cost) * r / (1 + r) : 0); }
   function priceInfo(p, d) {
     if (p._pi) return p._pi;
-    var mrp = Number(p.mrp) || 0, cost = costOf(p), gst = Number(gstOf(p)), r = (isNaN(gst) ? 5 : gst) / 100;
+    var mrp = mrpOf(p, d), cost = costOf(p), gst = Number(gstOf(p)), r = (isNaN(gst) ? 5 : gst) / 100;
     if (!cost) {
       var v = Number(p.price) || 0; if (!v) return (p._pi = { v: "", was: "no cost & no Amazon price" });
       v = Math.round(v * (1 + (Number(S.pct) || 0) / 100));
@@ -456,6 +473,19 @@
     note = "Cost ₹" + Math.round(cost) + " · GST on margin ₹" + Math.round(P - cost - pf) + " · profit ₹" + Math.round(pf) + " (" + pc + "%)" + (pc < (Number(S.minPct) || 15) ? " — BELOW " + S.minPct + "%: MRP too low" : "");
     if (pc < (Number(S.minPct) || 15)) return (p._pi = { v: "", was: note + " — left empty (below your minimum profit). Type a price to list anyway.", low: true });
     return (p._pi = { v: P, was: note });
+  }
+  // Words Meesho flags as "(Warning)" brand keywords and then rejects the row. Built-in list + words learned
+  // from Meesho error files dropped in this tab. Each is swapped for a safe word (or removed).
+  var BW = "aikm_meesho_badwords";
+  var SWAP = { chocolate: "choco", chocolates: "choco", chocolaty: "choco", honey: "", desi: "traditional", enjoy: "savour", enjoyable: "tasty",
+    real: "genuine", friends: "family", friend: "family", moments: "times", moment: "time", an: "a", delight: "treat", magic: "special", happy: "joyful", fun: "tasty" };
+  function badWords() { var m = {}; Object.keys(SWAP).forEach(function (k) { m[k] = SWAP[k]; }); try { var l = JSON.parse(localStorage.getItem(BW) || "{}"); Object.keys(l).forEach(function (k) { if (!(k in m)) m[k] = ""; }); } catch (e) {} return m; }
+  function learnWords(list) { try { var l = JSON.parse(localStorage.getItem(BW) || "{}"); list.forEach(function (w) { l[w.toLowerCase()] = 1; }); localStorage.setItem(BW, JSON.stringify(l)); } catch (e) {} }
+  function safe(x) {
+    var m = badWords(), keys = Object.keys(m).sort(function (a, b) { return b.length - a.length; });
+    var out = String(x || "").replace(new RegExp("\\b(" + keys.map(function (k) { return k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|") + ")\\b", "gi"), function (w) {
+      var r = m[w.toLowerCase()] || ""; return r && w[0] === w[0].toUpperCase() ? r[0].toUpperCase() + r.slice(1) : r; });
+    return out.replace(/[ \t]{2,}/g, " ").replace(/\s+([,.])/g, "$1").replace(/\|\s*\|/g, "|").trim();
   }
   function tidy(x) {   // Meesho rejects emojis / odd symbols; drop Amazon leftovers like "allergen_info" or "g pack"
     return String(x || "").replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}\u{2B00}-\u{2BFF}]/gu, "").replace(/[™®©]/g, "").replace(/\s+/g, " ").trim();
@@ -482,6 +512,17 @@
     return m ? m[1] : (n > 0 && n <= 100 ? String(n) : "1"); }
   // Amazon's contact text -> { name, address }. Names like "+91-80-2520..", "1134" or "No. 1134" were
   // phone numbers / door numbers: find the real company name, else use Amazon's manufacturer field.
+  var BRANDC = {};
+  var brandKey = function (x) { return String((x.d && x.d.brand) || "").toLowerCase().trim(); };
+  function goodAddr(a) { a = String(a || "").trim(); var parts = a.split(/,\s*/).filter(Boolean);
+    return /[a-z]{3}/i.test(a) && a.length >= 12 && (/\d/.test(a) || parts.length >= 3) && new Set(parts.map(function (z) { return z.toLowerCase(); })).size > 1 || (/\d/.test(a) && a.length >= 15); }
+  function pinIn(k) { if (!k) return ""; if (/^\d{6}$/.test(k.pin || "")) return k.pin; var m = String(k.text || k.address || "").match(/\b[1-9]\d{2}\s?\d{3}\b/g); return m ? m[m.length - 1].replace(/\s/g, "") : ""; }
+  function buildBrandContacts(rows) {   // best manufacturer details per brand, from the products in this file
+    BRANDC = {};
+    rows.forEach(function (r) { var d = r.d; if (!d || !d.contacts) return; var k = String(d.brand || "").toLowerCase().trim(); if (!k || BRANDC[k]) return;
+      [d.contacts.manufacturer, d.contacts.packer].some(function (c) { if (!c) return false; var cc = company(c, d), pin = pinIn(c);
+        if (CO.test(cc.name) && goodAddr(cc.address) && pin) { BRANDC[k] = { name: cc.name, address: cc.address, pin: pin }; return true; } return false; }); });
+  }
   var CO = /\b(pvt|private|ltd|limited|llp|foods?|industr\w*|enterprises?|company|corporation|bakers?|bakes|bakery|agro|products|traders?|mills?|inc)\b/i;
   function company(c, d) {
     var t = String(c.text && c.text.length > 8 ? c.text : [c.name, c.address].filter(Boolean).join(", "))
@@ -503,7 +544,7 @@
   var RULES = [
     [/volumetric|group id|catalog id|meesho id|variation|parent sku|\bean\b|barcode|gtin|\bupc\b|size chart|video/, function () { return ""; }],
     [/wrong|defective/, function (x) { return priceInfo(x.p, x.d).v; }],
-    [/\bmrp\b|maximum retail/, function (x) { return x.p.mrp ? Math.round(x.p.mrp) : ""; }],
+    [/\bmrp\b|maximum retail/, function (x) { var m = mrpOf(x.p, x.d); return m ? Math.round(m) : ""; }],
     [/price/, function (x) { var i = priceInfo(x.p, x.d); return { v: i.v, was: i.was, low: i.low }; }],
     [/\bgst\b/, function (x) { return gstOf(x.p); }],
     [/\bhsn\b/, function (x) {
@@ -542,7 +583,7 @@
       return hit ? { v: hit } : ((x.d && x.d.other && (x.d.other.item_type_name || x.d.other.generic_name)) || ""); }],
     [/inventory|stock|available quantity|quantity available|^qty/, function (x) { return x.p.quantity > 0 ? x.p.quantity : (Number(S.stock) || 0); }],
     [/sku|style id|style code|product id/, function (x) { return x.p.sku || x.p.asin; }, "text"],
-    [/product name|title|catalog name|^name$/, function (x) { return tidy((x.d && x.d.title) || x.p.name || ""); }, "text"],
+    [/product name|title|catalog name|^name$/, function (x) { return safe(tidy((x.d && x.d.title) || x.p.name || "")); }, "text"],
     [/image|photo|picture/, function (x) { var im = (x.d && x.d.images && x.d.images.length ? x.d.images : (x.p.img ? [x.p.img] : [])); return im[x.slot] || ""; }, "text"],
     [/brand/, function (x) { return S.brand || (x.d && x.d.brand) || ""; }, "text"],
     [/country/, function (x) { return (x.d && x.d.countryOfOrigin) || S.country || "India"; }],
@@ -554,14 +595,18 @@
       var h = x.h, cs = (x.d && x.d.contacts) || {}, c = /packer/.test(h) ? (cs.packer || cs.manufacturer) : (cs.manufacturer || cs.packer), P = PF();
       var pinOf = function (k) { if (!k) return ""; if (/^\d{6}$/.test(k.pin || "")) return k.pin; var m = String(k.text || k.address || "").match(/\b[1-9]\d{2}\s?\d{3}\b/g); return m ? m[m.length - 1].replace(/\s/g, "") : ""; };
       if (c) { var cc = company(c, x.d), other = c === cs.packer ? cs.manufacturer : cs.packer;
-        if (!cc.address && other) cc.address = company(other, x.d).address;
+        if (!goodAddr(cc.address) && other) cc.address = company(other, x.d).address;
+        var bc = BRANDC[brandKey(x)];
+        if (!goodAddr(cc.address) && bc) { cc = { name: CO.test(cc.name) ? cc.name : bc.name, address: bc.address }; c = { pin: bc.pin }; }
         return /pin|zip|postal/.test(h) ? pinOf(c) || pinOf(cs.manufacturer) || pinOf(cs.packer) || P.bizPin || "" : /address/.test(h) ? cc.address : /name/.test(h) ? cc.name : cc.name + ", " + cc.address; }
+      var b2 = BRANDC[brandKey(x)];   // no Amazon details: same-brand product from this file, then your saved details
+      if (b2) return /pin|zip|postal/.test(h) ? b2.pin : /address/.test(h) ? b2.address : /name/.test(h) ? b2.name : b2.name + ", " + b2.address;
       if (/pin|zip|postal/.test(h)) return P.bizPin || "";
       if (/address/.test(h)) return P.bizAddr || "";
       if (/name/.test(h)) return P.bizName || (x.d && x.d.manufacturer) || "";
       return [P.bizName, P.bizAddr, P.bizPin].filter(Boolean).join(", ");   // "Manufacturer Details" in one box
     }, "text"],
-    [/description|about (the )?product|product details/, function (x) { return descr(x.p, x.d); }, "text"],
+    [/description|about (the )?product|product details/, function (x) { return safe(descr(x.p, x.d)); }, "text"],
     [/colou?r/, function (x) { return (x.d && x.d.color) || ""; }],
     [/material|fabric/, function (x) { return (x.d && x.d.material) || ""; }],
     [/\bsize\b/, function (x) { return (x.d && x.d.size) || "Free Size"; }],
@@ -604,6 +649,7 @@
       try { if (typeof lotsVendor !== "undefined" && lotsVendor && !lotsVendor.products && typeof loadLotsCatalog === "function") { note("Loading your costs…", 3); await loadLotsCatalog(); } } catch (e) {}
       var items = Array.from(pick.values()).filter(Boolean).map(function (p) { delete p._pi; return p; }), r = await details(items.map(function (i) { return String(i.asin).toUpperCase(); }));
       var mem = memGet();
+      buildBrandContacts(items.map(function (p) { return { d: r.d[String(p.asin).toUpperCase()] || null }; }));
       grid = { rows: items.map(function (p) {
         var d = r.d[String(p.asin).toUpperCase()] || null, slot = 0, vals = {};
         tpl.cols.forEach(function (c) {
