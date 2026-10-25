@@ -24,7 +24,7 @@
   var q = "", tpl = null, grid = null, onlyNeed = true, busy = false;
   var S = loadSet();
   function loadSet() {
-    var d = { pct: 0, stock: 10, brand: "", bizName: "", bizAddr: "", bizPin: "", mfr: "", importer: "", country: "India" };
+    var d = { pct: 0, stock: 10, brand: "", bizName: "", bizAddr: "", bizPin: "", fssai: "", mfr: "", importer: "", country: "India" };
     try { var s = JSON.parse(localStorage.getItem(SK) || "{}"); Object.keys(d).forEach(function (k) { if (s[k] != null) d[k] = s[k]; }); } catch (e) {}
     return d;
   }
@@ -148,6 +148,7 @@
             '<label class="w">Business address<textarea id="msBizAddr" placeholder="Shop / building, street, area, city, state"></textarea></label>' +
             '<label>Pincode<input id="msBizPin" inputmode="numeric" placeholder="6 digits"></label>' +
             '<label>Importer (only imported goods)<input id="msImporter" placeholder="Name, address, PIN"></label>' +
+            '<label class="w">FSSAI licence number (food items only)<input id="msFssai" inputmode="numeric" placeholder="14 digits"></label>' +
           '</div></details>' +
           '<button type="button" class="ms-go dim" id="msGo"><i class="ti ti-wand"></i>Fill Meesho file</button>' +
           '<div class="ms-note" id="msNote"></div>' +
@@ -174,7 +175,7 @@
     drop.addEventListener("drop", function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) readTemplate(f); });
     $("msFile").addEventListener("change", function (e) { var f = e.target.files && e.target.files[0]; if (f) readTemplate(f); e.target.value = ""; });
     if (!S.bizName && S.mfr) S.bizName = S.mfr;
-    var map = { msPct: "pct", msStock: "stock", msBrand: "brand", msCountry: "country", msBizName: "bizName", msBizAddr: "bizAddr", msBizPin: "bizPin", msImporter: "importer" };
+    var map = { msPct: "pct", msStock: "stock", msBrand: "brand", msCountry: "country", msBizName: "bizName", msBizAddr: "bizAddr", msBizPin: "bizPin", msImporter: "importer", msFssai: "fssai" };
     Object.keys(map).forEach(function (id) {
       var el = $(id), k = map[id]; el.value = S[k] == null ? "" : S[k];
       el.addEventListener("input", function () { S[k] = el.type === "number" ? (el.value === "" ? (k === "pct" ? 0 : 10) : +el.value) : el.value; saveSet(); });
@@ -279,58 +280,65 @@
       }
       // find the sheet + row holding the column names
       var KEY = /product ?name|sku|\bgst\b|\bhsn\b|price|\bmrp\b|image|weight|inventory|stock|colou?r|brand|description|country|manufacturer|packer|material|fabric|\bsize\b/i;
+      var SKIP = /validation|example|instruction|return reason|sample|guide|help|read ?me|list/i;
+      var first = function (v) { return String(v || "").split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean)[0] || ""; };
+      // which sheet + row holds the column names: Meesho's "...-Fill this" sheet wins over Validation / Example sheets
       var best = null;
       for (var i = 0; i < sheets.length; i++) {
         var sh = sheets[i]; if (sh.hidden || !sh.path || !zip.file(sh.path)) continue;
-        var cs = await cells(sh.path);
+        var cs = await cells(sh.path), nDv = all(cs.doc, "dataValidation").length;
         for (var r = 1; r <= 15; r++) {
           var row = cs.rows[r]; if (!row) continue;
-          var score = Object.keys(row).filter(function (c) { return row[c].v && row[c].v.length < 90 && KEY.test(row[c].v); }).length;
-          if (score >= 4 && (!best || score > best.score)) best = { sh: sh, r: r, score: score };
+          var score = Object.keys(row).filter(function (c) { var t = first(row[c].v); return t && t.length < 60 && KEY.test(t); }).length;
+          if (score < 4) continue;
+          var total = score + (/fill/i.test(sh.name) ? 100 : 0) + (nDv ? 20 : 0) - (SKIP.test(sh.name) ? 200 : 0);
+          if (!best || total > best.total) best = { sh: sh, r: r, total: total };
         }
       }
       if (!best) throw new Error("Could not find the product columns in this file. Is it a Meesho bulk-upload template?");
       var main = await cells(best.sh.path), hr = best.r, hrow = main.rows[hr];
-      var cols = Object.keys(hrow).map(Number).sort(function (a, b) { return a - b; }).filter(function (c) { return hrow[c].v; }).map(function (c) {
-        var raw = hrow[c].v; return { idx: c, letter: colLet(c), raw: raw, head: raw.replace(/\*/g, "").replace(/\s+/g, " ").trim(), req: /\*/.test(raw) || /mandatory|required/i.test(raw), hint: "", options: null };
+      var cols = Object.keys(hrow).map(Number).sort(function (a, b) { return a - b; }).filter(function (c) { return first(hrow[c].v); }).map(function (c) {
+        var raw = hrow[c].v, lines = raw.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+        return { idx: c, letter: colLet(c), raw: raw, head: lines[0].replace(/\*/g, "").replace(/\s+/g, " ").trim(), req: /\*/.test(lines[0]), hint: lines.slice(1).join(" ").slice(0, 220), options: null };
       });
       // dropdown lists (both Excel styles)
       var dvs = all(main.doc, "dataValidation"), minStart = null;
       for (var d = 0; d < dvs.length; d++) {
-        var dv = dvs[d]; if ((dv.getAttribute("type") || "") !== "list") continue;
-        var sq = dv.getAttribute("sqref") || ((all(dv, "sqref")[0] || {}).textContent) || "";
-        var f1 = all(dv, "formula1")[0]; if (!f1) continue;
-        var fx = ((all(f1, "f")[0] || f1).textContent || "").trim();
-        var opts = await listValues(fx, sheets, names, cells, best.sh.path);
+        var dv = dvs[d], sq = dv.getAttribute("sqref") || ((all(dv, "sqref")[0] || {}).textContent) || "", isList = (dv.getAttribute("type") || "") === "list";
+        var opts = null;
+        if (isList) { var f1 = all(dv, "formula1")[0]; if (f1) opts = await listValues(((all(f1, "f")[0] || f1).textContent || "").trim(), sheets, names, cells, best.sh.path); }
         sq.split(/\s+/).filter(Boolean).forEach(function (part) {
           var g = range(part); if (!g) return;
-          cols.forEach(function (col) { if (col.idx >= g.c1 && col.idx <= g.c2 && g.r2 > hr) { if (opts && opts.length && !col.options) col.options = opts; } });
+          if (opts && opts.length) cols.forEach(function (col) { if (col.idx >= g.c1 && col.idx <= g.c2 && g.r2 > hr && !col.options) col.options = opts; });
           if (g.r1 > hr && g.r1 <= hr + 12 && (minStart == null || g.r1 < minStart)) minStart = g.r1;
         });
       }
-      // Meesho's "Field Type" row: Compulsory / Recommended / Optional / System_Use for every column
-      var TYPE = /^(compulsory|mandatory|required|recommended|optional|system[ _-]?use|system)$/i;
-      for (var tr = Math.max(1, hr - 8); tr <= hr + 8; tr++) {
+      // the row saying Compulsory / Optional / Do not fill for every column (above or below the names)
+      var cls = function (t) { t = String(t || "").toLowerCase(); return /do not fill|don'?t (fill|modify)|system[ _-]?use/.test(t) ? "sys" : /compulsory|mandatory|required/.test(t) ? "req" : /optional|recommended/.test(t) ? "opt" : ""; };
+      for (var tr = Math.max(1, hr - 4); tr <= hr + 8; tr++) {
         if (tr === hr) continue; var trw = main.rows[tr] || {};
-        var typed = cols.filter(function (c) { return trw[c.idx] && TYPE.test(trw[c.idx].v); });
-        if (typed.length < 3) continue;
-        cols.forEach(function (c) { var t = trw[c.idx] && trw[c.idx].v.toLowerCase(); if (!t || !TYPE.test(t)) return;
-          c.type = /^sys/.test(t) ? "sys" : /^(compulsory|mandatory|required)$/.test(t) ? "req" : "opt"; c.req = c.type === "req"; });
+        if (cols.filter(function (c) { return trw[c.idx] && trw[c.idx].v.length < 60 && cls(trw[c.idx].v); }).length < 3) continue;
+        cols.forEach(function (c) { var t = trw[c.idx] && trw[c.idx].v.length < 60 ? cls(trw[c.idx].v) : ""; if (t) { c.type = t; c.req = t === "req"; } });
         break;
       }
-      // columns never filled: Meesho's own (System_Use, error status/message) and row-label columns
-      cols.forEach(function (c) { if (c.type === "sys" || /→|->/.test(c.raw) || /^field (type|name)|^error (status|message)$|^status$|^remarks?$/i.test(c.head)) c.sys = true; });
+      // columns never filled: Meesho's own (system use, error status/message) and row-label columns
+      cols.forEach(function (c) { if (c.type === "sys" || /for system use|don'?t modify/i.test(c.raw) || /→|->|:$/.test(c.head) || /^fields?\b|^error (status|message)$|^status$|^remarks?$|^tutorial/i.test(c.head)) c.sys = true; });
       var sysCols = cols.filter(function (c) { return c.sys; }).length;
       cols = cols.filter(function (c) { return !c.sys; });
-      // first empty row after the column names (skips hint / example rows)
-      var isEmpty = function (rn) { var row = main.rows[rn]; return !row || cols.every(function (c) { var x = row[c.idx]; return !x || !x.v || x.f || TYPE.test(x.v); }); };
+      // first empty row after the column names (skips hint / link / example rows)
+      var isEmpty = function (rn) { var row = main.rows[rn]; return !row || cols.every(function (c) { var x = row[c.idx]; return !x || !x.v || x.f; }); };
       var start = minStart || hr + 1;
       while (start <= hr + 12 && !isEmpty(start)) start++;
-      for (var h = hr + 1; h < start; h++) { var hrw = main.rows[h] || {}; cols.forEach(function (c) { var x = hrw[c.idx]; if (x && x.v) { if (!c.type && /mandatory|required|compulsory/i.test(x.v)) c.req = true; if (!c.hint && !TYPE.test(x.v)) c.hint = x.v.slice(0, 160); } }); }
-      tpl = { name: file.name, zip: zip, path: best.sh.path, sheet: best.sh.name, doc: main.doc, hr: hr, start: start, cols: cols };
+      // columns Meesho fills itself with a formula (e.g. Wrong/Defective price, Importer "Not Required")
+      cols.forEach(function (c) { for (var fr = start; fr < start + 4; fr++) { var x = (main.rows[fr] || {})[c.idx]; if (x && x.f) { c.formula = true; break; } } });
+      var autoCols = cols.filter(function (c) { return c.formula; }).length;
+      cols = cols.filter(function (c) { return !c.formula; });
+      for (var h = hr + 1; h < start; h++) { var hrw = main.rows[h] || {}; cols.forEach(function (c) { var x = hrw[c.idx]; if (x && x.v) { if (!c.type && cls(x.v) === "req") c.req = true; if (!c.hint && !cls(x.v)) c.hint = x.v.slice(0, 160); } }); }
+      var cat = (first((main.rows[1] || {})[0] && main.rows[1][0].v).replace(/\s*template.*$/i, "") || best.sh.name.replace(/[-_ ]*fill this.*$/i, "")).replace(/[-_]+/g, " ").trim();
+      tpl = { name: file.name, zip: zip, path: best.sh.path, sheet: best.sh.name, doc: main.doc, hr: hr, start: start, cols: cols, cat: cat };
       grid = null; $("msRes").style.display = "none";
       var dd = cols.filter(function (c) { return c.options; }).length, rq = cols.filter(function (c) { return c.req; }).length;
-      box.innerHTML = '<div class="ms-tpl"><b>✓ ' + esc(file.name) + "</b><br>Sheet “" + esc(best.sh.name) + "” · " + cols.length + " columns to fill" + (rq ? " · " + rq + " required" : "") + (sysCols ? " · " + sysCols + " Meesho-only skipped" : "") + (dd ? " · " + dd + " with Meesho choices" : "") + " · products start at row " + start + "</div>";
+      box.innerHTML = '<div class="ms-tpl"><b>✓ ' + esc(file.name) + "</b><br>Sheet “" + esc(best.sh.name) + "” · " + cols.length + " columns to fill" + (rq ? " · " + rq + " required" : "") + (sysCols + autoCols ? " · " + (sysCols + autoCols) + " filled by Meesho itself, skipped" : "") + (dd ? " · " + dd + " with Meesho choices" : "") + " · products start at row " + start + "</div>";
     } catch (e) {
       tpl = null; box.innerHTML = '<div class="ms-tpl bad">' + esc(e.message || e) + "</div>";
     }
@@ -404,15 +412,51 @@
     if (t && s.indexOf(t.slice(0, 40)) < 0) s += (s ? "\n\n" : "") + t;
     return (s || (d && d.title) || p.name || "").slice(0, 3000);
   }
+  function grams(s) {   // "450g", "1.25kg", "500 ml", "1 L" -> grams (ml counted as g)
+    var m = /(\d+(?:\.\d+)?)\s*(kgs?|kilo\w*|gms?|grams?|g|ml|millilit\w*|ltrs?|lit\w*|l)\b/i.exec(String(s || "")); if (!m) return 0;
+    var n = +m[1], u = m[2].toLowerCase(); return /^(k|l)/.test(u) ? n * 1000 : n;
+  }
+  function netG(x) {    // net content: from the title first ("Pack of 6 x 75 g" = 450), then Amazon's attributes
+    var t = (x.d && x.d.title) || x.p.name || "", o = (x.d && x.d.other) || {}, g;
+    var m = /(\d+)\s*[x×*]\s*(\d+(?:\.\d+)?\s*(?:kgs?|gms?|grams?|g|ml|l)\b)/i.exec(t); if (m) return Math.round(+m[1] * grams(m[2]));
+    g = grams(t) || grams(o.item_net_weight || o.net_content_weight || o.net_content || o.net_quantity || "");
+    return Math.round(g || (x.d && x.d.weightG) || (x.p.weightKg ? x.p.weightKg * 1000 : 0));
+  }
+  function packOf(x) { var t = (x.d && x.d.title) || x.p.name || "", m = /pack\s*of\s*(\d+)/i.exec(t) || /(\d+)\s*[x×]\s*\d/i.exec(t), o = (x.d && x.d.other) || {};
+    return m ? m[1] : (parseInt(o.number_of_items || o.unit_count || o.number_of_pieces, 10) || "1"); }
   var RULES = [
-    [/group id|catalog id|meesho id|variation|parent sku|\bean\b|barcode|gtin|\bupc\b|size chart|video/, function () { return ""; }],
+    [/volumetric|group id|catalog id|meesho id|variation|parent sku|\bean\b|barcode|gtin|\bupc\b|size chart|video/, function () { return ""; }],
     [/wrong|defective/, function (x) { return price(x.p); }],
     [/\bmrp\b|maximum retail/, function (x) { return x.p.mrp ? Math.round(x.p.mrp) : ""; }],
     [/price/, function (x) { return price(x.p); }],
     [/\bgst\b/, function (x) { return gstOf(x.p); }],
-    [/\bhsn\b/, function (x) { return x.p.hsnCode || ""; }, "text"],
-    [/weight/, function (x) { var g = (x.d && x.d.weightG) || (x.p.weightKg ? x.p.weightKg * 1000 : 0); if (!g) return ""; return /\bkg|kilo/.test(x.h) ? Math.round(g / 10) / 100 : Math.round(g); }],
-    [/net quantity|pack of|no\.? of (pieces|items)|number of (pieces|items)/, function (x) { var o = (x.d && x.d.other) || {}; return o.number_of_items || o.number_of_pieces || o.unit_count || "1"; }],
+    [/\bhsn\b/, function (x) {
+      var v = String(x.p.hsnCode || "").replace(/\D/g, ""), o = x.c.options; if (!v || !o) return v;
+      var hit = o.filter(function (a) { return a === v; })[0] || o.filter(function (a) { return v.indexOf(a) === 0; }).sort(function (a, b) { return b.length - a.length; })[0] ||
+        o.filter(function (a) { return a.indexOf(v) === 0; })[0];
+      return hit ? { v: hit } : { v: "", was: v };
+    }, "text"],
+    [/weight/, function (x) {
+      var g = netG(x); if (!g) return "";
+      if (x.c.options) { var hit = x.c.options.filter(function (o) { return /^\s*[\d.]+\s*[a-z]+\s*$/i.test(o) && Math.abs(grams(o) - g) < 0.5; });
+        return { v: hit.filter(function (o) { return !/ml|l$/i.test(o); })[0] || hit[0] || "", was: g + " g" }; }
+      return /\bkg|kilo/.test(x.h) ? Math.round(g / 10) / 100 : g;
+    }],
+    [/net quantity|pack of|no\.? of (pieces|items)|number of (pieces|items)/, function (x) { return packOf(x); }],
+    [/fssai/, function () { return String(S.fssai || "").replace(/\s/g, ""); }, "text"],
+    [/veg/, function (x) { var t = ((x.d && x.d.title) || x.p.name || "") + " " + JSON.stringify((x.d && x.d.other) || {});
+      return /non[\s_-]?veg|\begg|chicken|mutton|fish|meat/i.test(t) ? "Non Veg" : /\bveg(etarian)?\b|vegan/i.test(t) ? "Veg" : ""; }],
+    [/shelf life|best before|expiry/, function (x) {
+      var o = (x.d && x.d.other) || {}, k = Object.keys(o).filter(function (a) { return /shelf|expir|best_before/.test(a); })[0], m = k && /(\d+)\s*(day|month|year)/i.exec(o[k]);
+      if (!m || !x.c.options) return m ? m[0] : "";
+      var n = +m[1], u = m[2].toLowerCase(), days = u === "day" ? n : u === "month" ? n * 30 : n * 365;
+      var c = [n + " " + m[2], days + " Days", days / 30 + " Months", days / 365 + " Years", days / 365 + " Year"];
+      for (var i = 0; i < c.length; i++) { var hit = x.c.options.filter(function (a) { return a.toLowerCase() === c[i].toLowerCase(); })[0]; if (hit) return { v: hit }; }
+      return { v: "", was: o[k] };
+    }],
+    [/generic name/, function (x) { var o = x.c.options || [], cat = (tpl && tpl.cat || "").toLowerCase();
+      var hit = o.filter(function (a) { return a.toLowerCase() === cat; })[0] || o.filter(function (a) { return cat && (cat.indexOf(a.toLowerCase()) >= 0 || a.toLowerCase().indexOf(cat) >= 0) && a.length > 3; })[0];
+      return hit ? { v: hit } : ((x.d && x.d.other && (x.d.other.item_type_name || x.d.other.generic_name)) || ""); }],
     [/inventory|stock|available quantity|quantity available|^qty/, function (x) { return x.p.quantity > 0 ? x.p.quantity : (Number(S.stock) || 0); }],
     [/sku|style id|style code|product id/, function (x) { return x.p.sku || x.p.asin; }, "text"],
     [/product name|title|catalog name|^name$/, function (x) { return (x.d && x.d.title) || x.p.name || ""; }, "text"],
@@ -473,12 +517,14 @@
         var d = r.d[String(p.asin).toUpperCase()] || null, slot = 0, vals = {};
         tpl.cols.forEach(function (c) {
           var h = c.head.toLowerCase(), rule = RULES.filter(function (x) { return x[0].test(h); })[0], v, kind = rule ? rule[2] : "";
-          var x = { p: p, d: d, h: h, slot: 0 };
+          var x = { p: p, d: d, h: h, slot: 0, c: c };
           if (rule && /image|photo|picture/.test(h)) { var n = /(\d+)/.exec(h); x.slot = n ? Math.max(0, +n[1] - 1) : /front|main/.test(h) ? 0 : /back/.test(h) ? 1 : /side/.test(h) ? 2 : slot; slot = Math.max(slot, x.slot) + 1; }
           v = rule ? rule[1](x) : guess(c.head, d);
           if ((v === "" || v == null) && mem[norm(c.head)]) v = mem[norm(c.head)];
-          var sn = snap(v, c.options);
-          vals[c.idx] = { v: sn.v === "" || sn.v == null ? "" : String(sn.v), was: sn.was || "", auto: sn.v !== "" && sn.v != null, text: kind === "text" };
+          var sn = v && typeof v === "object" ? v : snap(v, c.options);
+          if ((sn.v === "" || sn.v == null) && c.options && c.options.length === 1) sn = { v: c.options[0] };   // only one choice -> take it
+          if ((sn.v === "" || sn.v == null) && mem[norm(c.head)]) { var ms = snap(mem[norm(c.head)], c.options); if (ms.v) sn = { v: ms.v, was: sn.was }; }   // your earlier "Same for all"
+          vals[c.idx] = { v: sn.v === "" || sn.v == null ? "" : String(sn.v), was: sn.was || "", auto: sn.v !== "" && sn.v != null, text: kind === "text" || !!c.options };
         });
         return { p: p, d: d, vals: vals };
       }), warn: r.warn || "" };
