@@ -105,7 +105,7 @@ function compact(it) {
     if (v && Object.keys(other).length < 80) other[k] = v.slice(0, 200);
   });
   return {
-    asin: it.asin, at: Date.now(), v: 2, productType: pt,
+    asin: it.asin, at: Date.now(), v: 3, productType: pt,
     contacts: contacts(a),
     title: clean(sm.itemName || flat(a.item_name)),
     brand: clean(sm.brand || flat(a.brand)),

@@ -413,7 +413,7 @@
   async function details(asins) {
     note("Checking saved Amazon details…", 5);
     var have = await getDocs(asins), now = Date.now();
-    var miss = asins.filter(function (a) { return !have[a] || !(now - (have[a].at || 0) < FRESH_MS) || !(have[a].v >= 2); });
+    var miss = asins.filter(function (a) { return !have[a] || !(now - (have[a].at || 0) < FRESH_MS) || !(have[a].v >= 3); });
     if (!miss.length) return { d: have };
     var tok = await token();
     if (!tok) return { d: have, warn: "Robot not connected (GitHub token missing) — filled from basic Amazon data only. Click any “Sync OMS now” button once in the console to connect it." };
