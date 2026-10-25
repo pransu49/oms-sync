@@ -1,0 +1,49 @@
+name: Push LOTS stock to OMS Guru
+
+on:
+  schedule:
+    - cron: '50 * * * *'   # every hour (OMS Guru then pushes the stock to Amazon)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = test run, nothing sent to OMS Guru'
+        required: false
+        default: 'false'
+  push:
+    branches: [claude/oms-inventory-probe]   # test runs while building (always dry)
+
+concurrency:
+  group: oms-inventory-push
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - shell: bash
+        run: node oms-inventory-push.js 2>&1 | tee run.log; exit ${PIPESTATUS[0]}
+        env:
+          OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
+          OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          DRY_RUN: ${{ github.event_name == 'push' && 'true' || inputs.dry_run || 'false' }}
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node report-health.js oms-inventory "LOTS stock to OMS" run.log || true
