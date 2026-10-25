@@ -105,7 +105,12 @@
   async function fsList(db, path, size = 50) {
     const out = []; let tok = "";
     for (let i = 0; i < 200; i++) {
-      const r = await fetch(fsBase(db, path) + `?pageSize=${size}&key=${FS[db].k}` + (tok ? "&pageToken=" + encodeURIComponent(tok) : ""));
+      let r;
+      for (let t = 0; t < 3; t++) {
+        try { r = await fetch(fsBase(db, path) + `?pageSize=${size}&key=${FS[db].k}` + (tok ? "&pageToken=" + encodeURIComponent(tok) : "")); if (r.ok) break; } catch (e) { r = null; }
+        await new Promise(res => setTimeout(res, 1500 * (t + 1)));
+      }
+      if (!r) throw new Error("No connection while reading " + path);
       if (!r.ok) throw new Error("Could not read " + path + " (" + r.status + ")");
       const j = await r.json();
       (j.documents || []).forEach(d => { const o = { _id: d.name.split("/").pop() }; for (const k in (d.fields || {})) o[k] = fv(d.fields[k]); out.push(o); });
@@ -118,11 +123,13 @@
      DATA
      ===================================================================== */
   let D = null;          // loaded data
+  let archFail = false;
   async function loadAll(progress) {
+    archFail = false;
     progress("Loading orders…");
     const [omsChunks, archChunks, asinDoc, mmChunks, lotsChunks] = await Promise.all([
       fsList("oms", "aikm_admin/omsOrders/chunks"),
-      fsList("oms", "aikm_admin/omsArchive/chunks", 5).catch(() => []),
+      fsList("oms", "aikm_admin/omsArchive/chunks", 5).catch(() => { archFail = true; return []; }),
       fsDoc("main", "aikm_admin/spapiAsinLotsMap").catch(() => null),
       fsList("main", "aikm_admin/masterMapping/chunks").catch(() => []),
       fsList("main", "aikm_admin/lotsCatalog/chunks").catch(() => []),
@@ -470,7 +477,7 @@
         <div class="meta">${x.orders.size} orders · ${x.items.length} products${x.items.length ? ` · avg ${x.avgPct.toFixed(1)}%` : ""}</div>
         <div class="tags">${x.done ? pill("good", "Saved " + esc(x.done.invoiceNo)) : empty ? pill("", "No orders") : pill("warn", "Draft")}${x.unmatched.size ? pill("bad", x.unmatched.size + " not matched") : ""}${x.hsnBad && !x.done ? pill("bad", x.hsnBad + " HSN missing") : ""}${x.low && !x.done ? pill("warn", x.low + " under 15%") : ""}</div></button>`;
     };
-    $("#abBody").innerHTML = `
+    $("#abBody").innerHTML = `${archFail ? `<div class="banner">Older dates (before the last 15 days) could not load. Press Refresh to try again.</div>` : ""}
       <div class="ab-dates">${ds.map(x => `<button type="button" class="ab-date" data-d="${x.date}" aria-pressed="${x.date === S.date}"><b>${dayName(x.date)} ${fmtD(x.date)}</b><span>${x.orders} orders · ${x.doneN === COMPANIES.length ? '<i class="ok">✓ billed</i>' : x.doneN ? x.doneN + "/4 billed" : "not billed"}</span></button>`).join("")}</div>
       <div class="ab-cards">${S.drafts.map(card).join("")}</div>
       <div id="abDetail"></div>`;
