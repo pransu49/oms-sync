@@ -69,7 +69,7 @@ const strip = (h) => h.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<sty
       const f = await fetch(link.startsWith('http') ? link : BASE + link, { headers: { ...H, Cookie: ck() }, redirect: 'follow' });
       const buf = Buffer.from(await f.arrayBuffer()); const ct = f.headers.get('content-type') || '';
       let text = buf.toString('utf8');
-      if (buf[0] === 0x50 && buf[1] === 0x4b) { console.log(key, 'is a ZIP/XLSX', buf.length); const XLSX = require('xlsx'); const wb = XLSX.read(buf); text = XLSX.utils.sheet_to_csv(wb.Sheets[wb.SheetNames[0]]); }
+      if (buf[0] === 0x50 && buf[1] === 0x4b) { console.log(key, 'is a ZIP/XLSX', buf.length); const AdmZip = require('adm-zip'); const z = new AdmZip(buf); const es = z.getEntries(); console.log(key, 'zip entries:', es.map((e) => e.entryName + ':' + e.header.size).join(',')); text = es[0].getData().toString('utf8'); }
       const lines = text.split(/\r?\n/);
       console.log(`FILE ${key} [${ct}] ${buf.length}b LINES=${lines.length}`);
       console.log(`FILE ${key} HEAD:`, lines.slice(0, 4).join(' || ').slice(0, 1500));
