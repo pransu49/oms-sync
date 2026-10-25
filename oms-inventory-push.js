@@ -204,6 +204,8 @@ function planAutoMap(unmappedRows, mappedRows, skuAsin) {
     if (!/amazon/i.test(r['Channel Name'] || '')) continue;
     const sku = r['Channel Listing SKU Code'] || '', lid = r['Channel Listing Id'] || '';
     if (!sku || seen.has(sku + '|' + r['Channel Name'])) continue; seen.add(sku + '|' + r['Channel Name']);
+    // ONLY SKUs the robot created (relist XX-R1 / Add ASIN N-...) that are live on Amazon now - never old listings you left unmapped
+    if (!/-R\d+$|^N-B0|-RMV[A-Z0-9]+/i.test(sku) || !skuAsin[sku]) continue;
     let master = null, how = '';
     for (let base = sku; /-R\d+$|-RMV[A-Z0-9]+$/i.test(base) && !master;) { base = base.replace(/-R\d+$|-RMV[A-Z0-9]+$/i, ''); if (bySku[base]) { master = bySku[base]; how = `old SKU ${base}`; } }
     const asin = String(r['Extra Data'] || '').toUpperCase() || skuAsin[sku] || ((sku.match(/^N-(B0[0-9A-Z]{8})/) || [])[1] || '');
