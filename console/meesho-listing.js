@@ -24,11 +24,15 @@
   var q = "", tpl = null, grid = null, onlyNeed = true, busy = false;
   var S = loadSet();
   function loadSet() {
-    var d = { pct: 0, stock: 10, brand: "", mfr: "", packer: "", importer: "", country: "India" };
+    var d = { pct: 0, stock: 10, brand: "", bizName: "", bizAddr: "", bizPin: "", mfr: "", importer: "", country: "India" };
     try { var s = JSON.parse(localStorage.getItem(SK) || "{}"); Object.keys(d).forEach(function (k) { if (s[k] != null) d[k] = s[k]; }); } catch (e) {}
     return d;
   }
   function saveSet() { try { localStorage.setItem(SK, JSON.stringify(S)); } catch (e) {} }
+  // "Same for all" answers are remembered per column name and used again next time
+  var MK = "aikm_meesho_memory", norm = function (h) { return String(h).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); };
+  function memGet() { try { return JSON.parse(localStorage.getItem(MK) || "{}"); } catch (e) { return {}; } }
+  function memSet(h, v) { try { var m = memGet(); if (v) m[norm(h)] = v; else delete m[norm(h)]; localStorage.setItem(MK, JSON.stringify(m)); } catch (e) {} }
 
   /* ---------- styles ---------- */
   function css() {
@@ -140,9 +144,10 @@
             '<label>Stock when Amazon shows 0<input id="msStock" type="number" min="0" step="1"></label>' +
             '<label>Brand (empty = Amazon brand)<input id="msBrand" placeholder="e.g. Generic"></label>' +
             '<label>Country of origin<input id="msCountry"></label>' +
-            '<label class="w">Manufacturer name &amp; address<textarea id="msMfr" placeholder="Name, full address, PIN"></textarea></label>' +
-            '<label class="w">Packer name &amp; address (empty = same as manufacturer)<textarea id="msPacker"></textarea></label>' +
-            '<label class="w">Importer name &amp; address (only for imported goods)<textarea id="msImporter"></textarea></label>' +
+            '<label class="w">Your business name (used as manufacturer &amp; packer)<input id="msBizName" placeholder="e.g. Praso Enterprises"></label>' +
+            '<label class="w">Business address<textarea id="msBizAddr" placeholder="Shop / building, street, area, city, state"></textarea></label>' +
+            '<label>Pincode<input id="msBizPin" inputmode="numeric" placeholder="6 digits"></label>' +
+            '<label>Importer (only imported goods)<input id="msImporter" placeholder="Name, address, PIN"></label>' +
           '</div></details>' +
           '<button type="button" class="ms-go dim" id="msGo"><i class="ti ti-wand"></i>Fill Meesho file</button>' +
           '<div class="ms-note" id="msNote"></div>' +
@@ -168,12 +173,13 @@
     ["dragleave", "drop"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("over"); }); });
     drop.addEventListener("drop", function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) readTemplate(f); });
     $("msFile").addEventListener("change", function (e) { var f = e.target.files && e.target.files[0]; if (f) readTemplate(f); e.target.value = ""; });
-    var map = { msPct: "pct", msStock: "stock", msBrand: "brand", msCountry: "country", msMfr: "mfr", msPacker: "packer", msImporter: "importer" };
+    if (!S.bizName && S.mfr) S.bizName = S.mfr;
+    var map = { msPct: "pct", msStock: "stock", msBrand: "brand", msCountry: "country", msBizName: "bizName", msBizAddr: "bizAddr", msBizPin: "bizPin", msImporter: "importer" };
     Object.keys(map).forEach(function (id) {
       var el = $(id), k = map[id]; el.value = S[k] == null ? "" : S[k];
       el.addEventListener("input", function () { S[k] = el.type === "number" ? (el.value === "" ? (k === "pct" ? 0 : 10) : +el.value) : el.value; saveSet(); });
     });
-    if (!S.mfr) $("msSet").open = true;
+    if (!S.bizName || !S.bizAddr || !S.bizPin) $("msSet").open = true;
     $("msGo").addEventListener("click", fill);
   }
 
@@ -302,15 +308,29 @@
           if (g.r1 > hr && g.r1 <= hr + 12 && (minStart == null || g.r1 < minStart)) minStart = g.r1;
         });
       }
+      // Meesho's "Field Type" row: Compulsory / Recommended / Optional / System_Use for every column
+      var TYPE = /^(compulsory|mandatory|required|recommended|optional|system[ _-]?use|system)$/i;
+      for (var tr = Math.max(1, hr - 8); tr <= hr + 8; tr++) {
+        if (tr === hr) continue; var trw = main.rows[tr] || {};
+        var typed = cols.filter(function (c) { return trw[c.idx] && TYPE.test(trw[c.idx].v); });
+        if (typed.length < 3) continue;
+        cols.forEach(function (c) { var t = trw[c.idx] && trw[c.idx].v.toLowerCase(); if (!t || !TYPE.test(t)) return;
+          c.type = /^sys/.test(t) ? "sys" : /^(compulsory|mandatory|required)$/.test(t) ? "req" : "opt"; c.req = c.type === "req"; });
+        break;
+      }
+      // columns never filled: Meesho's own (System_Use, error status/message) and row-label columns
+      cols.forEach(function (c) { if (c.type === "sys" || /→|->/.test(c.raw) || /^field (type|name)|^error (status|message)$|^status$|^remarks?$/i.test(c.head)) c.sys = true; });
+      var sysCols = cols.filter(function (c) { return c.sys; }).length;
+      cols = cols.filter(function (c) { return !c.sys; });
       // first empty row after the column names (skips hint / example rows)
-      var isEmpty = function (rn) { var row = main.rows[rn]; return !row || cols.every(function (c) { var x = row[c.idx]; return !x || !x.v || x.f; }); };
+      var isEmpty = function (rn) { var row = main.rows[rn]; return !row || cols.every(function (c) { var x = row[c.idx]; return !x || !x.v || x.f || TYPE.test(x.v); }); };
       var start = minStart || hr + 1;
       while (start <= hr + 12 && !isEmpty(start)) start++;
-      for (var h = hr + 1; h < start; h++) { var hrw = main.rows[h] || {}; cols.forEach(function (c) { var x = hrw[c.idx]; if (x && x.v) { if (/mandatory|required|compulsory/i.test(x.v)) c.req = true; if (!c.hint) c.hint = x.v.slice(0, 160); } }); }
+      for (var h = hr + 1; h < start; h++) { var hrw = main.rows[h] || {}; cols.forEach(function (c) { var x = hrw[c.idx]; if (x && x.v) { if (!c.type && /mandatory|required|compulsory/i.test(x.v)) c.req = true; if (!c.hint && !TYPE.test(x.v)) c.hint = x.v.slice(0, 160); } }); }
       tpl = { name: file.name, zip: zip, path: best.sh.path, sheet: best.sh.name, doc: main.doc, hr: hr, start: start, cols: cols };
       grid = null; $("msRes").style.display = "none";
       var dd = cols.filter(function (c) { return c.options; }).length, rq = cols.filter(function (c) { return c.req; }).length;
-      box.innerHTML = '<div class="ms-tpl"><b>✓ ' + esc(file.name) + "</b><br>Sheet “" + esc(best.sh.name) + "” · " + cols.length + " columns" + (rq ? " · " + rq + " required" : "") + (dd ? " · " + dd + " with Meesho choices" : "") + " · products start at row " + start + "</div>";
+      box.innerHTML = '<div class="ms-tpl"><b>✓ ' + esc(file.name) + "</b><br>Sheet “" + esc(best.sh.name) + "” · " + cols.length + " columns to fill" + (rq ? " · " + rq + " required" : "") + (sysCols ? " · " + sysCols + " Meesho-only skipped" : "") + (dd ? " · " + dd + " with Meesho choices" : "") + " · products start at row " + start + "</div>";
     } catch (e) {
       tpl = null; box.innerHTML = '<div class="ms-tpl bad">' + esc(e.message || e) + "</div>";
     }
@@ -399,9 +419,14 @@
     [/image|photo|picture/, function (x) { var im = (x.d && x.d.images && x.d.images.length ? x.d.images : (x.p.img ? [x.p.img] : [])); return im[x.slot] || ""; }, "text"],
     [/brand/, function (x) { return S.brand || (x.d && x.d.brand) || ""; }, "text"],
     [/country/, function (x) { return (x.d && x.d.countryOfOrigin) || S.country || "India"; }],
-    [/manufacturer/, function (x) { return S.mfr || (x.d && x.d.manufacturer) || ""; }, "text"],
-    [/packer/, function () { return S.packer || S.mfr || ""; }, "text"],
-    [/importer/, function () { return S.importer || ""; }, "text"],
+    [/importer/, function (x) { return /pin|zip|postal/.test(x.h) ? (/(\d{6})(?!.*\d{6})/.exec(S.importer || "") || [])[1] || "" : S.importer || ""; }, "text"],
+    [/manufacturer|packer|marketed|seller (name|address|details)|supplier (name|address|details)/, function (x) {
+      var h = x.h;
+      if (/pin|zip|postal/.test(h)) return S.bizPin || "";
+      if (/address/.test(h)) return S.bizAddr || "";
+      if (/name/.test(h)) return S.bizName || (x.d && x.d.manufacturer) || "";
+      return [S.bizName, S.bizAddr, S.bizPin].filter(Boolean).join(", ");   // "Manufacturer Details" in one box
+    }, "text"],
     [/description|about (the )?product|product details/, function (x) { return descr(x.p, x.d); }, "text"],
     [/colou?r/, function (x) { return (x.d && x.d.color) || ""; }],
     [/material|fabric/, function (x) { return (x.d && x.d.material) || ""; }],
@@ -443,6 +468,7 @@
     busy = true; drawSteps();
     try {
       var items = Array.from(pick.values()).filter(Boolean), r = await details(items.map(function (i) { return String(i.asin).toUpperCase(); }));
+      var mem = memGet();
       grid = { rows: items.map(function (p) {
         var d = r.d[String(p.asin).toUpperCase()] || null, slot = 0, vals = {};
         tpl.cols.forEach(function (c) {
@@ -450,6 +476,7 @@
           var x = { p: p, d: d, h: h, slot: 0 };
           if (rule && /image|photo|picture/.test(h)) { var n = /(\d+)/.exec(h); x.slot = n ? Math.max(0, +n[1] - 1) : /front|main/.test(h) ? 0 : /back/.test(h) ? 1 : /side/.test(h) ? 2 : slot; slot = Math.max(slot, x.slot) + 1; }
           v = rule ? rule[1](x) : guess(c.head, d);
+          if ((v === "" || v == null) && mem[norm(c.head)]) v = mem[norm(c.head)];
           var sn = snap(v, c.options);
           vals[c.idx] = { v: sn.v === "" || sn.v == null ? "" : String(sn.v), was: sn.was || "", auto: sn.v !== "" && sn.v != null, text: kind === "text" };
         });
@@ -467,9 +494,9 @@
     return tpl.cols.filter(function (c) { return grid.rows.some(function (r) { return !r.vals[c.idx].v; }) && (anyReq ? c.req : true); });
   }
   function counts() {
-    var auto = 0, need = 0, tot = 0;
-    grid.rows.forEach(function (r) { tpl.cols.forEach(function (c) { var v = r.vals[c.idx]; if (v.v) auto++; if (c.req && !v.v) need++; tot++; }); });
-    return { auto: auto, need: need, tot: tot };
+    var auto = 0, need = 0, tot = 0, empty = 0;
+    grid.rows.forEach(function (r) { tpl.cols.forEach(function (c) { var v = r.vals[c.idx]; if (v.v) auto++; else empty++; if (c.req && !v.v) need++; tot++; }); });
+    return { auto: auto, need: need, tot: tot, empty: empty, known: tpl.cols.some(function (c) { return c.req; }) };
   }
   function drawGrid() {
     var res = $("msRes"); res.style.display = "";
@@ -487,7 +514,7 @@
       }).join("") + "</tr>";
     }).join("");
     res.innerHTML = '<div class="ms-sum"><span class="ms-pill g">✓ ' + n.auto + " boxes filled by the robot</span>" +
-      (n.need ? '<span class="ms-pill y">' + n.need + " required boxes need you</span>" : '<span class="ms-pill g">All required boxes filled</span>') +
+      (n.need ? '<span class="ms-pill y">' + n.need + " required boxes need you</span>" : n.known ? '<span class="ms-pill g">All required boxes filled</span>' : '<span class="ms-pill n">' + n.empty + " empty boxes — fill the ones Meesho asks for</span>") +
       (nc.length ? '<button type="button" class="ms-lnk" id="msTog">' + (onlyNeed ? "Show all " + tpl.cols.length + " columns" : "Show only columns that need you") + "</button>" : "") +
       '<button type="button" class="ms-go gold" id="msDl"><i class="ti ti-download"></i>Download Meesho file</button></div>' +
       dl + '<div class="ms-tw"><table class="ms-t"><thead><tr><th class="p">Product</th>' + head + "</tr></thead><tbody>" + body + "</tbody></table></div>" +
@@ -505,7 +532,8 @@
       var idx = +b.dataset.allgo, inp = res.querySelector('[data-all="' + idx + '"]'), v = inp.value.trim();
       if (!v) return toast("Type or pick a value first", true);
       grid.rows.forEach(function (r) { r.vals[idx].v = v; r.vals[idx].auto = false; });
-      drawGrid(); toast("Filled for all " + grid.rows.length + " products");
+      var col = tpl.cols.filter(function (c) { return c.idx === idx; })[0]; if (col) memSet(col.head, v);
+      drawGrid(); toast("Filled for all " + grid.rows.length + " products — remembered for next time");
     };
     drawSteps();
   }
