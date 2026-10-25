@@ -120,6 +120,7 @@ function compact(it) {
     manufacturer: flat(a.manufacturer) || clean(sm.manufacturer || ''),
     modelNumber: flat(a.model_number) || clean(sm.modelNumber || ''),
     weightG: weight(a.item_weight) || weight(a.item_package_weight),
+    mrp: Number(((a.maximum_retail_price || [])[0] || {}).value || ((a.list_price || [])[0] || {}).value || ((a.list_price || [])[0] || {}).value_with_tax) || null,
     dims: dims(a.item_dimensions) || dims(a.item_length_width_height) || dims(a.item_package_dimensions),
     other,
   };
