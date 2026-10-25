@@ -485,7 +485,11 @@
       var v = String(x.p.hsnCode || "").replace(/\D/g, ""), o = x.c.options; if (!v || !o) return v;
       var hit = o.filter(function (a) { return a === v; })[0] || o.filter(function (a) { return v.indexOf(a) === 0; }).sort(function (a, b) { return b.length - a.length; })[0] ||
         o.filter(function (a) { return a.indexOf(v) === 0; })[0];
-      return hit ? { v: hit } : { v: "", was: v };
+      if (hit) return { v: hit };
+      // not in Meesho's list: closest code from the same group (first 4+ digits match), e.g. 19053100 -> 190590
+      var lcp = function (a) { var n = 0; while (n < a.length && n < v.length && a[n] === v[n]) n++; return n; };
+      var near = o.filter(function (a) { return /^\d+$/.test(a) && lcp(a) >= 4; }).sort(function (a, b) { return (lcp(b) - lcp(a)) || (b.length - a.length); })[0];
+      return near ? { v: near, was: "Amazon HSN " + v + " is not in Meesho's list — closest: " + near } : { v: "", was: v };
     }, "text"],
     [/weight/, function (x) {
       var g = netG(x); if (!g) return "";
@@ -519,7 +523,8 @@
     [/manufacturer|packer|marketed|seller (name|address|details)|supplier (name|address|details)/, function (x) {
       // 1st: what your Amazon listing says (packer falls back to manufacturer), 2nd: the account's saved details
       var h = x.h, cs = (x.d && x.d.contacts) || {}, c = /packer/.test(h) ? (cs.packer || cs.manufacturer) : (cs.manufacturer || cs.packer), P = PF();
-      if (c) return /pin|zip|postal/.test(h) ? c.pin || P.bizPin || "" : /address/.test(h) ? c.address : /name/.test(h) ? c.name : c.text;
+      var pinOf = function (k) { if (!k) return ""; if (/^\d{6}$/.test(k.pin || "")) return k.pin; var m = String(k.text || k.address || "").match(/\b[1-9]\d{2}\s?\d{3}\b/g); return m ? m[m.length - 1].replace(/\s/g, "") : ""; };
+      if (c) return /pin|zip|postal/.test(h) ? pinOf(c) || pinOf(cs.manufacturer) || pinOf(cs.packer) || P.bizPin || "" : /address/.test(h) ? c.address : /name/.test(h) ? c.name : c.text;
       if (/pin|zip|postal/.test(h)) return P.bizPin || "";
       if (/address/.test(h)) return P.bizAddr || "";
       if (/name/.test(h)) return P.bizName || (x.d && x.d.manufacturer) || "";

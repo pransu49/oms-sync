@@ -81,7 +81,7 @@ function images(it) {
 function contact(text) {
   const t = clean(text).replace(/\s*\n\s*/g, ', ');
   if (!t) return null;
-  const pins = t.match(/\b\d{6}\b/g), pin = pins ? pins[pins.length - 1] : '';
+  const pins = t.match(/\b[1-9]\d{2}\s?\d{3}\b/g), pin = pins ? pins[pins.length - 1].replace(/\s/g, '') : '';
   const parts = t.split(/,\s*/), name = parts.shift().trim();
   const address = parts.join(', ').replace(new RegExp('[,\\s-]*' + (pin || 'x^') + '\\s*$'), '').replace(/[,\s]+$/, '').trim();
   return { name, address: address || t, pin, text: t };
