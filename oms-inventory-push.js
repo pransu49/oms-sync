@@ -64,6 +64,7 @@ async function queueExport(page, actionRe, what) {
   if (f.status !== 302) throw new Error(`OMS Guru did not queue the ${what} export (status ${f.status})`);
 }
 // Wait for the export links (posted in notifications), download and unzip them
+const usedLinks = new Set();
 async function waitExports(since, wanted) {
   const out = {};
   while (Date.now() - since < 8 * 60e3 && Object.keys(out).length < wanted.length) {
@@ -72,8 +73,9 @@ async function waitExports(since, wanted) {
     const items = [...n.text.matchAll(/<li class="item"[^>]*>([\s\S]*?)<\/li>/g)].map((m) => m[1]).slice(0, 15);
     for (const it of items) {
       const txt = strip(it), link = (it.match(/href="([^"]+)"/) || [])[1];
-      const key = /channel_listing_mapping/i.test(txt) ? 'listings' : /inventory/i.test(txt) ? 'inventory' : null;
-      if (!key || out[key] || !link || !wanted.includes(key)) continue;
+      let key = /channel_listing_mapping/i.test(txt) ? 'listings' : /inventory/i.test(txt) ? 'inventory' : null;
+      if (key === 'listings' && wanted.includes('unmapped')) key = 'unmapped';
+      if (!key || out[key] || !link || !wanted.includes(key) || usedLinks.has(link)) continue;
       const when = (txt.match(/@ ([A-Za-z]+ \d+, \d{4} \d+:\d+:\d+ [AP]M)/) || [])[1];
       const t = when ? new Date(when + ' GMT+0530').getTime() : 0;
       if (!t || t < since - 90e3) continue;                     // an older export
@@ -81,7 +83,7 @@ async function waitExports(since, wanted) {
       const buf = Buffer.from(await f.arrayBuffer());
       const body = buf[0] === 0x50 && buf[1] === 0x4b ? new AdmZip(buf).getEntries()[0].getData().toString('utf8') : buf.toString('utf8');
       if (key === 'inventory' && !/Blocked/.test(body.slice(0, 400))) continue;   // an older plain inventory export - need the full one
-      out[key] = body;
+      out[key] = body; usedLinks.add(link);
       console.log(`Downloaded ${key}: ${out[key].length} characters.`);
     }
   }
@@ -135,6 +137,87 @@ function lotsUnitsFor(asin, title, L, bl = 0) {
     codes.push(`${p.code}${parts.length > 1 || need !== 1 ? `×${Math.round(need * 100) / 100}` : ''}`);
   }
   return { target: units, units, lotsQty: minLots, freeLots: Math.floor(freeLots), codes: codes.join(' + '), lotsName: (L.lots[String(parts[0].code)] || {}).name || '', via };
+}
+
+// ---- generic OMS Guru import: upload a CSV for import type `id`, wait for its notification ----
+async function omsImport(id, csv, fileName, noteRe) {
+  const page = await req('/import_data');
+  const pageTok = grab(page.text, /name="data\[ImportDataFileType\]\[oms_token\]" value="([^"]+)"/, 'page token');
+  const frag = await req('/import_data', { method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8', 'X-Requested-With': 'XMLHttpRequest', Referer: BASE + '/import_data', Origin: BASE },
+    body: new URLSearchParams({ id: String(id), 'data[ImportDataFileType][oms_token]': pageTok, _method: 'POST' }).toString() });
+  const importTok = grab(frag.text, /name="data\[ImportData\]\[oms_token\]" value="([^"]+)"/, 'import token');
+  const box = await req('/file_upload/file_upload/index/import_data', { headers: { Referer: BASE + '/import_data' } });
+  const upTok = grab(box.text, /name="oms_token" value="([^"]+)"/, 'upload token');
+  const fd = new FormData(); fd.append('oms_token', upTok); fd.append('files[]', new Blob([csv], { type: 'text/csv' }), fileName);
+  const up = await fetch(BASE + '/import_data/upload', { method: 'POST', body: fd, headers: { ...H, Cookie: ck(), 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json, text/javascript, */*; q=0.01', Referer: BASE + '/file_upload/file_upload/index/import_data' } });
+  upd(up); const upText = await up.text();
+  if (up.status !== 200 || /"error"\s*:\s*"[^"]/.test(upText)) throw new Error('OMS Guru did not accept the file upload: ' + upText.slice(0, 200));
+  const startedAt = Date.now();
+  await req('/import_data', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', Referer: BASE + '/import_data', Origin: BASE },
+    body: new URLSearchParams({ _method: 'POST', 'data[ImportData][oms_token]': importTok, 'data[ImportData][id]': String(id) }).toString() });
+  while (Date.now() - startedAt < 5 * 60e3) {
+    await new Promise((res) => setTimeout(res, 15e3));
+    const n = await req('/notifications');
+    const items = [...n.text.matchAll(/<li class="item"[^>]*>([\s\S]*?)<\/li>/g)].map((m) => m[1]).slice(0, 10);
+    const it = items.find((x) => noteRe.test(strip(x)) && !/processing/i.test(strip(x)));
+    if (!it) continue;
+    const when = (strip(it).match(/@ ([A-Za-z]+ \d+, \d{4} \d+:\d+:\d+ [AP]M)/) || [])[1];
+    const t = when ? new Date(when + ' GMT+0530').getTime() : 0;
+    if (t && t < startedAt - 90e3) continue;
+    if (!/Failed/i.test(strip(it))) return { ok: true, errors: {}, note: strip(it).slice(0, 200) };
+    const link = (it.match(/href="([^"]+)"/) || [])[1], errors = {};
+    if (link) { const body = await (await fetch(link.startsWith('http') ? link : BASE + link, { headers: { ...H, Cookie: ck() }, redirect: 'follow' })).text();
+      parseCsv(body).forEach((r) => { const k = r['Channel Listing SKU Code'] || r['Item SkuCode']; if (k) errors[k] = Object.values(r).pop() || 'error'; }); }
+    return { ok: false, errors, note: strip(it).slice(0, 200) };
+  }
+  return { ok: null, errors: {}, note: 'Sent - OMS Guru has not reported the result yet.' };
+}
+
+// ---- AUTO-MAP (owner, 25 Oct 2026): a relisted / new Amazon SKU that OMS Guru shows as "unmapped" is mapped to the
+// master SKU its ASIN already uses. Match order: 1) the old SKU it replaced (XX-R1 -> XX, already mapped)
+// 2) the same ASIN's mapped listings (same company first). Ambiguous (2+ different masters) -> left for you.
+async function loadAmazonSkuAsin() {
+  const out = {};
+  for (const acct of ['praso', 'sastastore']) {
+    try {
+      const m = await db.collection('spapiSnapshots').doc(`${acct}_meta`).get(); const md = m.exists ? m.data() : null;
+      if (!md || !md.run) continue;
+      const n = (md.chunks || {}).inventory || 0;
+      const docs = n ? await db.getAll(...Array.from({ length: n }, (_, i) => db.collection('spapiSnapshots').doc(`${acct}_inventory_${md.run}_${i}`))) : [];
+      docs.forEach((d) => d.exists && (d.data().items || []).forEach((it) => { if (it && it.sku && it.asin) out[it.sku] = String(it.asin).toUpperCase(); }));
+    } catch (e) { console.warn(`Amazon SKU list for ${acct} not read:`, e.message || e); }
+  }
+  return out;
+}
+function planAutoMap(unmappedRows, mappedRows, skuAsin) {
+  const bySku = {}, byAsin = {};
+  const company = (ch) => String(ch || '').split(' - ')[0].trim().toUpperCase();
+  for (const r of mappedRows) {
+    const m = r['Product SkuCode'], sku = r['Channel Listing SKU Code']; if (!m || r['Is Mapped'] !== 'Yes' || !/amazon/i.test(r['Channel Name'] || '')) continue;
+    if (sku) bySku[sku] = m;
+    const a = String(r['Extra Data'] || '').toUpperCase() || skuAsin[sku];
+    if (/^B0[0-9A-Z]{8}$|^[0-9]{9}[0-9X]$/.test(a || '')) (byAsin[a] = byAsin[a] || []).push({ m, co: company(r['Channel Name']) });
+  }
+  const plan = [], skipped = [];
+  const seen = new Set();
+  for (const r of unmappedRows) {
+    if (!/amazon/i.test(r['Channel Name'] || '')) continue;
+    const sku = r['Channel Listing SKU Code'] || '', lid = r['Channel Listing Id'] || '';
+    if (!sku || seen.has(sku + '|' + r['Channel Name'])) continue; seen.add(sku + '|' + r['Channel Name']);
+    let master = null, how = '';
+    for (let base = sku; /-R\d+$|-RMV[A-Z0-9]+$/i.test(base) && !master;) { base = base.replace(/-R\d+$|-RMV[A-Z0-9]+$/i, ''); if (bySku[base]) { master = bySku[base]; how = `old SKU ${base}`; } }
+    const asin = String(r['Extra Data'] || '').toUpperCase() || skuAsin[sku] || ((sku.match(/^N-(B0[0-9A-Z]{8})/) || [])[1] || '');
+    if (!master && asin && byAsin[asin]) {
+      const co = company(r['Channel Name']);
+      const same = [...new Set(byAsin[asin].filter((x) => x.co === co).map((x) => x.m))], any = [...new Set(byAsin[asin].map((x) => x.m))];
+      const pick = same.length === 1 ? same : any.length === 1 ? any : null;
+      if (pick) { master = pick[0]; how = `ASIN ${asin}`; } else skipped.push([sku, r['Channel Name'], asin, `ASIN used by ${any.length} different OMS products: ${any.slice(0, 3).join(' / ')}`]);
+    }
+    if (master) plan.push({ sku, lid, master, how, channel: r['Channel Name'], asin });
+    else if (!asin) skipped.push([sku, r['Channel Name'], '', 'ASIN not known yet']);
+  }
+  return { plan, skipped };
 }
 
 // ---- upload to OMS Guru: Import Data -> "Update InStock Qty and/or Last Purchase Price" (type 2), RESET ----
@@ -196,6 +279,28 @@ async function main() {
   const listings = parseCsv(files.listings), inventory = parseCsv(files.inventory);
   console.log(`OMS Guru: ${listings.length} channel listings, ${inventory.length} products with stock in DEFAULT 310803.`);
   if (inventory.length < 500 || listings.length < 1000) throw new Error('OMS Guru export looks incomplete. Nothing changed.');
+
+  // AUTO-MAP new / relisted Amazon SKUs that OMS Guru shows as unmapped
+  let autoMap = { mapped: [], skipped: [], note: '' };
+  try {
+    const t0 = Date.now();
+    await queueExport('/map_skus', /\/skus\/download_skus\/\d+\/1/, 'unmapped listings');
+    const um = parseCsv((await waitExports(t0, ['unmapped'])).unmapped);
+    const skuAsin = await loadAmazonSkuAsin();
+    const { plan, skipped } = planAutoMap(um, listings, skuAsin);
+    console.log(`Auto-map: ${um.length} unmapped listings in OMS Guru (${um.filter((r) => /amazon/i.test(r['Channel Name'] || '')).length} Amazon) -> ${plan.length} can be mapped, ${skipped.length} left for you.`);
+    plan.slice(0, 15).forEach((x) => console.log(`  MAP ${x.sku} (${x.channel}) -> ${x.master} [${x.how}]`));
+    skipped.slice(0, 5).forEach((x) => console.log(`  SKIP ${x[0]}: ${x[3]}`));
+    autoMap.skipped = skipped.slice(0, 300);
+    if (plan.length && !DRY) {
+      const csv = ['Channel Listing SKU Code,Channel Listing Id,Product SkuCode', ...plan.map((x) => [x.sku, x.lid, x.master].map(csvCell).join(','))].join('\n');
+      const res = await omsImport(8, csv, `RobotAutoMap_${Date.now()}.csv`, /Channel Listing|Mapping|Map/i);
+      autoMap.note = res.note;
+      autoMap.mapped = plan.filter((x) => !res.errors[x.sku]).map((x) => [x.sku, x.channel, x.master, x.how, runAt]);
+      Object.entries(res.errors).forEach(([k, v]) => autoMap.skipped.unshift([k, '', '', 'OMS Guru: ' + String(v).slice(0, 100)]));
+      console.log(`Auto-map result: ${res.note} (${Object.keys(res.errors).length} failed)`);
+    } else if (plan.length) { autoMap.mapped = plan.map((x) => [x.sku, x.channel, x.master, x.how, runAt]); autoMap.note = 'Test run - not sent'; }
+  } catch (e) { autoMap.note = 'Auto-map skipped: ' + (e.message || e); console.warn(autoMap.note); }
 
   const omsQty = {}, blocked = {};
   inventory.forEach((r) => { const k = r['Item SkuCode']; if (!k || (r['Warehouse Id'] && r['Warehouse Id'] !== WAREHOUSE_ID)) return; omsQty[k] = parseInt(r['In Stock'], 10) || 0; blocked[k] = Math.max(0, parseInt(r.Blocked, 10) || 0); });
@@ -278,7 +383,7 @@ async function main() {
   const json = JSON.stringify({ rows: pack, unlinked: unlinked.slice(0, 4000) });
   const parts = []; for (let i = 0; i < json.length; i += 900000) parts.push(json.slice(i, i + 900000));
   await Promise.all(parts.map((p, i) => C.doc(`${base}_rows_${i}`).set({ data: p, at: runAt })));
-  await C.doc(base).set({ ...doc, chunks: parts.length, v: 2 });
+  await C.doc(base).set({ ...doc, chunks: parts.length, v: 2, autoMap: { at: runAt, ...autoMap, mapped: autoMap.mapped.slice(0, 300) } });
   if (!DRY) {
     const hist = C.doc('omsInventory_history');
     const h = await hist.get(); const runs = ((h.exists && h.data().runs) || []).filter((x) => x.status !== 'test').slice(-47);
