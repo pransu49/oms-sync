@@ -2189,8 +2189,39 @@ async function runStockGuard(sellerId) {
     }
     await new Promise((r) => setTimeout(r, 800));
   }
+  // RESTOCK (owner, 25 Oct 2026: "LOTS has stock, why OOS"): a listing THIS rule set to 0 whose LOTS stock is back to 10+
+  // and that OMS Guru does NOT manage (e.g. a new N-/R1 SKU not yet in OMS) gets stock = free LOTS units (max 50).
+  // OMS-managed SKUs are left to OMS Guru (it knows the blocked orders). Only on a fresh OMS SKU list (< 3 h old).
+  let restocked = 0;
+  try {
+    const od = await db.collection('spapiSnapshots').doc('omsManagedSkus').get();
+    const om = od.exists && Date.now() - (od.data().at || 0) < 3 * 3600e3 ? new Set(String(od.data().skus || '').split('\n')) : null;
+    if (!om || om.size < 1000) console.log('Restock skipped: OMS Guru SKU list missing or old.');
+    else {
+      const back = Object.values(SNAP.inventory).filter((it) => it && it.account === ACCOUNT_LABEL && it.sku && reportSkus.has(it.sku) && !om.has(it.sku)
+        && (it.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (parseInt(it.quantity, 10) || 0) <= 0 && it.lastStockPush && it.lastStockPush.qty === 0
+        && /marked out of stock|No stock in LOTS/.test(it.lastStockPush.reason || '') && Date.now() - (it.lastStockPush.at || 0) < 14 * 864e5);
+      for (const it of back.slice(0, 60)) {
+        const m = L.asinMap[it.asin];
+        if (!m || (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS')) continue;          // only confirmed ASIN links
+        const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ code: m.code, qty: 1 }];
+        let units = Infinity, low = Infinity;
+        for (const x of parts) { const p = L.lotsByCode[String(x.code)], q = p ? parseFloat(p.qty) : NaN; if (isNaN(q)) { units = 0; break; }
+          const need = Math.max(1, Number(x.qty) || 1) / Math.max(1, parseInt(x.lotsPack) || 1); units = Math.min(units, Math.floor(q / need)); low = Math.min(low, q); }
+        if (!(low >= OOS_LOTS_BELOW) || !(units >= 1)) continue;
+        const q = Math.min(units, 50), docId = `${ACCOUNT_LABEL}_${it.sku}`;
+        try {
+          await setAmazonQuantity(sellerId, it.sku, q);
+          snapPatch('inventory', docId, { quantity: q, lastStockPush: { status: 'applied', at: Date.now(), qty: q, reason: `LOTS back to ${low} - restocked (not managed by OMS Guru)` } });
+          await db.collection('spapiInventory').doc(docId).set({ quantity: q }, { merge: true });
+          restocked++; console.log(`Restock ${it.sku}: 0 -> ${q} (LOTS ${low})`);
+        } catch (e) { console.warn(`Restock ${it.sku} failed:`, e.message || e); }
+        await new Promise((r) => setTimeout(r, 800));
+      }
+    }
+  } catch (e) { console.warn('Restock skipped:', e.message || e); }
   await guardRef.set({ items: {}, blocked: null, rule: 'lots_zero', updatedAt: Date.now() });
-  console.log(`Out-of-stock rule (LOTS stock below ${OOS_LOTS_BELOW} -> Amazon 0): ${zeroed} marked out of stock, ${failed} failed, ${linkedInStock} LOTS-linked in-stock listings checked.`);
+  console.log(`Out-of-stock rule (LOTS stock below ${OOS_LOTS_BELOW} -> Amazon 0): ${zeroed} marked out of stock, ${restocked} restocked (LOTS back, not in OMS Guru), ${failed} failed, ${linkedInStock} LOTS-linked in-stock listings checked.`);
 }
 
 // Listings deleted/replaced on Amazon disappear from the listings report. Drop them from the

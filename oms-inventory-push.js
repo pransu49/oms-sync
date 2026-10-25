@@ -304,6 +304,12 @@ async function main() {
     } else if (plan.length) { autoMap.mapped = plan.map((x) => [x.sku, x.channel, x.master, x.how, runAt]); autoMap.note = 'Test run - not sent'; }
   } catch (e) { autoMap.note = 'Auto-map skipped: ' + (e.message || e); console.warn(autoMap.note); }
 
+  // Amazon SKUs OMS Guru manages (mapped) - the Amazon robot only restocks SKUs NOT in this list
+  if (!DRY) {
+    const managed = [...new Set(listings.filter((r) => r['Is Mapped'] === 'Yes' && /amazon/i.test(r['Channel Name'] || '') && r['Channel Listing SKU Code']).map((r) => r['Channel Listing SKU Code']))];
+    await db.collection('spapiSnapshots').doc('omsManagedSkus').set({ skus: managed.join('\n'), count: managed.length, at: runAt }).catch((e) => console.warn('OMS SKU list not saved:', e.message || e));
+    console.log(`OMS-managed Amazon SKUs saved: ${managed.length}.`);
+  }
   const omsQty = {}, blocked = {};
   inventory.forEach((r) => { const k = r['Item SkuCode']; if (!k || (r['Warehouse Id'] && r['Warehouse Id'] !== WAREHOUSE_ID)) return; omsQty[k] = parseInt(r['In Stock'], 10) || 0; blocked[k] = Math.max(0, parseInt(r.Blocked, 10) || 0); });
   // group Amazon listings by master SKU
@@ -327,7 +333,9 @@ async function main() {
       continue;
     }
     const bl = blocked[g.sku] || 0, cur0 = omsQty[g.sku];
-    const opts = [...seen.values()].map((o) => {
+    // 25 Oct 2026 fix: a name guess must never overrule your ASIN mapping (Tata Agni 1 kg was zeroed by a guessed 76-stock product)
+    const all = [...seen.values()], byAsin = all.filter((o) => o.via === 'ASIN');
+    const opts = (byAsin.length ? byAsin : all).map((o) => {
       const free = o.freeLots, oos = o.lotsQty < OOS_BELOW || free < OOS_BELOW;
       // OOS: Amazon must show 0 = In Stock - Blocked. Already 0 or less -> leave In Stock as it is; else set In Stock = Blocked.
       return { ...o, free, oos, target: oos ? (cur0 <= bl ? cur0 : bl) : o.units };
