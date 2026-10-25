@@ -426,8 +426,11 @@
         const wl = new Map(); queue.filter(e => st(e.key) <= 0.0005).forEach(e => { const w = wl.get(e.key) || { name: e.p.name, qty: 0, stock: st(e.key), val: 0 }; w.qty += e.qty; w.val += e.qty * lineFor(e.p).unitInc; wl.set(e.key, w); });
         d.waitList = [...wl.entries()].map(([key, w]) => ({ key, ...w })).sort((a, b) => b.val - a.val);
         finishDraft(d);
-        if (!d.done && d.items.length && !open[co.id]) { open[co.id] = day; d.isNext = true; }
-        d.blockedBy = !d.done && d.items.length && open[co.id] !== day ? open[co.id] : "";
+        /* Invoice numbers are one series for all companies, so ALL companies' bills go date by date:
+           a later date opens only when every company's bill of the earlier date is saved (or has nothing to bill). */
+        if (!d.done && d.items.length && !open.any) open.any = day;
+        if (!d.done && d.items.length && open.any === day) d.isNext = true;
+        d.blockedBy = !d.done && d.items.length && open.any && open.any !== day ? open.any : "";
         plan[co.id][day] = d;
       }
     }
@@ -474,6 +477,8 @@
     if (d.overMrp) throw new Error("A rate is above MRP. Lower it first.");
     if (d.total > CAP && !d.co.noCap) throw new Error("Bill is above ₹49,999 — lower a rate.");
     if (d.blockedBy) throw new Error(`Approve ${fmtD(d.blockedBy)} first (bills go in date order).`);
+    const later = await sb("GET", `docs?kind=eq.sale&data->>invoiceDate=gt.${d.date}&data->>status=neq.Cancelled&select=data->>invoiceNo,data->>invoiceDate&limit=1`);
+    if (later.length) throw new Error(`Invoice ${later[0].invoiceNo} is dated ${fmtD(later[0].invoiceDate)} — a bill dated ${fmtD(d.date)} now would break the number order.`);
     const exist = await sb("GET", `docs?kind=eq.autobill_done&id=eq.${encodeURIComponent(d.id)}&select=data`);
     if (exist.length) throw new Error(`Already billed: ${exist[0].data.invoiceNo}`);
     const st = (await sb("GET", "docs?kind=eq.setting&id=eq.company&select=data"))[0]?.data || {};
@@ -655,7 +660,7 @@
       <div class="tablebox ab-um"><table class="ab-t"><thead><tr><th>Sold as</th><th class="r">Qty</th><th>Purchased product</th><th>Units per sale</th><th></th></tr></thead><tbody>
       ${[...d.unmatched.values()].map((u, i) => `<tr data-i="${i}"><td><span class="pn">${esc(u.name)}</span><div class="sub">${esc([u.asin, u.sku].filter(Boolean).join(" · "))}</div></td><td class="r num">${u.qty}</td><td><input class="abPick" autocomplete="off" placeholder="Type product name" data-sold="${esc(u.name)}"></td><td><input class="abMult" type="number" min="1" step="1" value="1" style="width:64px"></td><td style="white-space:nowrap"><button class="btn small primary abSave">Save</button> <button class="btn small abSkip" title="Not billed (gift, freebie, own stock)">Skip</button></td></tr>`).join("")}
       </tbody></table></div>` : ""}
-      ${d.blockedBy ? `<div class="banner">Preview only — approve ${esc(d.co.label)}'s bill of ${dayName(d.blockedBy)} ${fmtD(d.blockedBy)} first. Bills go in date order so the ₹49,999 split stays correct.</div>` : ""}
+      ${d.blockedBy ? `<div class="banner">Preview only — approve every company's bill of ${dayName(d.blockedBy)} ${fmtD(d.blockedBy)} first (one invoice number series). Bills go in date order so the ₹49,999 split stays correct.</div>` : ""}
       ${d.total > 50000 ? `<div class="banner bad">Over ₹50,000 — make an e-way bill for this invoice on ewaybillgst.gov.in before the goods move.</div>` : ""}
       ${d.noStock > 1 ? `<div class="banner">${d.noStockN} product${d.noStockN > 1 ? "s" : ""} (${inr(d.noStock)}) not billed — no stock left — total purchased is already billed. Save the purchase bill and they bill automatically. They go on the first bill after the purchase is saved, so stock never goes negative.
         <div class="sub" style="margin-top:6px">${(d.waitList || []).slice(0, 8).map(w => `${esc(w.name)} — ${+w.qty.toFixed(2)} short (${inr(w.val)})`).join(" · ")}${(d.waitList || []).length > 8 ? ` · +${d.waitList.length - 8} more` : ""}</div></div>` : ""}
