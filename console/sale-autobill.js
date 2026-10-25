@@ -716,9 +716,12 @@
     b.onclick = async () => {
       const um = list.filter(x => x.unmatched.size).length;
       if (!(await askYes(`Save ${list.length} bill${list.length > 1 ? "s" : ""} for ${fmtD(S.date)}?${um ? `\n${um} of them have not-matched products that will be left out.` : ""}`, "Save bills"))) return;
-      await runSave(list);
+      await runSave(natural(list));
     };
   }
+  /* Same order every day looks machine-made. Each date gets its own company order (fixed for that date). */
+  const hsh = t => { let h = 2166136261; for (const c of String(t)) h = Math.imul(h ^ c.charCodeAt(0), 16777619); h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16; return h >>> 0; };
+  const natural = list => list.slice().sort((a, b) => a.date.localeCompare(b.date) || hsh(a.date + "|" + a.co.gstin) - hsh(b.date + "|" + b.co.gstin));
   /* =====================================================================
      E-WAY BILL FILE — one JSON for the e-way bill portal's Bulk Generation (ewaybillgst.gov.in → e-Waybill → Generate Bulk)
      ===================================================================== */
@@ -955,4 +958,114 @@
     if (bad.length) toast("Not saved — " + bad.join(" · "), 8000);
     draw();
   }
+
+  /* =====================================================================
+     PAYABLES — purchase bill due dates from each vendor's credit days, total + due outstanding,
+     reminder pop-up when the tool opens. Credit days are saved on the supplier (same field as Parties).
+     ===================================================================== */
+  const PAY = { rows: null };
+  const addD = (d, n) => { const t = new Date(d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
+  async function loadPay() {
+    const rows = await sbAll(`kind=in.(bill,supplier)&select=kind,id,data`);
+    const sups = rows.filter(r => r.kind === "supplier").map(r => r.data);
+    const supOf = b => sups.find(x => x.name === b.supplier) || sups.find(x => x.gstin && x.gstin === b.supplierGstin && normName(x.name) === normName(b.supplier)) || null;
+    const today = todayIso(), V = new Map();
+    for (const r of rows) {
+      if (r.kind !== "bill") continue; const b = r.data; if (!b || b.paymentStatus === "Paid") continue;
+      const sup = supOf(b), cd = sup && sup.creditDays !== "" && sup.creditDays != null ? num(sup.creditDays) : null;
+      const credit = b.docType === "credit", amt = (credit ? -1 : 1) * Math.abs(num(b.total));
+      const due = /^\d{4}-\d{2}-\d{2}$/.test(b.dueDate || "") ? b.dueDate : addD(b.billDate || today, cd || 0);
+      const k = b.supplier || "—", v = V.get(k) || { name: k, sup, cd, bills: [], total: 0, due: 0, soon: 0, oldest: "" };
+      v.bills.push({ id: r.id, b, amt, due, credit, late: Math.round((Date.parse(today) - Date.parse(due)) / 864e5) });
+      v.total += amt; if (credit || due <= today) v.due += amt; else if (due <= addD(today, 3)) v.soon += amt;
+      if (!credit && due <= today && (!v.oldest || due < v.oldest)) v.oldest = due;
+      V.set(k, v);
+    }
+    const list = [...V.values()].map(v => ({ ...v, due: Math.max(0, v.due), bills: v.bills.sort((a, b) => a.due.localeCompare(b.due)) })).filter(v => Math.abs(v.total) > 0.5).sort((a, b) => b.due - a.due || b.total - a.total);
+    PAY.rows = { list, today, total: list.reduce((a, v) => a + v.total, 0), due: list.reduce((a, v) => a + v.due, 0), soon: list.reduce((a, v) => a + v.soon, 0), noCd: list.filter(v => v.cd == null).length };
+    return PAY.rows;
+  }
+  function payPill() {
+    const R = PAY.rows, ctl = document.querySelector(".top .ctl"); if (!R || !ctl) return;
+    let p = document.getElementById("payPill"); if (!p) { p = document.createElement("button"); p.id = "payPill"; p.type = "button"; p.className = "btn"; p.onclick = () => document.getElementById("tabPay")?.click(); ctl.prepend(p); }
+    p.innerHTML = `Payables <b style="margin-left:6px;color:${R.due > 0 ? "#F87171" : "#C9A24B"}">${inr(R.due)}</b><span style="opacity:.7;margin-left:6px">due of ${inr(R.total)}</span>`;
+  }
+  function payPopup() {
+    const R = PAY.rows; if (!R || R.due <= 0 && R.soon <= 0) return;
+    try { if (sessionStorage.getItem("aikmPayPop") === R.today) return; } catch (e) {}
+    const top = R.list.filter(v => v.due > 0).slice(0, 6);
+    const o = document.createElement("div");
+    o.style.cssText = "position:fixed;inset:0;z-index:2147483000;background:rgba(15,30,53,.45);display:flex;align-items:center;justify-content:center;padding:16px";
+    o.innerHTML = `<div style="background:#fff;border-radius:16px;border-top:3px solid #C9A24B;max-width:560px;width:100%;box-shadow:0 24px 70px rgba(15,30,53,.3);font:14px/1.5 Inter,system-ui,sans-serif;color:#14213D;overflow:hidden">
+      <div style="padding:18px 22px 4px"><div style="font:600 10.5px Lexend,sans-serif;letter-spacing:.1em;text-transform:uppercase;color:#B08A36">Payment reminder</div><div style="font:600 18px Lexend,Inter,sans-serif;margin-top:4px">${inr(R.due)} due to vendors today</div></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding:12px 22px">
+        ${[["Total outstanding", R.total, "#14213D"], ["Due now (incl. overdue)", R.due, "#B42318"], ["Due in next 3 days", R.soon, "#A86A12"]].map(([l, v, c]) => `<div style="background:#FBF9F4;border:1px solid #F0ECE2;border-radius:10px;padding:10px 12px"><div style="font-size:11.5px;color:#4A5468">${l}</div><div style="font:600 17px Lexend,sans-serif;color:${c}">${inr(v)}</div></div>`).join("")}</div>
+      <div style="padding:0 22px 8px">${top.map(v => `<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid #F0ECE2"><span><b style="font-weight:600">${esc(v.name)}</b><span style="font-size:12px;color:#8B909B"> · ${v.oldest ? "oldest due " + fmtD(v.oldest) : "credit note"}</span></span><b style="color:#B42318">${inr(v.due)}</b></div>`).join("")}
+      ${R.noCd ? `<div style="font-size:12px;color:#A86A12;margin-top:8px">${R.noCd} vendor${R.noCd > 1 ? "s have" : " has"} no credit days set — their bills count as due on the bill date. Set them in Payables.</div>` : ""}</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 22px 18px"><button type="button" data-l style="cursor:pointer;border:1px solid #E7E1D3;background:#fff;color:#4A5468;border-radius:9px;padding:9px 16px;font-weight:600">Remind me later</button><button type="button" data-o style="cursor:pointer;border:0;background:#0F1E35;color:#fff;border-radius:9px;padding:9px 18px;font-weight:600">Open Payables</button></div></div>`;
+    const close = () => { o.remove(); try { sessionStorage.setItem("aikmPayPop", R.today); } catch (e) {} };
+    o.querySelector("[data-l]").onclick = close; o.querySelector("[data-o]").onclick = () => { close(); document.getElementById("tabPay")?.click(); };
+    o.onclick = e => { if (e.target === o) close(); };
+    document.body.append(o);
+  }
+  let payOpen = new Set();
+  async function payRender(reload) {
+    const sec = $("#p-pay"); if (!sec) return;
+    if (reload || !PAY.rows) { sec.innerHTML = `<div class="ab-load">Working out what you owe…</div>`; try { await loadPay(); } catch (e) { sec.innerHTML = `<div class="ab-load">Could not load: ${esc(e.message)}</div>`; return; } }
+    const R = PAY.rows; payPill(); const c = $("#cPay"); if (c) c.textContent = inr(R.due);
+    const tile = (l, v, sub, col) => `<div style="flex:1;min-width:180px;background:var(--surface,#fff);border:1px solid var(--line);border-radius:14px;padding:14px 16px;border-left:4px solid ${col}"><div class="sub" style="text-transform:uppercase;letter-spacing:.08em;font-size:11px">${l}</div><div style="font:600 24px Lexend,sans-serif;margin-top:4px">${inr(v)}</div><div class="sub">${sub}</div></div>`;
+    sec.innerHTML = `<div class="row" style="gap:12px;flex-wrap:wrap;margin-bottom:14px">
+        ${tile("Total outstanding", R.total, `${R.list.length} vendors · unpaid bills minus credit notes`, "#14213D")}
+        ${tile("Due now", R.due, "due today or overdue", "#B42318")}
+        ${tile("Due in next 3 days", R.soon, "plan the payment", "#C9A24B")}</div>
+      <div class="banner info">Due date = bill date + the vendor's <b>credit days</b>. Type the days and press Enter — saved on the vendor, used for every bill. Paid bills drop off; mark them paid here or in All bills.</div>
+      <div class="tablebox"><table class="ab-t"><thead><tr><th>Vendor</th><th style="width:120px">Credit days</th><th class="r">Outstanding</th><th class="r">Due now</th><th class="r">Next 3 days</th><th>Oldest due</th><th></th></tr></thead><tbody>
+      ${R.list.map((v, i) => `<tr data-v="${i}"><td><span class="pn">${esc(v.name)}</span><div class="sub">${v.bills.length} unpaid bill${v.bills.length > 1 ? "s" : ""}</div></td>
+        <td>${v.sup ? `<input class="payCd" data-v="${i}" value="${v.cd ?? ""}" inputmode="numeric" placeholder="Set" style="width:70px;text-align:center"> <span class="sub">days</span>` : '<span class="sub">add in Parties</span>'}</td>
+        <td class="r num">${inr(v.total, 2)}</td><td class="r num" style="color:${v.due > 0 ? "#B42318" : "inherit"};font-weight:${v.due > 0 ? 600 : 400}">${inr(v.due, 2)}</td><td class="r num">${v.soon ? inr(v.soon, 2) : "—"}</td>
+        <td>${v.oldest ? `<span class="pill bad">${fmtD(v.oldest)}</span>` : "—"}</td><td class="r"><button class="btn small payTg" data-v="${i}">${payOpen.has(v.name) ? "Hide" : "Bills"}</button></td></tr>
+        ${payOpen.has(v.name) ? `<tr><td colspan="7" style="background:#FBF9F4;padding:8px 14px"><table class="ab-t" style="background:#fff"><thead><tr><th>Bill</th><th>Bill date</th><th>Due date</th><th class="r">Amount</th><th>Status</th><th></th></tr></thead><tbody>
+          ${v.bills.map(x => `<tr><td class="mono">${esc(x.b.billNo || "—")}${x.credit ? ' <span class="pill">credit note</span>' : ""}</td><td class="num">${fmtD(x.b.billDate || "")}</td><td class="num">${fmtD(x.due)}</td><td class="r num">${x.amt < 0 ? "− " + inr(-x.amt, 2) : inr(x.amt, 2)}</td>
+            <td>${x.credit ? "—" : x.late > 0 ? `<span class="pill bad">${x.late} day${x.late > 1 ? "s" : ""} overdue</span>` : x.late === 0 ? '<span class="pill bad">Due today</span>' : `<span class="pill">in ${-x.late} day${x.late < -1 ? "s" : ""}</span>`}</td>
+            <td class="r"><button class="btn small payPaid" data-id="${esc(x.id)}">Mark paid</button></td></tr>`).join("")}</tbody></table></td></tr>` : ""}`).join("")}
+      </tbody></table></div>`;
+    sec.querySelectorAll(".payTg").forEach(b => b.onclick = () => { const v = R.list[+b.dataset.v]; payOpen.has(v.name) ? payOpen.delete(v.name) : payOpen.add(v.name); payRender(false); });
+    sec.querySelectorAll(".payCd").forEach(inp => {
+      inp.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); inp.blur(); } };
+      inp.onchange = async () => {
+        const v = R.list[+inp.dataset.v], d = inp.value.trim(); if (d !== "" && !/^\d{1,3}$/.test(d)) return toast("Enter days as a number, e.g. 15");
+        try { const cur = (await sb("GET", `docs?kind=eq.supplier&id=eq.${encodeURIComponent(v.sup.id)}&select=data`))[0]?.data || v.sup;
+          await sbPut([{ kind: "supplier", id: v.sup.id, data: { ...cur, creditDays: d === "" ? "" : String(+d), savedAt: nowIso() } }]);
+          toast(`${v.name}: ${d === "" ? "credit days removed" : d + " days credit"}`); payRender(true); }
+        catch (e) { toast("Not saved: " + e.message, 5000); }
+      };
+    });
+    sec.querySelectorAll(".payPaid").forEach(b => b.onclick = async () => {
+      const x = R.list.flatMap(v => v.bills).find(y => y.id === b.dataset.id); if (!x) return;
+      if (!(await askYes(`Mark bill ${x.b.billNo || ""} of ${x.b.supplier} (${inr(x.amt, 2)}) as paid today?`, "Mark paid"))) return;
+      b.disabled = true;
+      try { const cur = (await sb("GET", `docs?kind=eq.bill&id=eq.${encodeURIComponent(x.id)}&select=fy,data`))[0];
+        await sbPut([{ kind: "bill", id: x.id, fy: cur.fy, data: { ...cur.data, paymentStatus: "Paid", paidDate: todayIso(), updatedAt: nowIso() } }]);
+        toast("Marked paid"); payRender(true); }
+      catch (e) { b.disabled = false; toast("Not saved: " + e.message, 5000); }
+    });
+  }
+  function payMount() {
+    const nav = document.querySelector("nav.tabs"), wrap = document.querySelector(".wrap");
+    if (!nav || !wrap || document.getElementById("tabPay")) return !!document.getElementById("tabPay");
+    const t = document.createElement("button");
+    t.className = "tab"; t.id = "tabPay"; t.type = "button"; t.setAttribute("role", "tab"); t.dataset.tab = "pay"; t.setAttribute("aria-selected", "false");
+    t.innerHTML = `Payables<span class="c" id="cPay">…</span>`;
+    nav.append(t);
+    const sec = document.createElement("section"); sec.className = "panel"; sec.id = "p-pay"; sec.hidden = true; wrap.append(sec);
+    t.onclick = () => {
+      document.querySelectorAll(".wrap > section.panel").forEach(p => p.hidden = p !== sec);
+      document.querySelectorAll("nav.tabs .tab").forEach(b => b.setAttribute("aria-selected", String(b === t)));
+      payRender(true);
+    };
+    nav.querySelectorAll(".tab").forEach(b => { if (b !== t) b.addEventListener("click", () => { sec.hidden = true; t.setAttribute("aria-selected", "false"); }); });
+    setTimeout(() => loadPay().then(() => { const c = $("#cPay"); if (c) c.textContent = inr(PAY.rows.due); payPill(); payPopup(); }).catch(e => console.warn("payables", e)), 3500);
+    return true;
+  }
+  const iv3 = setInterval(() => { if (payMount()) clearInterval(iv3); }, 700);
 })();
