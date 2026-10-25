@@ -24,11 +24,16 @@
   var q = "", tpl = null, grid = null, onlyNeed = true, busy = false;
   var S = loadSet();
   function loadSet() {
-    var d = { pct: 0, stock: 10, brand: "", bizName: "", bizAddr: "", bizPin: "", fssai: "", mfr: "", importer: "", country: "India" };
-    try { var s = JSON.parse(localStorage.getItem(SK) || "{}"); Object.keys(d).forEach(function (k) { if (s[k] != null) d[k] = s[k]; }); } catch (e) {}
+    var d = { pct: 0, stock: 10, brand: "", country: "India", minPct: 15, tgtPct: 20, shelfDays: 365,
+      profile: "Vishal E-commerce", profiles: { "Vishal E-commerce": { fssai: "22723923000545", bizName: "", bizAddr: "", bizPin: "", importer: "" } } };
+    try { var s = JSON.parse(localStorage.getItem(SK) || "{}"); Object.keys(d).forEach(function (k) { if (s[k] != null) d[k] = s[k]; });
+      if (!s.profiles && (s.bizName || s.fssai)) d.profiles["Vishal E-commerce"] = { fssai: s.fssai || "22723923000545", bizName: s.bizName || s.mfr || "", bizAddr: s.bizAddr || "", bizPin: s.bizPin || "", importer: s.importer || "" };
+    } catch (e) {}
+    if (!d.profiles[d.profile]) d.profile = Object.keys(d.profiles)[0];
     return d;
   }
   function saveSet() { try { localStorage.setItem(SK, JSON.stringify(S)); } catch (e) {} }
+  var PF = function () { return S.profiles[S.profile] || {}; };   // the Meesho seller account in use
   // "Same for all" answers are remembered per column name and used again next time
   var MK = "aikm_meesho_memory", norm = function (h) { return String(h).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim(); };
   function memGet() { try { return JSON.parse(localStorage.getItem(MK) || "{}"); } catch (e) { return {}; } }
@@ -100,6 +105,8 @@
       ".ms-c:hover{border-color:var(--line)}.ms-c:focus{border-color:var(--gold);background:#fff}",
       "td.need{background:#FFF8E1}td.need .ms-c{border-color:#E9C46A;background:#fff}",
       "td.bad .ms-c{border-color:#D9534F}",
+      ".ms-why{display:block;font-size:10.5px;line-height:1.35;color:var(--muted);margin-top:3px;white-space:normal}.ms-why.lo{color:#B4382F}",
+      ".ms-sel{flex:1;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 8px;font:13px 'Inter',sans-serif;background:#fff;color:var(--ink)}",
       ".ms-pn{font-weight:600;font-size:12px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}",
       ".ms-pn+small{color:var(--muted);font-size:11px}",
       ".ms-bar{height:6px;border-radius:3px;background:#EEEBE3;overflow:hidden;margin-top:8px}.ms-bar i{display:block;height:100%;background:var(--gold);transition:width .4s}",
@@ -140,15 +147,21 @@
           '<input type="file" id="msFile" accept=".xlsx,.xlsm" style="display:none"></label>' +
           '<div id="msTpl"></div>' +
           '<details class="ms-set" id="msSet"><summary>Your details &amp; price <small>saved on this computer</small></summary><div class="ms-sg">' +
-            '<label>Meesho price vs Amazon (%)<input id="msPct" type="number" step="1" placeholder="0 = same price"></label>' +
+            '<label class="w">Meesho seller account<span style="display:flex;gap:8px"><select id="msProf" class="ms-sel"></select><button type="button" class="ms-lnk" id="msProfAdd">+ Add account</button></span></label>' +
+            '<label>FSSAI licence number<input id="msFssai" inputmode="numeric" placeholder="14 digits"></label>' +
+            '<label>Importer (only imported goods)<input id="msImporter" placeholder="Name, address, PIN"></label>' +
+            '<label class="w" style="margin-top:4px;color:var(--ink);font-weight:600">Manufacturer / packer <span style="font-weight:400;color:var(--muted)">— taken from your Amazon listing; these are used only when Amazon has none</span></label>' +
+            '<label class="w">Name<input id="msBizName" placeholder="e.g. Vishal E-commerce"></label>' +
+            '<label class="w">Address<textarea id="msBizAddr" placeholder="Shop / building, street, area, city, state"></textarea></label>' +
+            '<label>Pincode<input id="msBizPin" inputmode="numeric" placeholder="6 digits"></label>' +
+            '<label>Shelf life (days)<input id="msShelf" type="number" min="1" step="1"></label>' +
+            '<label class="w" style="margin-top:4px;color:var(--ink);font-weight:600">Meesho price <span style="font-weight:400;color:var(--muted)">— from your cost (LOTS / manual cost). Meesho takes no commission or shipping.</span></label>' +
+            '<label>Target profit (% of price)<input id="msTgt" type="number" step="1"></label>' +
+            '<label>Minimum profit (% of price)<input id="msMin" type="number" step="1"></label>' +
+            '<label>No cost known: Amazon price + %<input id="msPct" type="number" step="1" placeholder="0 = same price"></label>' +
             '<label>Stock when Amazon shows 0<input id="msStock" type="number" min="0" step="1"></label>' +
             '<label>Brand (empty = Amazon brand)<input id="msBrand" placeholder="e.g. Generic"></label>' +
             '<label>Country of origin<input id="msCountry"></label>' +
-            '<label class="w">Your business name (used as manufacturer &amp; packer)<input id="msBizName" placeholder="e.g. Praso Enterprises"></label>' +
-            '<label class="w">Business address<textarea id="msBizAddr" placeholder="Shop / building, street, area, city, state"></textarea></label>' +
-            '<label>Pincode<input id="msBizPin" inputmode="numeric" placeholder="6 digits"></label>' +
-            '<label>Importer (only imported goods)<input id="msImporter" placeholder="Name, address, PIN"></label>' +
-            '<label class="w">FSSAI licence number (food items only)<input id="msFssai" inputmode="numeric" placeholder="14 digits"></label>' +
           '</div></details>' +
           '<button type="button" class="ms-go dim" id="msGo"><i class="ti ti-wand"></i>Fill Meesho file</button>' +
           '<div class="ms-note" id="msNote"></div>' +
@@ -174,13 +187,27 @@
     ["dragleave", "drop"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("over"); }); });
     drop.addEventListener("drop", function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) readTemplate(f); });
     $("msFile").addEventListener("change", function (e) { var f = e.target.files && e.target.files[0]; if (f) readTemplate(f); e.target.value = ""; });
-    if (!S.bizName && S.mfr) S.bizName = S.mfr;
-    var map = { msPct: "pct", msStock: "stock", msBrand: "brand", msCountry: "country", msBizName: "bizName", msBizAddr: "bizAddr", msBizPin: "bizPin", msImporter: "importer", msFssai: "fssai" };
+    var DEF = { pct: 0, stock: 10, minPct: 15, tgtPct: 20, shelfDays: 365 };
+    var map = { msPct: "pct", msStock: "stock", msBrand: "brand", msCountry: "country", msTgt: "tgtPct", msMin: "minPct", msShelf: "shelfDays" };
     Object.keys(map).forEach(function (id) {
       var el = $(id), k = map[id]; el.value = S[k] == null ? "" : S[k];
-      el.addEventListener("input", function () { S[k] = el.type === "number" ? (el.value === "" ? (k === "pct" ? 0 : 10) : +el.value) : el.value; saveSet(); });
+      el.addEventListener("input", function () { S[k] = el.type === "number" ? (el.value === "" ? DEF[k] : +el.value) : el.value; saveSet(); });
     });
-    if (!S.bizName || !S.bizAddr || !S.bizPin) $("msSet").open = true;
+    // per Meesho seller account: FSSAI, importer, fallback manufacturer / packer
+    var pmap = { msFssai: "fssai", msImporter: "importer", msBizName: "bizName", msBizAddr: "bizAddr", msBizPin: "bizPin" };
+    function profUi() {
+      $("msProf").innerHTML = Object.keys(S.profiles).map(function (n) { return '<option' + (n === S.profile ? " selected" : "") + ">" + esc(n) + "</option>"; }).join("");
+      Object.keys(pmap).forEach(function (id) { $(id).value = PF()[pmap[id]] || ""; });
+    }
+    Object.keys(pmap).forEach(function (id) { $(id).addEventListener("input", function () { PF()[pmap[id]] = $(id).value.trim(); saveSet(); }); });
+    $("msProf").addEventListener("change", function () { S.profile = $("msProf").value; saveSet(); profUi(); });
+    $("msProfAdd").addEventListener("click", function () {
+      var n = (prompt("Meesho seller account name (e.g. Vishal E-commerce):") || "").trim(); if (!n) return;
+      if (!S.profiles[n]) S.profiles[n] = { fssai: "", bizName: "", bizAddr: "", bizPin: "", importer: "" };
+      S.profile = n; saveSet(); profUi(); $("msFssai").focus();
+    });
+    profUi();
+    if (!PF().fssai) $("msSet").open = true;
     $("msGo").addEventListener("click", fill);
   }
 
@@ -374,7 +401,7 @@
   async function details(asins) {
     note("Checking saved Amazon details…", 5);
     var have = await getDocs(asins), now = Date.now();
-    var miss = asins.filter(function (a) { return !have[a] || !(now - (have[a].at || 0) < FRESH_MS); });
+    var miss = asins.filter(function (a) { return !have[a] || !(now - (have[a].at || 0) < FRESH_MS) || !(have[a].v >= 2); });
     if (!miss.length) return { d: have };
     var tok = await token();
     if (!tok) return { d: have, warn: "Robot not connected (GitHub token missing) — filled from basic Amazon data only. Click any “Sync OMS now” button once in the console to connect it." };
@@ -382,7 +409,8 @@
     try {
       var r = await fetch("https://api.github.com/repos/" + REPO + "/actions/workflows/" + WF + "/dispatches", {
         method: "POST", headers: { Accept: "application/vnd.github+json", Authorization: "Bearer " + tok, "Content-Type": "application/json" },
-        body: JSON.stringify({ ref: "main", inputs: { asins: miss.join(","), req_id: req } }) });
+        body: JSON.stringify({ ref: "main", inputs: { asins: miss.join(","), req_id: req, account: acct(),
+          skus: miss.map(function (a) { var it = pick.get(a) || byAsin()[a]; return it && it.sku ? a + ":" + String(it.sku).replace(/[,:]/g, "") : ""; }).filter(Boolean).join(",").slice(0, 60000) } }) });
       if (r.status !== 204) throw new Error("GitHub said " + r.status);
     } catch (e) { return { d: have, warn: "Robot could not start (" + e.message + ") — filled from basic Amazon data only." }; }
     var db = spDb(), t0 = Date.now(), job = null;
@@ -405,7 +433,30 @@
     n = parseFloat(p.taxPercent); return isNaN(n) ? "" : n;
   }
   function toCm(x) { if (!x || x.v == null) return ""; var f = { mm: 0.1, m: 100, in: 2.54, inches: 2.54 }[String(x.u).toLowerCase()] || 1; return Math.round(x.v * f * 10) / 10; }
-  function price(p) { var v = Number(p.price) || 0; if (!v) return ""; v = Math.round(v * (1 + (Number(S.pct) || 0) / 100)); var m = Number(p.mrp) || 0; return m && v > m ? Math.floor(m) : v; }
+  function costOf(p) {
+    try { var c = getEffectiveSpapiUnitCost(p.name, p.sku); if (c && c.value > 0) return Number(c.value); } catch (e) {}
+    return null;
+  }
+  // Meesho price for the wanted profit. Meesho charges no commission and no shipping,
+  // so profit = price - cost - GST on the margin.
+  function profitAt(P, cost, r) { return P - cost - (r > 0 ? (P - cost) * r / (1 + r) : 0); }
+  function priceInfo(p, d) {
+    if (p._pi) return p._pi;
+    var mrp = Number(p.mrp) || 0, cost = costOf(p), gst = Number(gstOf(p)), r = (isNaN(gst) ? 5 : gst) / 100;
+    if (!cost) {
+      var v = Number(p.price) || 0; if (!v) return (p._pi = { v: "", was: "no cost & no Amazon price" });
+      v = Math.round(v * (1 + (Number(S.pct) || 0) / 100));
+      return (p._pi = { v: mrp && v > mrp ? Math.floor(mrp) : v, was: "No cost known — Amazon price used. Add cost (LOTS mapping / manual cost) for profit pricing." });
+    }
+    var want = function (pct) { for (var P = Math.ceil(cost); P < cost * 5 + 1000; P++) if (profitAt(P, cost, r) >= P * pct / 100) return P; return null; };
+    var tgt = want(Number(S.tgtPct) || 20), min = want(Number(S.minPct) || 15), P = tgt, note = "";
+    if (!P) P = mrp ? Math.floor(mrp) : Math.ceil(cost * 1.6);
+    if (mrp && P > mrp) P = Math.floor(mrp);          // never above MRP (profit may then be lower)
+    var pf = profitAt(P, cost, r), pc = Math.round(pf / P * 100);
+    note = "Cost ₹" + Math.round(cost) + " · GST on margin ₹" + Math.round(P - cost - pf) + " · profit ₹" + Math.round(pf) + " (" + pc + "%)" + (pc < (Number(S.minPct) || 15) ? " — BELOW " + S.minPct + "%: MRP too low" : "");
+    if (pc < (Number(S.minPct) || 15)) return (p._pi = { v: "", was: note + " — left empty (below your minimum profit). Type a price to list anyway.", low: true });
+    return (p._pi = { v: P, was: note });
+  }
   function descr(p, d) {
     var b = (d && d.bullets) || [], t = (d && d.description) || "";
     var s = b.map(function (x) { return "• " + x; }).join("\n");
@@ -426,9 +477,9 @@
     return m ? m[1] : (parseInt(o.number_of_items || o.unit_count || o.number_of_pieces, 10) || "1"); }
   var RULES = [
     [/volumetric|group id|catalog id|meesho id|variation|parent sku|\bean\b|barcode|gtin|\bupc\b|size chart|video/, function () { return ""; }],
-    [/wrong|defective/, function (x) { return price(x.p); }],
+    [/wrong|defective/, function (x) { return priceInfo(x.p, x.d).v; }],
     [/\bmrp\b|maximum retail/, function (x) { return x.p.mrp ? Math.round(x.p.mrp) : ""; }],
-    [/price/, function (x) { return price(x.p); }],
+    [/price/, function (x) { var i = priceInfo(x.p, x.d); return { v: i.v, was: i.was, low: i.low }; }],
     [/\bgst\b/, function (x) { return gstOf(x.p); }],
     [/\bhsn\b/, function (x) {
       var v = String(x.p.hsnCode || "").replace(/\D/g, ""), o = x.c.options; if (!v || !o) return v;
@@ -443,16 +494,15 @@
       return /\bkg|kilo/.test(x.h) ? Math.round(g / 10) / 100 : g;
     }],
     [/net quantity|pack of|no\.? of (pieces|items)|number of (pieces|items)/, function (x) { return packOf(x); }],
-    [/fssai/, function () { return String(S.fssai || "").replace(/\s/g, ""); }, "text"],
+    [/fssai/, function () { return String(PF().fssai || "").replace(/\s/g, ""); }, "text"],
     [/veg/, function (x) { var t = ((x.d && x.d.title) || x.p.name || "") + " " + JSON.stringify((x.d && x.d.other) || {});
       return /non[\s_-]?veg|\begg|chicken|mutton|fish|meat/i.test(t) ? "Non Veg" : /\bveg(etarian)?\b|vegan/i.test(t) ? "Veg" : ""; }],
     [/shelf life|best before|expiry/, function (x) {
-      var o = (x.d && x.d.other) || {}, k = Object.keys(o).filter(function (a) { return /shelf|expir|best_before/.test(a); })[0], m = k && /(\d+)\s*(day|month|year)/i.exec(o[k]);
-      if (!m || !x.c.options) return m ? m[0] : "";
-      var n = +m[1], u = m[2].toLowerCase(), days = u === "day" ? n : u === "month" ? n * 30 : n * 365;
-      var c = [n + " " + m[2], days + " Days", days / 30 + " Months", days / 365 + " Years", days / 365 + " Year"];
-      for (var i = 0; i < c.length; i++) { var hit = x.c.options.filter(function (a) { return a.toLowerCase() === c[i].toLowerCase(); })[0]; if (hit) return { v: hit }; }
-      return { v: "", was: o[k] };
+      var days = Number(S.shelfDays) || 365, o = x.c.options;
+      if (!o) return days + " Days";
+      var c = [days + " Days", days / 30 + " Months", (days === 365 ? 12 : days / 30) + " Months", days / 365 + " Year", days / 365 + " Years"];
+      for (var i = 0; i < c.length; i++) { var hit = o.filter(function (a) { return a.toLowerCase() === String(c[i]).toLowerCase(); })[0]; if (hit) return { v: hit }; }
+      return { v: "", was: days + " days" };
     }],
     [/generic name/, function (x) { var o = x.c.options || [], cat = (tpl && tpl.cat || "").toLowerCase();
       var hit = o.filter(function (a) { return a.toLowerCase() === cat; })[0] || o.filter(function (a) { return cat && (cat.indexOf(a.toLowerCase()) >= 0 || a.toLowerCase().indexOf(cat) >= 0) && a.length > 3; })[0];
@@ -463,13 +513,17 @@
     [/image|photo|picture/, function (x) { var im = (x.d && x.d.images && x.d.images.length ? x.d.images : (x.p.img ? [x.p.img] : [])); return im[x.slot] || ""; }, "text"],
     [/brand/, function (x) { return S.brand || (x.d && x.d.brand) || ""; }, "text"],
     [/country/, function (x) { return (x.d && x.d.countryOfOrigin) || S.country || "India"; }],
-    [/importer/, function (x) { return /pin|zip|postal/.test(x.h) ? (/(\d{6})(?!.*\d{6})/.exec(S.importer || "") || [])[1] || "" : S.importer || ""; }, "text"],
+    [/importer/, function (x) { var c = x.d && x.d.contacts && x.d.contacts.importer, imp = PF().importer || "";
+      if (c) return /pin|zip|postal/.test(x.h) ? c.pin : /address/.test(x.h) ? c.address : /name/.test(x.h) ? c.name : c.text;
+      return /pin|zip|postal/.test(x.h) ? (/(\d{6})(?!.*\d{6})/.exec(imp) || [])[1] || "" : imp; }, "text"],
     [/manufacturer|packer|marketed|seller (name|address|details)|supplier (name|address|details)/, function (x) {
-      var h = x.h;
-      if (/pin|zip|postal/.test(h)) return S.bizPin || "";
-      if (/address/.test(h)) return S.bizAddr || "";
-      if (/name/.test(h)) return S.bizName || (x.d && x.d.manufacturer) || "";
-      return [S.bizName, S.bizAddr, S.bizPin].filter(Boolean).join(", ");   // "Manufacturer Details" in one box
+      // 1st: what your Amazon listing says (packer falls back to manufacturer), 2nd: the account's saved details
+      var h = x.h, cs = (x.d && x.d.contacts) || {}, c = /packer/.test(h) ? (cs.packer || cs.manufacturer) : (cs.manufacturer || cs.packer), P = PF();
+      if (c) return /pin|zip|postal/.test(h) ? c.pin || P.bizPin || "" : /address/.test(h) ? c.address : /name/.test(h) ? c.name : c.text;
+      if (/pin|zip|postal/.test(h)) return P.bizPin || "";
+      if (/address/.test(h)) return P.bizAddr || "";
+      if (/name/.test(h)) return P.bizName || (x.d && x.d.manufacturer) || "";
+      return [P.bizName, P.bizAddr, P.bizPin].filter(Boolean).join(", ");   // "Manufacturer Details" in one box
     }, "text"],
     [/description|about (the )?product|product details/, function (x) { return descr(x.p, x.d); }, "text"],
     [/colou?r/, function (x) { return (x.d && x.d.color) || ""; }],
@@ -511,7 +565,8 @@
     if (!tpl || !pick.size || busy) return;
     busy = true; drawSteps();
     try {
-      var items = Array.from(pick.values()).filter(Boolean), r = await details(items.map(function (i) { return String(i.asin).toUpperCase(); }));
+      try { if (typeof lotsVendor !== "undefined" && lotsVendor && !lotsVendor.products && typeof loadLotsCatalog === "function") { note("Loading your costs…", 3); await loadLotsCatalog(); } } catch (e) {}
+      var items = Array.from(pick.values()).filter(Boolean).map(function (p) { delete p._pi; return p; }), r = await details(items.map(function (i) { return String(i.asin).toUpperCase(); }));
       var mem = memGet();
       grid = { rows: items.map(function (p) {
         var d = r.d[String(p.asin).toUpperCase()] || null, slot = 0, vals = {};
@@ -524,7 +579,7 @@
           var sn = v && typeof v === "object" ? v : snap(v, c.options);
           if ((sn.v === "" || sn.v == null) && c.options && c.options.length === 1) sn = { v: c.options[0] };   // only one choice -> take it
           if ((sn.v === "" || sn.v == null) && mem[norm(c.head)]) { var ms = snap(mem[norm(c.head)], c.options); if (ms.v) sn = { v: ms.v, was: sn.was }; }   // your earlier "Same for all"
-          vals[c.idx] = { v: sn.v === "" || sn.v == null ? "" : String(sn.v), was: sn.was || "", auto: sn.v !== "" && sn.v != null, text: kind === "text" || !!c.options };
+          vals[c.idx] = { v: sn.v === "" || sn.v == null ? "" : String(sn.v), was: sn.was || "", low: !!sn.low, auto: sn.v !== "" && sn.v != null, text: kind === "text" || !!c.options };
         });
         return { p: p, d: d, vals: vals };
       }), warn: r.warn || "" };
@@ -537,7 +592,7 @@
   /* ---------- 5. review grid ---------- */
   function needCols() {
     var anyReq = tpl.cols.some(function (c) { return c.req; });
-    return tpl.cols.filter(function (c) { return grid.rows.some(function (r) { return !r.vals[c.idx].v; }) && (anyReq ? c.req : true); });
+    return tpl.cols.filter(function (c) { return grid.rows.some(function (r) { return r.vals[c.idx].low; }) || (grid.rows.some(function (r) { return !r.vals[c.idx].v; }) && (anyReq ? c.req : true)); });
   }
   function counts() {
     var auto = 0, need = 0, tot = 0, empty = 0;
@@ -555,19 +610,25 @@
     var body = grid.rows.map(function (r, ri) {
       return '<tr><td class="p"><div class="ms-pn" title="' + esc(r.p.name) + '">' + esc(r.p.name) + "</div><small>" + esc(r.p.asin) + (r.d ? "" : " · basic data") + "</small></td>" + cols.map(function (c) {
         var v = r.vals[c.idx], need = !v.v && (c.req || (onlyNeed && nc.length));
-        var bad = v.v && c.options && c.options.indexOf(v.v) < 0;
-        return '<td class="' + (need ? "need" : "") + (bad ? " bad" : "") + '"' + (v.was ? ' title="Amazon says: ' + esc(v.was) + '"' : "") + '><input class="ms-c" data-r="' + ri + '" data-c="' + c.idx + '" value="' + esc(v.v) + '"' + (c.options ? ' list="msDl' + c.idx + '"' : "") + (v.was ? ' placeholder="' + esc(("Amazon: " + v.was).slice(0, 40)) + '"' : "") + "></td>";
+        var bad = (v.v && c.options && c.options.indexOf(v.v) < 0) || v.low;
+        return '<td class="' + (need ? "need" : "") + (bad ? " bad" : "") + '"' + (v.was ? ' title="' + esc(v.was) + '"' : "") + '><input class="ms-c" data-r="' + ri + '" data-c="' + c.idx + '" value="' + esc(v.v) + '"' + (c.options ? ' list="msDl' + c.idx + '"' : "") + (v.was && !v.v ? ' placeholder="' + esc(("Amazon: " + v.was).slice(0, 40)) + '"' : "") + ">" +
+          (v.was && (v.v || v.low) ? '<small class="ms-why' + (v.low ? " lo" : "") + '">' + esc(v.was) + "</small>" : "") + "</td>";
       }).join("") + "</tr>";
     }).join("");
     res.innerHTML = '<div class="ms-sum"><span class="ms-pill g">✓ ' + n.auto + " boxes filled by the robot</span>" +
       (n.need ? '<span class="ms-pill y">' + n.need + " required boxes need you</span>" : n.known ? '<span class="ms-pill g">All required boxes filled</span>' : '<span class="ms-pill n">' + n.empty + " empty boxes — fill the ones Meesho asks for</span>") +
+      (function () { var pc = tpl.cols.filter(function (c) { return /price/i.test(c.head) && !/wrong|defective/i.test(c.head); })[0]; if (!pc) return "";
+        var low = grid.rows.filter(function (r) { return r.vals[pc.idx].low && !r.vals[pc.idx].v; }).length, nocost = grid.rows.filter(function (r) { return /No cost/.test(r.vals[pc.idx].was); }).length;
+        return (low ? '<span class="ms-pill y" style="background:#FBEDEB;color:#9B2C22">' + low +  " can't make " + S.minPct + "% under MRP — not priced</span>" : "") +
+          (nocost ? '<span class="ms-pill n">' + nocost + " without cost — Amazon price used</span>" : "") +
+          (grid.rows.length - low - nocost > 0 ? '<span class="ms-pill g">' + (grid.rows.length - low - nocost) + " priced for " + S.minPct + "–" + S.tgtPct + "% profit</span>" : ""); })() +
       (nc.length ? '<button type="button" class="ms-lnk" id="msTog">' + (onlyNeed ? "Show all " + tpl.cols.length + " columns" : "Show only columns that need you") + "</button>" : "") +
       '<button type="button" class="ms-go gold" id="msDl"><i class="ti ti-download"></i>Download Meesho file</button></div>' +
       dl + '<div class="ms-tw"><table class="ms-t"><thead><tr><th class="p">Product</th>' + head + "</tr></thead><tbody>" + body + "</tbody></table></div>" +
       '<div class="ms-note" style="text-align:left">Tip: yellow = Meesho needs it. Use <b>Same for all</b> to fill a whole column at once. Then upload the downloaded file in Meesho → Catalog Upload → Bulk upload.</div>';
     res.oninput = function (e) {
       var el = e.target; if (!el.dataset || el.dataset.r == null) return;
-      var v = grid.rows[+el.dataset.r].vals[+el.dataset.c]; v.v = el.value.trim(); v.auto = false;
+      var v = grid.rows[+el.dataset.r].vals[+el.dataset.c]; v.v = el.value.trim(); v.auto = false; v.low = false;
       var td = el.parentNode, c = tpl.cols.filter(function (x) { return x.idx === +el.dataset.c; })[0];
       td.classList.toggle("need", !v.v && !!c.req); td.classList.toggle("bad", !!(v.v && c.options && c.options.indexOf(v.v) < 0));
     };

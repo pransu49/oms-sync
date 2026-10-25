@@ -2,7 +2,8 @@
 // Reads full product details from Amazon's catalogue for the products picked in the Meesho tab
 // (dalbhaat.in/pages/amazon -> Meesho). Started only by that tab ("Fill file"). Never runs by itself.
 //
-// Input (workflow_dispatch): ASINS = comma list (max 100), REQ_ID = id the page waits on.
+// Input (workflow_dispatch): ASINS = comma list (max 100), REQ_ID = id the page waits on,
+//   ACCOUNT = praso | sastastore, SKUS = "ASIN:SKU,..." -> your own listing's manufacturer / packer / importer details.
 // Output (Firestore noworry / SPAPI project, collection spapiSnapshots - the page can already read it):
 //   meesho_<ASIN>       -> title, brand, bullets, description, images, colour, material, size, dims, other attributes
 //   meesho_job_<REQ_ID> -> { status: 'done' | 'failed', ok, missing[] }  (the page watches this one doc)
@@ -15,6 +16,10 @@ const MARKETPLACE_ID = 'A21TJRUUN4KGV';
 const COL = 'spapiSnapshots';
 const ASINS = [...new Set(String(process.env.ASINS || '').toUpperCase().split(/[^A-Z0-9]+/).filter((a) => /^[A-Z0-9]{10}$/.test(a)))].slice(0, 100);
 const REQ_ID = String(process.env.REQ_ID || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40) || ('r' + Date.now());
+const ACCOUNT = String(process.env.ACCOUNT || 'praso').toLowerCase() === 'sastastore' ? 'sastastore' : 'praso';
+const SKUS = {};
+String(process.env.SKUS || '').split(',').forEach((p) => { const i = p.indexOf(':'); if (i > 0) SKUS[p.slice(0, i).trim().toUpperCase()] = p.slice(i + 1).trim(); });
+const SELLER_ID = ACCOUNT === 'sastastore' ? process.env.SPAPI_SELLER_ID_SASTASTORE : process.env.SPAPI_SELLER_ID;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_SPAPI)) });
@@ -22,7 +27,7 @@ const db = admin.firestore();
 db.settings({ ignoreUndefinedProperties: true });
 
 const sp = new SellingPartnerAPI({
-  region: 'eu', refresh_token: process.env.SPAPI_REFRESH_TOKEN,
+  region: 'eu', refresh_token: (ACCOUNT === 'sastastore' && process.env.SPAPI_REFRESH_TOKEN_SASTASTORE) || process.env.SPAPI_REFRESH_TOKEN,
   credentials: { SELLING_PARTNER_APP_CLIENT_ID: process.env.SPAPI_CLIENT_ID, SELLING_PARTNER_APP_CLIENT_SECRET: process.env.SPAPI_CLIENT_SECRET },
 });
 
@@ -72,6 +77,23 @@ function images(it) {
   return Object.keys(best).sort((a, b) => order(a) - order(b)).map((k) => best[k].link.replace(/\._[^.\/]+_(\.[a-z]+)$/i, '$1')).slice(0, 9);
 }
 
+// "Unibic Foods India Pvt Ltd, Plot 12, Bidadi, Karnataka 562109" -> { name, address, pin, text }
+function contact(text) {
+  const t = clean(text).replace(/\s*\n\s*/g, ', ');
+  if (!t) return null;
+  const pins = t.match(/\b\d{6}\b/g), pin = pins ? pins[pins.length - 1] : '';
+  const parts = t.split(/,\s*/), name = parts.shift().trim();
+  const address = parts.join(', ').replace(new RegExp('[,\\s-]*' + (pin || 'x^') + '\\s*$'), '').replace(/[,\s]+$/, '').trim();
+  return { name, address: address || t, pin, text: t };
+}
+function contacts(a) {
+  const out = {};
+  [['manufacturer', 'manufacturer_contact_information'], ['packer', 'packer_contact_information'], ['importer', 'importer_contact_information']].forEach(([k, key]) => {
+    const c = contact(flat(a[key])); if (c) out[k] = c;
+  });
+  return out;
+}
+
 function compact(it) {
   const a = it.attributes || {}, sm = (it.summaries || []).find((x) => x.marketplaceId === MARKETPLACE_ID) || (it.summaries || [])[0] || {};
   const pt = ((it.productTypes || [])[0] || {}).productType || '';
@@ -83,7 +105,8 @@ function compact(it) {
     if (v && Object.keys(other).length < 80) other[k] = v.slice(0, 200);
   });
   return {
-    asin: it.asin, at: Date.now(), productType: pt,
+    asin: it.asin, at: Date.now(), v: 2, productType: pt,
+    contacts: contacts(a),
     title: clean(sm.itemName || flat(a.item_name)),
     brand: clean(sm.brand || flat(a.brand)),
     bullets: (a.bullet_point || []).map((b) => clean(b.value)).filter(Boolean).slice(0, 10),
@@ -104,7 +127,7 @@ function compact(it) {
 
 async function main() {
   const job = db.collection(COL).doc(`meesho_job_${REQ_ID}`);
-  console.log(`Meesho robot: ${ASINS.length} ASIN(s), request ${REQ_ID}`);
+  console.log(`Meesho robot: ${ASINS.length} ASIN(s), account ${ACCOUNT}, ${Object.keys(SKUS).length} SKU(s), request ${REQ_ID}`);
   if (!ASINS.length) { await job.set({ status: 'failed', error: 'No ASINs given', at: Date.now() }); return; }
   await job.set({ status: 'running', total: ASINS.length, at: Date.now() });
   const got = new Set();
@@ -125,7 +148,24 @@ async function main() {
       }
     }
     const batch = db.batch();
-    items.forEach((it) => { if (!it || !it.asin) return; got.add(it.asin); batch.set(db.collection(COL).doc(`meesho_${it.asin}`), compact(it)); });
+    for (const it of items) {
+      if (!it || !it.asin) continue;
+      const doc = compact(it);
+      // your own listing has the manufacturer / packer details you entered on Amazon
+      const sku = SKUS[it.asin];
+      if (sku && SELLER_ID) {
+        try {
+          const li = await sp.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId: SELLER_ID, sku },
+            query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes'] } });
+          const own = contacts((li && (li.attributes || (li.payload && li.payload.attributes))) || {});
+          doc.contacts = { ...doc.contacts, ...own };
+          ['manufacturer', 'packer'].forEach((k) => { if (!doc.contacts[k]) delete doc.contacts[k]; });
+        } catch (e) { console.warn(`Listing ${sku} not read:`, e.message || e); }
+        await sleep(600);
+      }
+      got.add(it.asin);
+      batch.set(db.collection(COL).doc(`meesho_${it.asin}`), doc);
+    }
     await batch.commit();
     await job.set({ status: 'running', total: ASINS.length, ok: got.size, at: Date.now() }, { merge: true });
     if (i === 0 && items[0]) console.log('Sample:', JSON.stringify(compact(items[0])).slice(0, 800));

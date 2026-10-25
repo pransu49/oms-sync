@@ -11,6 +11,12 @@ on:
       req_id:
         description: 'request id the page waits on'
         default: ''
+      account:
+        description: 'praso or sastastore (whose listings to read)'
+        default: 'praso'
+      skus:
+        description: 'ASIN:SKU pairs, comma separated'
+        default: ''
 
 jobs:
   read:
@@ -28,9 +34,14 @@ jobs:
           SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
           SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
           SPAPI_REFRESH_TOKEN: ${{ secrets.SPAPI_REFRESH_TOKEN }}
+          SPAPI_REFRESH_TOKEN_SASTASTORE: ${{ secrets.SPAPI_REFRESH_TOKEN_SASTASTORE }}
+          SPAPI_SELLER_ID: ${{ secrets.SPAPI_SELLER_ID }}
+          SPAPI_SELLER_ID_SASTASTORE: ${{ secrets.SPAPI_SELLER_ID_SASTASTORE }}
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
           ASINS: ${{ inputs.asins }}
           REQ_ID: ${{ inputs.req_id }}
+          ACCOUNT: ${{ inputs.account }}
+          SKUS: ${{ inputs.skus }}
 
       - name: Report sync health to console
         if: always()
