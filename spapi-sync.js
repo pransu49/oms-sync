@@ -1796,13 +1796,26 @@ async function mapByBarcode(asin, code) {
   console.log(`Add ASIN: barcode ${code} = LOTS ${p.code} (${p.name}) - mapped to ${asin}.`);
   return p;
 }
+// LOTS catalogue products can carry an ASIN; if exactly that ASIN has no mapping yet, map it to that LOTS product.
+async function mapByLotsAsin(asin) {
+  const c = await loadCostData(), A = String(asin || '').toUpperCase();
+  if (!A || c.map[A]) return null;
+  const p = Object.values(c.lots).find((x) => x && x.asin && String(x.asin).trim().toUpperCase() === A && bestSlab(x) != null);
+  if (!p) return null;
+  const rec = { code: String(p.code), name: p.name || '', vendorName: 'LOTS', parts: [{ code: String(p.code), name: p.name || '', qty: 1 }], savedAt: new Date().toISOString(), source: 'lots-asin' };
+  await dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').set({ map: { [A]: rec } }, { merge: true })
+    .catch(() => dbMain.collection('aikm_admin').doc('spapiAsinLotsMap2').set({ map: { [A]: rec } }, { merge: true }));
+  c.map[A] = rec;
+  console.log(`Add ASIN: ${A} = LOTS ${p.code} (${p.name}) from the LOTS catalogue ASIN - mapped.`);
+  return p;
+}
 async function applyAddAsinRequests(sellerId) {
   const snap = await db.collection('spapiAddAsin').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').limit(15).get();
   // Owner, 24 Oct 2026: a "Needs cost" row whose ASIN has been mapped since is retried automatically (no Retry click needed)
   let mappedNow = [];
   try {
     const nc = await db.collection('spapiAddAsin').where('account', '==', ACCOUNT_LABEL).where('status', '==', 'needs_cost').limit(60).get();
-    if (!nc.empty) { const c = await loadCostData(); mappedNow = nc.docs.filter((d) => { const a = String(d.data().asin || '').toUpperCase(); return a && (c.map[a] || Number(d.data().cost) > 0); }).slice(0, 15); }
+    if (!nc.empty) { const c = await loadCostData(); mappedNow = nc.docs.filter((d) => { const a = String(d.data().asin || '').toUpperCase(); return a && (c.map[a] || Number(d.data().cost) > 0 || Object.values(c.lots).some((x) => x && x.asin && String(x.asin).trim().toUpperCase() === a)); }).slice(0, 15); }
   } catch (e) { console.warn('Add ASIN: needs-cost check skipped:', e.message || e); }
   if (snap.empty && !mappedNow.length) { console.log('Add ASIN: nothing pending.'); return; }
   console.log(`Add ASIN: ${snap.size} request(s)${mappedNow.length ? ` + ${mappedNow.length} mapped since "Needs cost" (retried)` : ''}.`);
@@ -1851,6 +1864,10 @@ async function applyAddAsinRequests(sellerId) {
       let kc = Number(r.cost) > 0 ? { cost: Number(r.cost), src: 'typed' } : await knownCost(i);
       for (const o of oldOnes) { if (kc) break; kc = await knownCost({ ...i, sku: o.sku }); if (kc) kc.src += ' (old SKU)'; }
       if (kc && lotsHit && !(Number(r.cost) > 0)) kc.src = 'LOTS barcode match';
+      if (!kc) {   // 25 Oct 2026: a LOTS product that lists this ASIN in the catalogue maps itself (no Map click needed)
+        const auto = await mapByLotsAsin(asin);
+        if (auto) { const k2 = await knownCost(i); if (k2) { kc = k2; kc.src = 'LOTS (catalogue ASIN)'; } }
+      }
       if (!kc) { await done({ status: 'needs_cost', name, img: img ? img.link : null, error: 'No cost known. Click Map (or type the cost) and press Retry.' }); continue; }
       const mrpCat = Number(((((ca.maximum_retail_price || [])[0] || {}).value) ?? (((ca.list_price || [])[0] || {}).value)) || 0) || null;
       const oldMrp = (oldOnes.find((o) => Number(o.mrp) > 0) || {}).mrp;
@@ -2083,6 +2100,40 @@ async function setAmazonQuantity(sellerId, sku, qty) {
   }));
 }
 
+// ── ONE-TIME REPAIR (25 Oct 2026) ─────────────────────────────────────────────────────────────
+// On 24 Oct 07:3x-08:0x UTC the stock rule was on for ALL listings for ~30 min and set up to 100 listings per account
+// to 0; the undo then skipped them (stale listings report) and forgot them. Each such listing still carries
+// lastStockPush {qty: 0, reason: "LOTS stock N is below 12"} from that window. If it is STILL 0 on Amazon, put back
+// stock = its current LOTS-GN stock (max 50), so it sells again. Listings already restocked (OMS Guru) or relisted
+// under a new SKU are left alone. Up to 150 per run; each repaired listing gets a new lastStockPush, so it runs once.
+async function repairStockRule24(sellerId) {
+  if (!sellerId || !inventoryFresh) return;
+  const from = Date.parse('2026-10-24T07:20:00Z'), to = Date.parse('2026-10-24T08:30:00Z');
+  const hit = Object.values(SNAP.inventory).filter((it) => it && it.account === ACCOUNT_LABEL && it.sku && reportSkus.has(it.sku)
+    && (it.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && it.lastStockPush && it.lastStockPush.qty === 0
+    && /^LOTS stock .* below/.test(it.lastStockPush.reason || '') && it.lastStockPush.at >= from && it.lastStockPush.at <= to);
+  if (!hit.length) { console.log('Stock repair (24 Oct): nothing left to repair.'); return; }
+  const L = await loadLotsForGuard();
+  let fixed = 0, skipped = 0, failed = 0;
+  for (const it of hit.slice(0, 150)) {
+    const docId = `${ACCOUNT_LABEL}_${it.sku}`, amz = parseInt(it.quantity, 10) || 0;
+    const lots = confirmedLotsFor(it, L), lq = lots ? Math.floor(parseFloat(lots.qty)) : NaN;
+    const mark = (rec) => snapPatch('inventory', docId, { lastStockPush: { ...rec, at: Date.now() } });
+    if (amz > 0) { mark({ status: 'applied', qty: amz, reason: 'Repair 24 Oct: already back in stock - left alone' }); skipped++; continue; }
+    if (!(lq > 0)) { mark({ status: 'applied', qty: 0, reason: `Repair 24 Oct: LOTS-GN stock ${isNaN(lq) ? 'unknown' : lq} - left at 0` }); skipped++; continue; }
+    const q = Math.min(lq, 50);
+    try {
+      await setAmazonQuantity(sellerId, it.sku, q);
+      await db.collection('spapiInventory').doc(docId).set({ quantity: q }, { merge: true });
+      snapPatch('inventory', docId, { quantity: q, stockGuard: null });
+      mark({ status: 'applied', qty: q, reason: `Repair 24 Oct: stock rule set this to 0 by mistake - put back to LOTS-GN stock ${lq}` });
+      fixed++;
+    } catch (e) { failed++; console.warn(`Stock repair: could not set ${it.sku} to ${q}:`, e.message || e); }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  console.log(`Stock repair (24 Oct): ${fixed} put back in stock, ${skipped} left alone (already in stock / no LOTS-GN stock), ${failed} failed, ${Math.max(0, hit.length - 150)} left for next run.`);
+}
+
 async function runStockGuard(sellerId) {
   if (!sellerId) { console.log('Stock guard skipped: SPAPI_SELLER_ID not set.'); return; }
   if (!inventoryFresh) { console.log('Stock guard skipped: Amazon listings report not read this run.'); return; }
@@ -2123,7 +2174,9 @@ async function runStockGuard(sellerId) {
       const docId = `${ACCOUNT_LABEL}_${sku}`, item = SNAP.inventory[docId];
       const amzQty = item ? (parseInt(item.quantity, 10) || 0) : 0;
       try {
-        if (item && reportSkus.has(sku) && amzQty === 0 && g.prevQty > 0) {
+        // 25 Oct 2026 fix: do not trust amzQty here - Amazon's listings report can still show the old stock minutes
+        // after the robot set it to 0 (that skipped all 100 put-backs on 24 Oct). Push the remembered stock back.
+        if (item && reportSkus.has(sku) && g.prevQty > 0 && amzQty < g.prevQty) {
           await setAmazonQuantity(sellerId, sku, g.prevQty);
           await db.collection('spapiInventory').doc(docId).set({ quantity: g.prevQty }, { merge: true });
           snapPatch('inventory', docId, { quantity: g.prevQty, lastStockPush: { status: 'applied', at: Date.now(), qty: g.prevQty, reason: 'Stock rule switched off - previous Amazon stock put back' } });
@@ -2405,6 +2458,7 @@ async function run() {
   } else console.log('Step 3: quick sync - competitor prices skipped (done in the full sync).');
 
   console.log('Step 3a: stock guard (LOTS-GN stock below 12 -> out of stock on Amazon)...');
+  if (SYNC_MODE === 'full') await repairStockRule24(sellerId).catch((e) => console.warn('Stock repair skipped (sync continues):', e.message || e));
   if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
 
   console.log('Step 3a1: relist robot ("Not selling" -> new SKU, old SKU deleted)...');
