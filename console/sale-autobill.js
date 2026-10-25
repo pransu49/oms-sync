@@ -120,8 +120,9 @@
   let D = null;          // loaded data
   async function loadAll(progress) {
     progress("Loading orders…");
-    const [omsChunks, asinDoc, mmChunks, lotsChunks] = await Promise.all([
+    const [omsChunks, archChunks, asinDoc, mmChunks, lotsChunks] = await Promise.all([
       fsList("oms", "aikm_admin/omsOrders/chunks"),
+      fsList("oms", "aikm_admin/omsArchive/chunks").catch(() => []),
       fsDoc("main", "aikm_admin/spapiAsinLotsMap").catch(() => null),
       fsList("main", "aikm_admin/masterMapping/chunks").catch(() => []),
       fsList("main", "aikm_admin/lotsCatalog/chunks").catch(() => []),
@@ -130,7 +131,8 @@
     const rows = await sbAll(`kind=in.(bill,customer,setting,product_hsn,autobill_map,autobill_done)&select=kind,id,data`);
     const by = k => rows.filter(r => r.kind === k);
 
-    const orders = omsChunks.flatMap(c => c.orders || []);
+    // live data first (freshest status), then the archive for older shipped dates
+    const orders = omsChunks.flatMap(c => c.orders || []).concat(archChunks.flatMap(c => c.orders || []));
     const asinMap = (asinDoc && asinDoc.map) || {};
     const mm = Object.assign({}, ...mmChunks.map(c => c.map || {}));
     const lots = {}; lotsChunks.forEach(c => (c.products || []).forEach(p => { if (p && p.code) lots[String(p.code)] = p; }));
@@ -297,7 +299,7 @@
   function dateSummary() {
     const all = shippedOrders(), m = new Map();
     all.forEach(o => { const x = m.get(o._date) || { date: o._date, orders: new Set() }; x.orders.add(o.channelOrderId); m.set(o._date, x); });
-    return [...m.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 14).map(x => {
+    return [...m.values()].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 45).map(x => {
       const doneN = COMPANIES.filter(c => D.done[x.date + "__" + c.gstin]).length;
       return { date: x.date, orders: x.orders.size, doneN };
     });
@@ -442,7 +444,7 @@
       if (!D || Date.now() - D.loadedAt > 10 * 60 * 1000) await loadAll(t => { const l = $("#abLoad"); if (l) l.textContent = t; });
     } catch (e) { $("#abBody").innerHTML = `<div class="ab-load">Could not load: ${esc(e.message)}<br><br><button class="btn" id="abRetry">Try again</button></div>`; $("#abRetry").onclick = () => { D = null; open(); }; return; }
     const ds = dateSummary();
-    if (!ds.length) { $("#abBody").innerHTML = `<div class="ab-load">No shipped orders found in the last 15 days.</div>`; return; }
+    if (!ds.length) { $("#abBody").innerHTML = `<div class="ab-load">No shipped orders found.</div>`; return; }
     if (!S.date || !ds.some(x => x.date === S.date)) {
       const y = addDays(todayIso(), -1);
       S.date = (ds.find(x => x.date <= y && x.doneN < COMPANIES.length) || ds.find(x => x.date <= y) || ds[0]).date;

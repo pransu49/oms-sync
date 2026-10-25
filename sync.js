@@ -14,6 +14,9 @@ const crypto = require('crypto');
 const EMAIL = process.env.OMS_EMAIL;
 const PASSWORD = process.env.OMS_PASSWORD;
 const DAYS_BACK = parseInt(process.env.OMS_DAYS_BACK || '15', 10);
+// Archive mode (oms-archive.yml): saves a longer window of SHIPPED orders to aikm_admin/<OMS_ARCHIVE_DOC>
+// for Auto sale bills. It never touches the live omsOrders data or any other job.
+const ARCHIVE_DOC = (process.env.OMS_ARCHIVE_DOC || '').trim();
 const BASE = 'https://client.omsguru.com';
 
 // Reduces the chance of being flagged as a bot and served a different/degraded
@@ -263,7 +266,7 @@ function hashChunk(chunk) {
   return crypto.createHash('md5').update(JSON.stringify(chunk)).digest('hex');
 }
 
-async function pushToFirestore(orders) {
+async function pushToFirestore(orders, docName = 'omsOrders') {
   const svcJson = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!svcJson) throw new Error('Missing FIREBASE_SERVICE_ACCOUNT env var (paste the service account JSON as a secret).');
 
@@ -274,7 +277,7 @@ async function pushToFirestore(orders) {
   const db = admin.firestore();
 
   const CHUNK_SIZE = 400;
-  const chunksRef = db.collection('aikm_admin').doc('omsOrders').collection('chunks');
+  const chunksRef = db.collection('aikm_admin').doc(docName).collection('chunks');
 
   // Read existing chunk hashes so unchanged chunks aren't rewritten every run.
   const existingSnap = await chunksRef.get();
@@ -312,7 +315,7 @@ async function pushToFirestore(orders) {
   });
   if (deletes) await batchDelete.commit();
 
-  await db.collection('aikm_admin').doc('omsOrders').set({
+  await db.collection('aikm_admin').doc(docName).set({
     lastSynced: admin.firestore.FieldValue.serverTimestamp(),
     orderCount: orders.length,
     chunkCount: chunkIndex,
@@ -383,6 +386,12 @@ async function main() {
     console.log('DEBUG — actual column headers in this export:', Object.keys(rawRows[0]).join(' | '));
   }
   const orders = rawRows.map(slimOrder);
+  if (ARCHIVE_DOC) {
+    const shipped = orders.filter((o) => String(o.shipmentDate || '').trim());
+    await pushToFirestore(shipped, ARCHIVE_DOC);
+    console.log(`Archive saved: ${shipped.length} shipped order line(s) of ${orders.length}. Done.`);
+    return;
+  }
   await pushToFirestore(orders);
   await saveReadyToConfirm(orders);
   slaCheck(orders);
