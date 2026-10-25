@@ -119,21 +119,22 @@ async function loadLots() {
   return { lots, nameMap, asinMap };
 }
 // Amazon units this listing can sell from LOTS stock, or null when it is not linked to LOTS (vendor / unknown)
-function lotsUnitsFor(asin, title, L) {
+function lotsUnitsFor(asin, title, L, bl = 0) {
   let m = asin && (L.asinMap[asin] || L.asinMap[String(asin).toUpperCase()]), via = 'ASIN';
   if (!m || !(m.code || (m.parts || []).length)) { const n = title && L.nameMap[normalizeName(title)]; if (n && n.code && n.vendorName === 'LOTS') { m = { code: n.code }; via = 'name'; } else return null; }
   if (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS') return null;
   const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ code: m.code, qty: 1 }];
-  let units = Infinity, minLots = Infinity; const codes = [];
+  let units = Infinity, minLots = Infinity, freeLots = Infinity; const codes = [];
   for (const x of parts) {
     const p = L.lots[String(x.code)]; if (!p) return null;
     const q = parseFloat(p.qty); if (isNaN(q)) return null;
     const need = Math.max(1, Number(x.qty) || 1) / Math.max(1, parseInt(x.lotsPack) || 1);   // LOTS units per Amazon unit
     units = Math.min(units, Math.floor(Math.max(0, q) / need + 1e-9));
     minLots = Math.min(minLots, q);
+    freeLots = Math.min(freeLots, q - bl * need);                                         // LOTS units left after the blocked orders
     codes.push(`${p.code}${parts.length > 1 || need !== 1 ? `×${Math.round(need * 100) / 100}` : ''}`);
   }
-  return { target: units, units, lotsQty: minLots, codes: codes.join(' + '), lotsName: (L.lots[String(parts[0].code)] || {}).name || '', via };
+  return { target: units, units, lotsQty: minLots, freeLots: Math.floor(freeLots), codes: codes.join(' + '), lotsName: (L.lots[String(parts[0].code)] || {}).name || '', via };
 }
 
 // ---- upload to OMS Guru: Import Data -> "Update InStock Qty and/or Last Purchase Price" (type 2), RESET ----
@@ -209,7 +210,7 @@ async function main() {
   for (const g of Object.values(bySku)) {
     if (!(g.sku in omsQty)) continue;                               // not a stock product in this warehouse
     const seen = new Map();
-    for (const l of g.list) { const k = l.asin || l.title; if (seen.has(k)) continue; const u = lotsUnitsFor(l.asin, l.title, L); if (u) seen.set(k, { ...u, asin: l.asin }); }
+    for (const l of g.list) { const k = l.asin || l.title; if (seen.has(k)) continue; const u = lotsUnitsFor(l.asin, l.title, L, blocked[g.sku] || 0); if (u) seen.set(k, { ...u, asin: l.asin }); }
     if (!seen.size) {
       notLinked++;
       const asins = [...new Set(g.list.map((l) => l.asin).filter(Boolean))];
@@ -218,16 +219,17 @@ async function main() {
       unlinked.push([g.sku, String(g.name || '').slice(0, 90), asins.slice(0, 4).join(' '), omsQty[g.sku], g.list.length, why]);
       continue;
     }
-    const bl = blocked[g.sku] || 0;
+    const bl = blocked[g.sku] || 0, cur0 = omsQty[g.sku];
     const opts = [...seen.values()].map((o) => {
-      const free = o.units - bl, oos = o.lotsQty < OOS_BELOW || free < OOS_BELOW;
-      return { ...o, free, oos, target: oos ? bl : o.units };            // OOS: In Stock = Blocked -> Amazon 0
+      const free = o.freeLots, oos = o.lotsQty < OOS_BELOW || free < OOS_BELOW;
+      // OOS: Amazon must show 0 = In Stock - Blocked. Already 0 or less -> leave In Stock as it is; else set In Stock = Blocked.
+      return { ...o, free, oos, target: oos ? (cur0 <= bl ? cur0 : bl) : o.units };
     });
     const best = opts.reduce((a, b) => ((b.oos ? -1 : b.free) < (a.oos ? -1 : a.free) ? b : a));
     const differ = new Set(opts.map((o) => (o.oos ? 0 : o.free))).size > 1;
     if (differ) conflicts++;
     const cur = omsQty[g.sku], newQty = best.target;
-    const why = best.oos ? (best.lotsQty < OOS_BELOW ? `LOTS ${best.lotsQty} is below ${OOS_BELOW}` : `LOTS ${best.units} - blocked ${bl} = ${best.free}, below ${OOS_BELOW}`) + ' - Amazon 0' : '';
+    const why = best.oos ? (best.lotsQty < OOS_BELOW ? `LOTS ${best.lotsQty} is below ${OOS_BELOW}` : `LOTS ${best.lotsQty} - blocked ${bl}${best.units !== best.lotsQty && bl ? ' (in LOTS units)' : ''} = ${best.free}, below ${OOS_BELOW}`) + ' - Amazon 0' : '';
     rows.push({ sku: g.sku, name: g.name, asin: best.asin, lots: best.codes, lotsName: best.lotsName, lotsQty: best.lotsQty, via: best.via, omsQty: cur, newQty, blocked: bl, oos: best.oos,
       change: newQty === cur ? 'same' : best.oos ? 'zero' : newQty > cur ? 'up' : 'down',
       note: [why, differ ? `Listings linked differently (${opts.map((o) => (o.oos ? 0 : o.free)).join(' / ')} free) - lowest used` : ''].filter(Boolean).join(' · ') });
