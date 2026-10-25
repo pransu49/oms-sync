@@ -86,7 +86,7 @@
     sub.insertBefore(sw, sub.firstChild);
     var ctl = document.createElement("div");
     ctl.id = "mpCtl"; ctl.style.cssText = "display:none;flex:1;align-items:center;gap:8px;flex-wrap:wrap;";
-    ctl.innerHTML = '<span class="mp-meta">Auto every day 10 AM · packs all New orders · labels also on Telegram</span><span style="flex:1"></span>' +
+    ctl.innerHTML = '<span class="mp-meta">Auto 11:30 AM (Mon–Sat) · packs all New orders · labels also on Telegram</span><span style="flex:1"></span>' +
       '<button type="button" class="subbtn" id="mpDryBtn" title="Shows what would be packed — packs nothing"><i class="ti ti-eye"></i> Preview</button>' +
       '<button type="button" class="subbtn" id="mpTestBtn" title="Packs just 1 order — for testing"><i class="ti ti-flask"></i> Test 1 order</button>' +
       '<button type="button" class="subbtn mp-btn-main" id="mpRunBtn"><i class="ti ti-player-play"></i> Run now</button>';
@@ -108,7 +108,7 @@
       "</div><div>" +
         '<div class="panel"><h2 id="mpPickTitle">Picklist <span class="es-meta" id="mpPickCount"></span></h2><div id="mpPick"></div></div>' +
         '<div class="panel"><h2>How it works</h2><div class="es-rule">' +
-          "<b>When:</b> every day at 10 AM (all 7 days). Run now = straight away.<br>" +
+          "<b>When:</b> every day at 11:30 AM, Monday to Saturday (no auto-run on Sunday). Run now = straight away.<br>" +
           "<b>Which orders:</b> all <b>New</b> orders of the Meesho and Snapdeal accounts in OMS Guru. Amazon orders are never touched.<br>" +
           "<b>Packing:</b> same as ticking the orders in OMS Guru's New tab and clicking <b>Pack Orders</b>; box size / weight come from OMS.<br>" +
           "<b>Check:</b> an order counts as packed only when OMS shows its shipping label (waits up to 15 min).<br>" +
@@ -158,7 +158,7 @@
     setState(running ? "run" : live.state === "failed" ? "bad" : last ? "ok" : "", running ? live.step : live.state === "failed" ? live.step : last ? "Last run " + when(last.finishedAt) : "Not run yet");
     ["mpRunBtn", "mpTestBtn", "mpDryBtn"].forEach(function (id) { if ($(id)) $(id).disabled = running; });
     var showDry = dry && (!last || dry.at > last.finishedAt);
-    $("mpLastLine").textContent = last ? nice(last.date) + " · " + (last.trigger === "schedule" ? "auto 10 AM" : last.trigger || "manual") : "";
+    $("mpLastLine").textContent = last ? nice(last.date) + " · " + (last.trigger === "schedule" ? "auto 11:30 AM" : last.trigger || "manual") : "";
 
     var failed = (last && last.failed) || [], check = (last && last.check) || [];
     setKpi("mpKpiPacked", last ? last.packed || 0 : "–", last ? "on " + nice(last.date) : "");

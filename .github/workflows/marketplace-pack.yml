@@ -1,15 +1,15 @@
 name: Meesho + Snapdeal - pack and labels
 
 on:
-  # Daily auto-run at 10 AM IST, every day.
+  # Daily auto-run at 11:30 AM IST, Monday to Saturday (no run on Sundays).
   # The OMS Guru sync runs every 10 min (cron-job.org, reliable). After each sync the "gate" job checks:
-  # after 10:00 AM IST and not yet started today -> start the robot ONCE.
+  # after 11:30 AM IST, not Sunday, and not yet started today -> start the robot ONCE.
   workflow_run:
     workflows: ['Sync OMS Guru Orders']
     types: [completed]
-  # GitHub's own timer as a backup (10:00 AM IST; it often fires late, the gate stops duplicates)
+  # GitHub's own timer as a backup (11:30 AM IST, Mon-Sat; it often fires late, the gate stops duplicates)
   schedule:
-    - cron: '30 4 * * *'
+    - cron: '0 6 * * 1-6'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -42,8 +42,10 @@ jobs:
           # Daily auto-run switch: off until the first test run is checked
           AUTO_ON=true
           if [ "$AUTO_ON" != "true" ]; then echo "Daily auto-run is switched off"; echo "go=false" >> $GITHUB_OUTPUT; exit 0; fi
-          if [ "$((10#$HM))" -lt 1000 ] || [ "$((10#$HM))" -gt 1800 ]; then
-            echo "Outside 10:00 AM - 6:00 PM IST ($HM)"; echo "go=false" >> $GITHUB_OUTPUT; exit 0; fi
+          if [ "$(TZ=Asia/Kolkata date +%u)" = "7" ]; then
+            echo "Sunday - no auto-run"; echo "go=false" >> $GITHUB_OUTPUT; exit 0; fi
+          if [ "$((10#$HM))" -lt 1130 ] || [ "$((10#$HM))" -gt 1800 ]; then
+            echo "Outside 11:30 AM - 6:00 PM IST ($HM)"; echo "go=false" >> $GITHUB_OUTPUT; exit 0; fi
           echo "go=check" >> $GITHUB_OUTPUT
       - name: Already started today?
         id: done

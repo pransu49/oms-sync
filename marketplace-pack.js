@@ -1,5 +1,5 @@
 // marketplace-pack.js — AIKM Meesho + Snapdeal robot (OMS Guru)
-// Every run (daily at 10 AM IST, see .github/workflows/marketplace-pack.yml):
+// Every run (daily at 11:30 AM IST, Mon-Sat, see .github/workflows/marketplace-pack.yml):
 //   1. Logs into OMS Guru and reads ALL "New" orders, keeps the Meesho and Snapdeal ones
 //   2. Packs them in OMS Guru ("Pack Orders"), confirming OMS's own box size / weight values
 //   3. Waits until OMS shows the shipping label for each order (that is the proof it was packed)
