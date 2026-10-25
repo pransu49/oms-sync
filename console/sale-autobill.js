@@ -53,6 +53,26 @@
   const nowIso = () => new Date().toISOString();
   function toast(msg, ms = 3500) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; (document.getElementById("toastRoot") || document.body).append(t); setTimeout(() => t.remove(), ms); }
 
+  /* In-page "Are you sure?" box. Chrome's own confirm() pop-up stops showing (and silently answers "No")
+     once "Don't allow this site to prompt again" is ticked, so buttons looked dead. */
+  function askYes(text, okLabel = "Yes") {
+    return new Promise(res => {
+      const o = document.createElement("div");
+      o.style.cssText = "position:fixed;inset:0;z-index:2147483600;background:rgba(15,30,53,.45);display:flex;align-items:center;justify-content:center;padding:16px";
+      o.innerHTML = `<div role="alertdialog" style="background:#fff;border-radius:14px;border-top:3px solid #C9A24B;max-width:520px;width:100%;box-shadow:0 24px 70px rgba(15,30,53,.3);font:14px/1.5 Inter,system-ui,sans-serif;color:#14213D">
+        <div style="padding:18px 20px 6px;font:600 16px Lexend,Inter,sans-serif">Please check</div>
+        <div style="padding:4px 20px 6px;white-space:pre-line;max-height:55vh;overflow:auto;color:#4A5468">${esc(text)}</div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;padding:14px 20px 18px">
+          <button type="button" data-n style="cursor:pointer;border:1px solid #E7E1D3;background:#fff;color:#4A5468;border-radius:9px;padding:9px 16px;font-weight:600">Cancel</button>
+          <button type="button" data-y style="cursor:pointer;border:0;background:#0F1E35;color:#fff;border-radius:9px;padding:9px 18px;font-weight:600">${esc(okLabel)}</button></div></div>`;
+      const done = v => { document.removeEventListener("keydown", key, true); o.remove(); res(v); };
+      const key = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); } else if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); done(true); } };
+      o.querySelector("[data-y]").onclick = () => done(true); o.querySelector("[data-n]").onclick = () => done(false);
+      o.onclick = e => { if (e.target === o) done(false); };
+      document.addEventListener("keydown", key, true); document.body.append(o); setTimeout(() => o.querySelector("[data-y]").focus(), 30);
+    });
+  }
+
   /* same product naming rules as the Purchase & Sales tool */
   function withSize(name, pack) {
     name = String(name || "").trim(); const pk = String(pack || "").trim();
@@ -634,7 +654,7 @@
       ${readyAll.length > 1 ? `<button class="btn" id="abAll">Approve all ${readyAll.length} ready</button>` : ""}
       <button class="btn primary" id="abOne" ${block || !d.items.length ? "disabled" : ""}>Approve &amp; save bill</button>`;
     $("#abOne").onclick = async () => {
-      if (d.unmatched.size && !confirm(`${d.unmatched.size} not-matched products will NOT be on this bill. Save anyway?`)) return;
+      if (d.unmatched.size && !(await askYes(`${d.unmatched.size} not-matched products will NOT be on this bill. Save anyway?`, "Save anyway"))) return;
       await runSave([d]);
     };
     wireAll(readyAll);
@@ -643,7 +663,7 @@
     const b = $("#abAll"); if (!b) return;
     b.onclick = async () => {
       const um = list.filter(x => x.unmatched.size).length;
-      if (!confirm(`Save ${list.length} bill${list.length > 1 ? "s" : ""} for ${fmtD(S.date)}?${um ? `\n${um} of them have not-matched products that will be left out.` : ""}`)) return;
+      if (!(await askYes(`Save ${list.length} bill${list.length > 1 ? "s" : ""} for ${fmtD(S.date)}?${um ? `\n${um} of them have not-matched products that will be left out.` : ""}`, "Save bills"))) return;
       await runSave(list);
     };
   }
@@ -821,7 +841,7 @@
       : `<div class="ab-load">No duplicate products found. 👍</div>`}`;
     const all = $("#dAllSure"); if (all) all.onclick = async () => {
       const sure = g.filter(x => x.sure);
-      if (!confirm(`Merge ${sure.length} "Same name" groups, each into its latest purchase?`)) return;
+      if (!(await askYes(`Merge ${sure.length} "Same name" groups, each into its latest purchase?`, `Merge ${sure.length} groups`))) return;
       all.disabled = true; all.textContent = "Merging…";
       try {
         const cur = ((await sb("GET", "docs?kind=eq.setting&id=eq.product_merge&select=data"))[0] || {}).data || {};
@@ -840,7 +860,7 @@
       };
       box.querySelector(".dMerge").onclick = async () => {
         const keep = grp.items[+box.querySelector("input[type=radio]:checked").value], rest = grp.items.filter(x => x !== keep);
-        if (!confirm(`Merge ${rest.length} product${rest.length > 1 ? "s" : ""} into:\n${keep.name} (${keep.barcode || "no barcode"})?\n\n${rest.map(x => "• " + x.name + " (" + (x.barcode || "no barcode") + ")").join("\n")}`)) return;
+        if (!(await askYes(`Merge ${rest.length} product${rest.length > 1 ? "s" : ""} into:\n${keep.name} (${keep.barcode || "no barcode"})?\n\n${rest.map(x => "• " + x.name + " (" + (x.barcode || "no barcode") + ")").join("\n")}`, "Merge"))) return;
         box.querySelectorAll("button").forEach(b => b.disabled = true); msg.textContent = "Merging…";
         try {
           const cur = ((await sb("GET", "docs?kind=eq.setting&id=eq.product_merge&select=data"))[0] || {}).data || {};
