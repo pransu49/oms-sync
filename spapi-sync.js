@@ -2134,116 +2134,62 @@ async function repairStockRule24(sellerId) {
   console.log(`Stock repair (24 Oct): ${fixed} put back in stock, ${skipped} left alone (already in stock / no LOTS-GN stock), ${failed} failed, ${Math.max(0, hit.length - 150)} left for next run.`);
 }
 
+// OWNER RULE (25 Oct 2026): "Inventory is managed by OMS Guru. The robot only marks out of stock the products that
+// have NO stock in LOTS." So: a LOTS-linked self-ship listing whose LOTS-GN stock is 0 (or less) and still shows stock
+// on Amazon is set to 0. The robot NEVER puts stock back and never sets any other number - OMS Guru does that when
+// LOTS has stock again. Old "put back" memory from earlier rules is simply dropped (no stock pushes).
+// Safety: confirmed LOTS link only; FBA untouched; only on a fresh listings report; stops if the LOTS catalogue looks
+// incomplete or 60%+ of linked in-stock listings would go to 0 (broken LOTS upload); at most 100 per run.
+// STOCK_GUARD=off in the workflow switches it off.
+const OOS_RULE_ON = String(process.env.STOCK_GUARD || 'on').toLowerCase() !== 'off';
 async function runStockGuard(sellerId) {
-  if (!sellerId) { console.log('Stock guard skipped: SPAPI_SELLER_ID not set.'); return; }
-  if (!inventoryFresh) { console.log('Stock guard skipped: Amazon listings report not read this run.'); return; }
+  if (!OOS_RULE_ON) { console.log('Out-of-stock rule: off (STOCK_GUARD=off).'); return; }
+  if (!sellerId) { console.log('Out-of-stock rule skipped: SPAPI_SELLER_ID not set.'); return; }
+  if (!inventoryFresh) { console.log('Out-of-stock rule skipped: Amazon listings report not read this run.'); return; }
   const guardRef = db.collection('spapiStockGuard').doc(ACCOUNT_LABEL);
-  const guardDoc = await guardRef.get();
-  const guard = guardDoc.exists ? (guardDoc.data().items || {}) : {};
-  // Rule is off and nothing left to put back -> skip reading the LOTS catalogue (saves ~25 console reads per full sync)
-  if (!STOCK_GUARD_ENABLED && !Object.keys(guard).length) { console.log('Stock guard: off, nothing to undo.'); return; }
-
   const L = await loadLotsForGuard();
   const lotsCount = Object.keys(L.lotsByCode).length;
-  if (lotsCount < 500) { console.warn(`Stock guard STOPPED: LOTS catalogue has only ${lotsCount} products - looks incomplete.`); return; }
+  if (lotsCount < 500) { console.warn(`Out-of-stock rule STOPPED: LOTS catalogue has only ${lotsCount} products - looks incomplete.`); return; }
 
-  const toZero = [], toRestore = [], release = [];
+  const toZero = [];
+  let linkedInStock = 0;
   for (const item of Object.values(SNAP.inventory)) {
-    if (!item.sku || item.account !== ACCOUNT_LABEL || !reportSkus.has(item.sku)) continue; // only live listings
-    if ((item.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT') continue; // FBA - Amazon controls stock
-    const lots = confirmedLotsFor(item, L);
-    const g = guard[item.sku];
-    const lotsQty = lots ? parseFloat(lots.qty) : NaN;
-    const amzQty = parseInt(item.quantity, 10) || 0;
+    if (!item || !item.sku || item.account !== ACCOUNT_LABEL || !reportSkus.has(item.sku)) continue; // live listings only
+    if ((item.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT') continue;                            // FBA - Amazon controls stock
     const docId = `${ACCOUNT_LABEL}_${item.sku}`;
+    const lots = confirmedLotsFor(item, L), lotsQty = lots ? parseFloat(lots.qty) : NaN;
+    const amzQty = parseInt(item.quantity, 10) || 0;
     SNAP.inventory[docId].lotsQty = isNaN(lotsQty) ? null : lotsQty;
-    SNAP.inventory[docId].stockGuard = g ? { zeroed: true, prevQty: g.prevQty, since: g.since } : null;
-    if (isNaN(lotsQty)) { if (g) release.push(item.sku); continue; } // link removed / no LOTS stock - stop managing it
-    if (lotsQty < STOCK_GUARD_MIN) {
-      if (amzQty > 0) toZero.push({ item, lotsQty, amzQty, prevQty: g ? g.prevQty : amzQty, since: g ? g.since : Date.now() });
-    } else if (g) {
-      toRestore.push({ item, lotsQty, amzQty, prevQty: g.prevQty });
-    }
+    SNAP.inventory[docId].stockGuard = null;
+    if (isNaN(lotsQty) || amzQty <= 0) continue;
+    linkedInStock++;
+    if (lotsQty <= 0) toZero.push({ item, lotsQty, amzQty });
   }
-  release.forEach((sku) => { delete guard[sku]; });
-
-  if (!STOCK_GUARD_ENABLED) {
-    // Undo: put back the Amazon stock of listings this tool had set to 0, then stop managing them.
-    let undone = 0, undoFailed = 0;
-    for (const [sku, g] of Object.entries(guard)) {
-      const docId = `${ACCOUNT_LABEL}_${sku}`, item = SNAP.inventory[docId];
-      const amzQty = item ? (parseInt(item.quantity, 10) || 0) : 0;
-      try {
-        // 25 Oct 2026 fix: do not trust amzQty here - Amazon's listings report can still show the old stock minutes
-        // after the robot set it to 0 (that skipped all 100 put-backs on 24 Oct). Push the remembered stock back.
-        if (item && reportSkus.has(sku) && g.prevQty > 0 && amzQty < g.prevQty) {
-          await setAmazonQuantity(sellerId, sku, g.prevQty);
-          await db.collection('spapiInventory').doc(docId).set({ quantity: g.prevQty }, { merge: true });
-          snapPatch('inventory', docId, { quantity: g.prevQty, lastStockPush: { status: 'applied', at: Date.now(), qty: g.prevQty, reason: 'Stock rule switched off - previous Amazon stock put back' } });
-          undone++;
-        }
-        if (item) snapPatch('inventory', docId, { stockGuard: null });
-        delete guard[sku];
-      } catch (e) {
-        undoFailed++;
-        if (item) snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: g.prevQty, error: e.message || String(e) } });
-        console.warn(`Stock guard undo: could not put back ${sku} to ${g.prevQty}:`, e.message || e);
-      }
-      await new Promise((r) => setTimeout(r, 800));
-    }
-    await guardRef.set({ items: guard, disabled: true, updatedAt: Date.now() });
-    console.log(`Stock guard is OFF (OMS Guru owns Amazon stock): ${undone} listing(s) put back, ${undoFailed} failed, ${Object.keys(guard).length} still to put back.`);
+  if (toZero.length >= 20 && toZero.length > linkedInStock * 0.6) {
+    console.warn(`Out-of-stock rule STOPPED: ${toZero.length} of ${linkedInStock} LOTS-linked listings show 0 in LOTS - LOTS stock looks broken. Nothing changed.`);
+    await guardRef.set({ items: {}, blocked: { at: Date.now(), wouldZero: toZero.length, of: linkedInStock }, rule: 'lots_zero', updatedAt: Date.now() });
     return;
   }
-
-  // Circuit breaker: a broken LOTS upload (stock missing / all 0) must not switch off the whole shop
-  const linkedInStock = Object.values(SNAP.inventory).filter((it) => it && it.account === ACCOUNT_LABEL && reportSkus.has(it.sku)
-    && (it.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (parseInt(it.quantity, 10) || 0) > 0 && it.lotsQty != null).length;
-  if (toZero.length >= 20 && toZero.length > linkedInStock * STOCK_GUARD_BROKEN_SHARE) {
-    console.warn(`Stock guard STOPPED: ${toZero.length} of ${linkedInStock} LOTS-linked listings would go to 0 - the LOTS-GN stock looks broken. Nothing was changed.`);
-    await guardRef.set({ items: guard, blocked: { at: Date.now(), wouldZero: toZero.length, of: linkedInStock }, updatedAt: Date.now() });
-    return;
-  }
-  if (toZero.length > STOCK_GUARD_MAX_ZERO) console.log(`Stock guard: ${toZero.length} to set to 0 - doing ${STOCK_GUARD_MAX_ZERO} now, the rest next run.`);
-  toZero.splice(STOCK_GUARD_MAX_ZERO);
-
-  let zeroed = 0, restored = 0, failed = 0;
+  if (toZero.length > 100) console.log(`Out-of-stock rule: ${toZero.length} to mark - doing 100 now, the rest next run.`);
+  toZero.splice(100);
+  let zeroed = 0, failed = 0;
   for (const z of toZero) {
     const docId = `${ACCOUNT_LABEL}_${z.item.sku}`;
     try {
       await setAmazonQuantity(sellerId, z.item.sku, 0);
-      guard[z.item.sku] = { prevQty: z.prevQty, since: z.since, lotsQtyAtZero: z.lotsQty };
-      snapPatch('inventory', docId, { quantity: 0, stockGuard: { zeroed: true, prevQty: z.prevQty, since: z.since },
-        lastStockPush: { status: 'applied', at: Date.now(), qty: 0, reason: `LOTS stock ${z.lotsQty} is below ${STOCK_GUARD_MIN}` } });
+      snapPatch('inventory', docId, { quantity: 0, lastStockPush: { status: 'applied', at: Date.now(), qty: 0,
+        reason: `No stock in LOTS (${z.lotsQty}) - marked out of stock (Amazon had ${z.amzQty}). OMS Guru restocks it.` } });
       await db.collection('spapiInventory').doc(docId).set({ quantity: 0 }, { merge: true });
       zeroed++;
     } catch (e) {
       failed++;
       snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: 0, error: e.message || String(e) } });
-      console.warn(`Stock guard: could not set ${z.item.sku} to 0:`, e.message || e);
+      console.warn(`Out-of-stock rule: could not set ${z.item.sku} to 0:`, e.message || e);
     }
     await new Promise((r) => setTimeout(r, 800));
   }
-  for (const r2 of toRestore) {
-    const docId = `${ACCOUNT_LABEL}_${r2.item.sku}`;
-    try {
-      if (r2.amzQty === 0 && r2.prevQty > 0) {
-        await setAmazonQuantity(sellerId, r2.item.sku, r2.prevQty);
-        await db.collection('spapiInventory').doc(docId).set({ quantity: r2.prevQty }, { merge: true });
-        snapPatch('inventory', docId, { quantity: r2.prevQty, lastStockPush: { status: 'applied', at: Date.now(), qty: r2.prevQty, reason: `LOTS stock back to ${r2.lotsQty}` } });
-        restored++;
-      }
-      delete guard[r2.item.sku];
-      snapPatch('inventory', docId, { stockGuard: null });
-    } catch (e) {
-      failed++;
-      snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: r2.prevQty, error: e.message || String(e) } });
-      console.warn(`Stock guard: could not restore ${r2.item.sku} to ${r2.prevQty}:`, e.message || e);
-    }
-    await new Promise((r) => setTimeout(r, 800));
-  }
-  await guardRef.set({ items: guard, blocked: null, updatedAt: Date.now() });
-  console.log(`Stock guard: ${zeroed} set out of stock, ${restored} restored, ${failed} failed, ${Object.keys(guard).length} currently held at 0.`);
+  await guardRef.set({ items: {}, blocked: null, rule: 'lots_zero', updatedAt: Date.now() });
+  console.log(`Out-of-stock rule (LOTS stock 0 -> Amazon 0): ${zeroed} marked out of stock, ${failed} failed, ${linkedInStock} LOTS-linked in-stock listings checked.`);
 }
 
 // Listings deleted/replaced on Amazon disappear from the listings report. Drop them from the
@@ -2457,8 +2403,7 @@ async function run() {
     await syncCompetitivePricing(asinsFromInventory);
   } else console.log('Step 3: quick sync - competitor prices skipped (done in the full sync).');
 
-  console.log('Step 3a: stock guard (LOTS-GN stock below 12 -> out of stock on Amazon)...');
-  if (SYNC_MODE === 'full') await repairStockRule24(sellerId).catch((e) => console.warn('Stock repair skipped (sync continues):', e.message || e));
+  console.log('Step 3a: out-of-stock rule (LOTS stock 0 -> Amazon 0; OMS Guru owns all other stock)...');
   if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
 
   console.log('Step 3a1: relist robot ("Not selling" -> new SKU, old SKU deleted)...');
