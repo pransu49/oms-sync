@@ -30,6 +30,10 @@ const H = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   'Accept-Language': 'en-US,en;q=0.9',
 };
+// Safety: these OMS accounts are Amazon — never packed by this robot, whatever the channel check says
+const AMAZON_ACCOUNTS = new Set(['45608', '45611', '45614', '45616', '45619']);
+const NOT_MINE = /\b(amazon|flipkart|shopify|myntra|ajio|jiomart)\b/i;
+const AMAZON_ID = /^\d{3}-\d{7}-\d{7}$/;
 const WAREHOUSE = 22452;            // DEFAULT 310803 (own warehouse) — same as the Easy Ship robot
 const BATCH = 25;                   // orders per Pack request
 const CONC = 3;                     // parallel page reads
@@ -131,7 +135,7 @@ async function listNewOrders() {
       const cc = ($cc.attr('href') || '').split('/').pop();
       const ccName = clean($cc.text());
       const txt = clean($tr.text());
-      const chm = (ccName.match(CH_RX) || txt.match(CH_RX) || [])[1];
+      const chm = (ccName.match(CH_RX) || [])[1];   // account name only — row text can mention other channels
       rows.push({ vid, cc, ccName, channel: chm ? chm[0].toUpperCase() + chm.slice(1).toLowerCase() : '', sla: slaToIso(txt) });
     }
     if (trs.length < 300) break;
@@ -167,7 +171,9 @@ async function readOrder(vid) {
   const chKey = Object.keys(dd).find((k) => /channel/.test(k));
   const txt = clean($('body').text());
   return {
-    channelText: (chKey ? dd[chKey] + ' ' : '') + ((txt.match(CH_RX) || [])[1] || ''),
+    // ONLY the order's own Channel / Company fields — the page's menus mention every channel ("Meesho" etc.),
+    // which once made every Amazon account look like Meesho (26 Oct 2026: ~1,050 Amazon orders packed by mistake)
+    channelText: [chKey ? dd[chKey] : '', dd['company'] || ''].join(' ').trim(),
     ddKeys: Object.keys(dd),
     orderId: clean(dd['order'] || '').split(' ')[0] || vid,
     awb: ((dd['shipment tracker'] || '').match(/[A-Z0-9]{6,}/i) || [])[0] || '',
@@ -311,10 +317,12 @@ async function main() {
   ccs.forEach((cc, i) => {
     const d = probe[i] || {};
     const m = String(d.channelText || '').match(CH_RX);
-    ccChannel[cc] = m ? m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() : '';
+    const blocked = AMAZON_ACCOUNTS.has(String(cc)) || NOT_MINE.test(String(d.channelText || '')) || AMAZON_ID.test(String(d.orderId || ''));
+    ccChannel[cc] = m && !blocked ? m[1][0].toUpperCase() + m[1].slice(1).toLowerCase() : '';
+    console.log(`  account ${cc}: channel field "${String(d.channelText || '').slice(0, 60)}" -> ${ccChannel[cc] || 'skip'}${blocked ? ' (blocked: Amazon/other channel)' : ''}`);
     if (i === 0) console.log('  order page fields:', (d.ddKeys || []).join(', ').slice(0, 300));
   });
-  all.forEach((r) => { if (!r.channel) r.channel = ccChannel[r.cc] || ''; if (r.channel && !r.ccName) r.ccName = `${r.channel} ${r.cc}`; });
+  all.forEach((r) => { if (AMAZON_ACCOUNTS.has(String(r.cc))) r.channel = ''; else if (!r.channel) r.channel = ccChannel[r.cc] || ''; if (r.channel && !r.ccName) r.ccName = `${r.channel} ${r.cc}`; });
   const rows = all.filter((r) => r.channel);
   const byCh = {}; all.forEach((r) => { const k = `${r.cc}${ccChannel[r.cc] ? ' (' + ccChannel[r.cc] + ')' : ''}`; byCh[k] = (byCh[k] || 0) + 1; });
   console.log(`New orders in OMS: ${all.length} · ${CHANNELS.join('/')}: ${rows.length}`);
@@ -326,6 +334,10 @@ async function main() {
     const d = details[i] || {};
     if (d.error) { check.push({ ...r, reason: 'Could not open order page: ' + d.error }); return; }
     const o = { ...r, ...d, sla: d.sla || r.sla, account: r.ccName || r.channel };
+    // per-order double check: the order's own channel field must say Meesho/Snapdeal, and must not be Amazon etc.
+    if (!CH_RX.test(String(d.channelText || '')) || NOT_MINE.test(String(d.channelText || '')) || AMAZON_ID.test(String(o.orderId || ''))) {
+      check.push({ ...o, reason: 'Not a ' + CHANNELS.join('/') + ' order (channel: ' + (String(d.channelText || '').slice(0, 40) || 'unknown') + ') — not packed' }); return;
+    }
     if (o.labelId) { check.push({ ...o, reason: 'Already has a label but is still in New' }); return; }
     ready.push(o);
   });
