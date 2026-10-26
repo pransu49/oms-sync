@@ -100,7 +100,7 @@
       const h = pop.querySelector(`[data-i="${hi}"]`); h && h.scrollIntoView({ block: "nearest" });
     };
     const hide = () => { pop.style.display = "none"; cur = null; };
-    const pick = i => { const x = hits[i]; if (!x || !cur) return; cur.value = x.p.name; const inp = cur; hide(); const s2 = inp.closest("tr").querySelector(".abMult"); s2 && s2.focus(); };
+    const pick = i => { const x = hits[i]; if (!x || !cur) return; cur.value = x.p.name; const inp = cur; hide(); inp.dispatchEvent(new Event("change")); const s2 = inp.closest("tr").querySelector(".abMult"); s2 && s2.focus(); };
     pop.onmousedown = e => { const o = e.target.closest("[data-i]"); if (o) { e.preventDefault(); pick(+o.dataset.i); } };
     box.querySelectorAll(".abPick").forEach(inp => {
       inp.onfocus = () => { cur = inp; hi = 0; show(); };
@@ -213,7 +213,8 @@
     const done = {}; by("autobill_done").forEach(r => { done[r.id] = r.data; });
     const customers = by("customer").map(r => r.data).filter(Boolean);
     const abSales = {}, otherSales = [];
-    (await sbAll(`kind=eq.sale&select=kind,id,data`)).forEach(r => { if (!r.data) return; if (r.data.source === "autobill") abSales[r.id] = r.data; else otherSales.push(r.data); });
+    let lastInv = "";
+    (await sbAll(`kind=eq.sale&select=kind,id,data`)).forEach(r => { if (!r.data) return; if (r.data.status !== "Cancelled" && (r.data.invoiceDate || "") > lastInv) lastInv = r.data.invoiceDate; if (r.data.source === "autobill") abSales[r.id] = r.data; else otherSales.push(r.data); });
 
     /* product index from purchase bills (latest purchase wins) */
     const mergeTo = k => { const m = merge.map || {}; for (let i = 0; i < 6 && m[k] && m[k] !== k; i++) k = m[k]; return k; };
@@ -268,7 +269,7 @@
     by("stock_adj").forEach(r => { const a = r.data || {}; if (!(op && op.date && (a.date || "") < op.date)) ev(a.date, mergeTo(a.key), num(a.qty)); });
     stockEv.sort((a, b) => a.date.localeCompare(b.date));
     PLAN = null;
-    D = { stockEv, abSales, orders, asinMap, mm, lots, settings, merge, prods, byCode, byBc, byName, userMap, done, customers, loadedAt: Date.now() };
+    D = { lastInv, stockEv, abSales, orders, asinMap, mm, lots, settings, merge, prods, byCode, byBc, byName, userMap, done, customers, loadedAt: Date.now() };
     return D;
   }
 
@@ -292,11 +293,21 @@
     return { key: lp.barcode ? "bc:" + lp.barcode : normName(lp.name), name: lp.name, hsn: String(lp.hsn || ""), gst: g, mrp: num(lp.mrp), barcode: String(lp.barcode || ""), cost: num(last) / (1 + g / 100), date: "", sup: "LOTS price list", noBill: true };
   }
   const packMult = r => { const o = num(r.orderPackQty) || 1, v = num(r.vendorPackQty) || 1, m = o / v; return m > 0 && m <= 24 && Math.abs(m - Math.round(m)) < 0.01 ? Math.round(m) : 1; };
+  /* a saved pick keeps working after its product is merged into another name */
+  const mergedKey = k => { const m = (D.merge && D.merge.map) || {}; for (let i = 0; i < 20 && k && m[k] && m[k] !== k; i++) k = m[k]; return k; };
+  /* pack sizes: "Pack of 5", "5 x 10g", "20 PCS", "x20", "20N" */
+  function packOf(t) {
+    const s = String(t || ""); let r;
+    if ((r = /pack\s*of\s*(\d{1,3})|set\s*of\s*(\d{1,3})|combo\s*of\s*(\d{1,3})/i.exec(s))) return +(r[1] || r[2] || r[3]);
+    if ((r = /\b(\d{1,3})\s*(?:pcs?|pieces|units|n|u|sachets?|nos)\b/i.exec(s))) return +r[1];
+    if ((r = /(?:^|\s)(\d{1,2})\s*x\s*\d/i.exec(s)) || (r = /\bx\s*(\d{1,3})\b/i.exec(s))) return +r[1];
+    return 1;
+  }
   function fromRecord(r, via) {
     if (!r) return null;
     if (r.ignore) return [];
-    if (r.vendor && r.vendor.key && D.prods.get(r.vendor.key)) return [{ p: D.prods.get(r.vendor.key), units: num(r.vendor.qty) || 1, via }];
-    if (r.prodKey && D.prods.get(r.prodKey)) return [{ p: D.prods.get(r.prodKey), units: num(r.mult) || 1, via }];
+    if (r.vendor && r.vendor.key && D.prods.get(mergedKey(r.vendor.key))) return [{ p: D.prods.get(mergedKey(r.vendor.key)), units: num(r.vendor.qty) || 1, via }];
+    if (r.prodKey && D.prods.get(mergedKey(r.prodKey))) return [{ p: D.prods.get(mergedKey(r.prodKey)), units: num(r.mult) > 0 ? num(r.mult) : 1, via }];
     let parts = Array.isArray(r.parts) && r.parts.length ? r.parts : String(r.code || "").split(",").map(c => c.trim()).filter(Boolean).map(c => ({ code: c, qty: 1, orderPackQty: r.orderPackQty, vendorPackQty: r.vendorPackQty }));
     if (!parts.length) {
       const k = D.byName.get(normName(r.name)); return k ? [{ p: D.prods.get(k), units: packMult(r), via }] : null;
@@ -368,7 +379,8 @@
         u.qty += q; x.unmatched.set(k, u); continue;
       }
       for (const { p, units, via } of m) {
-        const L = x.lines.get(p.key) || { key: p.key, p, qty: 0, via, src: new Map() };
+        const L = x.lines.get(p.key) || { key: p.key, p, qty: 0, via, src: new Map(), ids: new Map() };
+        L.ids.set((o.asin || "") + "|" + (o.sku || ""), { asin: o.asin || "", sku: o.sku || "", name: o.productName || o.sku, units });
         L.qty = Math.round((L.qty + q * units) * 1000) / 1000;
         const sk = String(o.productName || o.sku).slice(0, 70), sv = L.src.get(sk) || { q: 0, u: units }; sv.q += q; L.src.set(sk, sv);
         x.lines.set(p.key, L);
@@ -385,11 +397,12 @@
       const upTo = ahead(day); while (evi < D.stockEv.length && D.stockEv[evi].date <= upTo) { const e = D.stockEv[evi++]; stock.set(e.key, st(e.key) + e.q); }
       for (const co of COMPANIES) {
         const c = ship[co.id] || {}, queue = queues[co.id], sd = c[day];
-        if (sd) for (const L of sd.lines.values()) queue.push({ day, key: L.key, p: L.p, qty: L.qty, via: L.via, src: L.src });
+        if (sd) for (const L of sd.lines.values()) queue.push({ day, key: L.key, p: L.p, qty: L.qty, via: L.via, src: L.src, ids: L.ids });
         const id = day + "__" + co.gstin, done = D.done[id];
         const d = { co, id, date: day, done: done || null, orders: sd ? sd.orders : new Set(), unmatched: sd ? sd.unmatched : new Map(), lines: new Map(), from: "", to: "" };
         const take = (e, qty) => {
-          const L = d.lines.get(e.key) || { key: e.key, p: e.p, qty: 0, via: e.via, src: new Map(), days: new Set() };
+          const L = d.lines.get(e.key) || { key: e.key, p: e.p, qty: 0, via: e.via, src: new Map(), days: new Set(), ids: new Map() };
+          if (e.ids) for (const [k, v] of e.ids) L.ids.set(k, v);
           L.qty = Math.round((L.qty + qty) * 1000) / 1000; L.days.add(e.day);
           for (const [k, v] of e.src) { const sv = L.src.get(k) || { q: 0, u: v.u }; sv.q += v.q; L.src.set(k, sv); }
           d.lines.set(e.key, L);
@@ -405,6 +418,8 @@
             for (const e of queue) { if (left <= 0) break; if (e.key !== it.key || e.qty <= 0) continue; const t = Math.min(e.qty, left); take(e, t); left = Math.round((left - t) * 1000) / 1000; }
             if (left > 0) stock.set(it.key, st(it.key) - left);
           }
+        } else if (day < D.lastInv) {
+          /* an invoice with a later date already exists: no new bill on this older date (number order), goods move forward */
         } else {
           let gross = 0;
           for (const e of queue) {
@@ -514,9 +529,45 @@
     D.abSales[inv.id] = inv; PLAN = null;
     return inv;
   }
+  /* Change the purchased product and/or pack split for products already on a bill — saved for every future bill */
+  function changeMatch(item, prodOpts) {
+    const ids = [...((item.L && item.L.ids) || new Map()).values()];
+    if (!ids.length) return toast("This line has no Amazon/marketplace ID to save against.");
+    const o = document.createElement("div");
+    o.style.cssText = "position:fixed;inset:0;z-index:2147483400;background:rgba(15,30,53,.45);display:flex;align-items:center;justify-content:center;padding:16px";
+    const cur = item.p.name, bp0 = packOf(cur);
+    o.innerHTML = `<div style="background:#fff;border-radius:16px;border-top:3px solid #C9A24B;max-width:900px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(15,30,53,.3);font:14px/1.5 Inter,system-ui,sans-serif;color:#14213D">
+      <div style="padding:18px 22px 6px"><div style="font:600 10.5px Lexend,sans-serif;letter-spacing:.1em;text-transform:uppercase;color:#B08A36">Change match · saved for future bills</div><div style="font:600 17px Lexend,Inter,sans-serif;margin-top:4px">${esc(cur)}</div>
+      <div style="font-size:12.5px;color:#4A5468;margin-top:6px">Example: LOTS sells a <b>pack of 20</b>, you sell a <b>pack of 5</b> → Sold pack 5 ÷ Bought pack 20 = each sale uses ¼ of the purchased pack.</div></div>
+      <div class="ab-um" style="overflow:auto;padding:6px 22px"><table class="ab-t"><thead><tr><th>Sold as</th><th>Purchased product</th><th>Sold pack ÷ Bought pack</th></tr></thead><tbody>
+      ${ids.map((x, i) => `<tr data-c="${i}"><td><span class="pn">${esc(x.name)}</span><div class="sub">${esc([x.asin, x.sku].filter(Boolean).join(" · "))}</div></td>
+        <td><input class="abPick" autocomplete="off" value="${esc(cur)}" data-sold="${esc(x.name)}"></td>
+        <td style="white-space:nowrap"><input class="abSp" type="number" min="1" step="1" value="${Math.max(1, Math.round((x.units || 1) * bp0)) || packOf(x.name)}" style="width:56px"> ÷ <input class="abBp" type="number" min="1" step="1" value="${bp0}" style="width:56px"><div class="sub abPk"></div></td></tr>`).join("")}
+      </tbody></table></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;padding:12px 22px 18px"><button type="button" data-n style="cursor:pointer;border:1px solid #E7E1D3;background:#fff;color:#4A5468;border-radius:9px;padding:9px 16px;font-weight:600">Cancel</button><button type="button" data-y style="cursor:pointer;border:0;background:#0F1E35;color:#fff;border-radius:9px;padding:9px 18px;font-weight:600">Save for future bills</button></div></div>`;
+    document.body.append(o);
+    const close = () => o.remove();
+    o.querySelector("[data-n]").onclick = close; o.onclick = e => { if (e.target === o) close(); };
+    const txt = tr => { const u = Math.max(1, num(tr.querySelector(".abSp").value)) / Math.max(1, num(tr.querySelector(".abBp").value)); tr.querySelector(".abPk").textContent = u === 1 ? "1 sale = 1 purchased unit" : u < 1 ? `1 purchased unit = ${+(1 / u).toFixed(2)} sales` : `1 sale = ${+u.toFixed(2)} purchased units`; };
+    o.querySelectorAll("tr[data-c]").forEach(tr => { txt(tr); tr.querySelectorAll(".abSp,.abBp").forEach(x => x.oninput = () => txt(tr));
+      tr.querySelector(".abPick").addEventListener("change", () => { const p = prodOpts.find(x => x.name === tr.querySelector(".abPick").value.trim()); if (p) { tr.querySelector(".abBp").value = packOf(p.name); txt(tr); } }); });
+    abSearch(o, prodOpts);
+    o.querySelector("[data-y]").onclick = async () => {
+      const todo = [];
+      for (const tr of o.querySelectorAll("tr[data-c]")) {
+        const x = ids[+tr.dataset.c], p = prodOpts.find(y => y.name === tr.querySelector(".abPick").value.trim());
+        if (!p) return toast("Pick a product from the list for: " + x.name);
+        todo.push([x, p.key, num(tr.querySelector(".abSp").value) / Math.max(1, num(tr.querySelector(".abBp").value))]);
+      }
+      o.querySelector("[data-y]").disabled = true;
+      try { for (const [x, k, m] of todo) await rememberPick(x, k, m); close(); toast("Saved — used on this and every future bill"); draw(); }
+      catch (e) { o.querySelector("[data-y]").disabled = false; toast("Not saved: " + e.message, 5000); }
+    };
+  }
   async function rememberPick(u, prodKey, mult) {
     const rows = [];
-    const data = prodKey === "__skip" ? { ignore: true, name: u.name } : { prodKey, mult: Math.max(1, num(mult) || 1), name: u.name };
+    const m = Math.round((num(mult) > 0 ? num(mult) : 1) * 10000) / 10000;
+    const data = prodKey === "__skip" ? { ignore: true, name: u.name } : { prodKey, mult: m, name: u.name, savedAt: nowIso() };
     if (u.asin) rows.push({ kind: "autobill_map", id: "asin:" + u.asin, data });
     if (u.sku) rows.push({ kind: "autobill_map", id: "sku:" + normKey(u.sku), data });
     await sbPut(rows);
@@ -657,8 +708,8 @@
     const prodOpts = [...D.prods.values()].sort((a, b) => a.name.localeCompare(b.name));
     box.innerHTML = `
       ${d.unmatched.size ? `<div class="ab-sec"><h4>Not matched — pick the purchased product once (remembered)</h4></div>
-      <div class="tablebox ab-um"><table class="ab-t"><thead><tr><th>Sold as</th><th class="r">Qty</th><th>Purchased product</th><th>Units per sale</th><th></th></tr></thead><tbody>
-      ${[...d.unmatched.values()].map((u, i) => `<tr data-i="${i}"><td><span class="pn">${esc(u.name)}</span><div class="sub">${esc([u.asin, u.sku].filter(Boolean).join(" · "))}</div></td><td class="r num">${u.qty}</td><td><input class="abPick" autocomplete="off" placeholder="Type product name" data-sold="${esc(u.name)}"></td><td><input class="abMult" type="number" min="1" step="1" value="1" style="width:64px"></td><td style="white-space:nowrap"><button class="btn small primary abSave">Save</button> <button class="btn small abSkip" title="Not billed (gift, freebie, own stock)">Skip</button></td></tr>`).join("")}
+      <div class="tablebox ab-um"><table class="ab-t"><thead><tr><th>Sold as</th><th class="r">Qty</th><th>Purchased product</th><th title="Pieces in one sale ÷ pieces in one purchased unit">Sold pack ÷ Bought pack</th><th></th></tr></thead><tbody>
+      ${[...d.unmatched.values()].map((u, i) => `<tr data-i="${i}"><td><span class="pn">${esc(u.name)}</span><div class="sub">${esc([u.asin, u.sku].filter(Boolean).join(" · "))}</div></td><td class="r num">${u.qty}</td><td><input class="abPick" autocomplete="off" placeholder="Type product name" data-sold="${esc(u.name)}"></td><td style="white-space:nowrap"><input class="abSp" type="number" min="1" step="1" value="${packOf(u.name)}" style="width:56px" title="Pieces in ONE sale (Amazon pack)"> ÷ <input class="abBp" type="number" min="1" step="1" value="1" style="width:56px" title="Pieces in ONE purchased unit (LOTS / vendor pack)"><div class="sub abPk"></div></td><td style="white-space:nowrap"><button class="btn small primary abSave">Save</button> <button class="btn small abSkip" title="Not billed (gift, freebie, own stock)">Skip</button></td></tr>`).join("")}
       </tbody></table></div>` : ""}
       ${d.blockedBy ? `<div class="banner">Preview only — approve every company's bill of ${dayName(d.blockedBy)} ${fmtD(d.blockedBy)} first (one invoice number series). Bills go in date order so the ₹49,999 split stays correct.</div>` : ""}
       ${d.total > 50000 ? `<div class="banner bad">Over ₹50,000 — make an e-way bill for this invoice on ewaybillgst.gov.in before the goods move.</div>` : ""}
@@ -669,7 +720,7 @@
         <div class="ab-sum"><span>Cost <b>${inr(d.cost)}</b></span><span>Taxable <b>${inr(d.taxable)}</b></span><span>GST <b>${inr(d.gst)}</b></span><span>Profit <b>${inr(d.profit)}</b> (${d.avgPct.toFixed(1)}%)</span></div></div>
       <div class="tablebox"><table class="ab-t"><thead><tr><th>Product</th><th class="hm">HSN</th><th class="r">Qty</th><th class="r hm">Cost/unit</th><th class="r">Rate (ex-GST)</th><th class="r">Profit %</th><th class="r hm">MRP</th><th class="r hm">GST</th><th class="r">Amount</th></tr></thead><tbody>
       ${d.items.map((i, n) => `<tr data-n="${n}" class="${i.overMrp || i.hsnBad ? "bad" : i.pct < MIN_PCT - 0.05 ? "warn" : ""}">
-        <td><span class="pn">${esc(i.p.name)}</span><div class="sub">${esc(i.p.noBill ? "No purchase bill yet — LOTS list price" : i.p.sup + (i.p.date ? " · " + fmtD(i.p.date) : ""))} · ${esc(i.L.via)}</div><div class="sub" title="${esc([...i.L.src].map(([k, v]) => v.q + " × " + k + (v.u !== 1 ? " (" + (+v.u.toFixed(3)) + " each)" : "")).join("\n"))}">Sold: ${esc([...i.L.src].slice(0, 2).map(([k, v]) => v.q + " × " + k + (v.u !== 1 ? " (×" + (+v.u.toFixed(3)) + ")" : "")).join(" · "))}${i.L.src.size > 2 ? " · +" + (i.L.src.size - 2) + " more" : ""}</div></td>
+        <td><span class="pn">${esc(i.p.name)}</span><div class="sub">${esc(i.p.noBill ? "No purchase bill yet — LOTS list price" : i.p.sup + (i.p.date ? " · " + fmtD(i.p.date) : ""))} · ${esc(i.L.via)} · <a href="#" class="abChg" data-n="${n}" style="color:var(--gold-2,#B08A36);font-weight:600">Change match / pack</a></div><div class="sub" title="${esc([...i.L.src].map(([k, v]) => v.q + " × " + k + (v.u !== 1 ? " (" + (+v.u.toFixed(3)) + " each)" : "")).join("\n"))}">Sold: ${esc([...i.L.src].slice(0, 2).map(([k, v]) => v.q + " × " + k + (v.u !== 1 ? " (×" + (+v.u.toFixed(3)) + ")" : "")).join(" · "))}${i.L.src.size > 2 ? " · +" + (i.L.src.size - 2) + " more" : ""}</div></td>
         <td class="hm"><input class="h${i.hsnBad ? " bad" : ""}" data-k="hsn" value="${esc(i.hsn)}" inputmode="numeric" placeholder="HSN"></td>
         <td class="r num">${+i.qty.toFixed(3)}</td>
         <td class="r num hm">${inr(i.p.cost, 2)}</td>
@@ -680,6 +731,7 @@
         <td class="r num">${inr(i.qty * i.rate * (1 + i.p.gst / 100), 2)}</td></tr>`).join("")}
       </tbody></table></div>
       <p class="note" style="margin:0">Rate = purchase cost + ${MAX_PCT}%. Where that crosses MRP it is lowered to MRP (yellow = below ${MIN_PCT}%, red = fix before saving). A rate or HSN you change applies to that product on every bill. Quantities are set by the ₹49,999 split.</p>`;
+    box.querySelectorAll(".abChg").forEach(a => a.onclick = e => { e.preventDefault(); changeMatch(d.items[+a.dataset.n], prodOpts); });
     // edits
     box.querySelectorAll("tr[data-n] input").forEach(inp => inp.onchange = () => {
       const i = d.items[+inp.closest("tr").dataset.n], k = inp.dataset.k;
@@ -691,11 +743,16 @@
     abSearch(box, prodOpts);
     // unmatched picks
     const um = [...d.unmatched.values()];
+    const pkTxt = tr => { const sp = Math.max(1, num(tr.querySelector(".abSp").value)), bp = Math.max(1, num(tr.querySelector(".abBp").value)), u = sp / bp;
+      tr.querySelector(".abPk").textContent = u === 1 ? "1 sale = 1 purchased unit" : u < 1 ? `1 purchased unit = ${+(1 / u).toFixed(2)} sales` : `1 sale = ${+u.toFixed(2)} purchased units`; };
+    box.querySelectorAll("tr[data-i]").forEach(tr => { if (!tr.querySelector(".abSp")) return; pkTxt(tr);
+      tr.querySelectorAll(".abSp,.abBp").forEach(x => x.oninput = () => pkTxt(tr));
+      tr.querySelector(".abPick").addEventListener("change", () => { const p = prodOpts.find(x => x.name === tr.querySelector(".abPick").value.trim()); if (p) { tr.querySelector(".abBp").value = packOf(p.name); pkTxt(tr); } }); });
     box.querySelectorAll(".abSave").forEach(b => b.onclick = async () => {
       const tr = b.closest("tr"), u = um[+tr.dataset.i], nm = tr.querySelector(".abPick").value.trim();
       const p = prodOpts.find(x => x.name === nm); if (!p) return toast("Pick a product from the list.");
       b.disabled = true;
-      try { await rememberPick(u, p.key, tr.querySelector(".abMult").value); toast("Matched — remembered for next time"); draw(); } catch (e) { b.disabled = false; toast("Not saved: " + e.message, 5000); }
+      try { await rememberPick(u, p.key, num(tr.querySelector(".abSp").value) / Math.max(1, num(tr.querySelector(".abBp").value))); toast("Matched — remembered for next time"); draw(); } catch (e) { b.disabled = false; toast("Not saved: " + e.message, 5000); }
     });
     box.querySelectorAll(".abSkip").forEach(b => b.onclick = async () => {
       const u = um[+b.closest("tr").dataset.i]; b.disabled = true;
