@@ -134,7 +134,9 @@ function lotsFor(asin, L) {
       if (!t || now - t > 864e5 || !(x.newPrice > 0)) return;
       const i = bySku[x.sku]; if (!i || Math.abs((i.price || 0) - x.newPrice) > 0.5) return;      // price changed since - not the robot's any more
       const l = lotsFor(i.asin, L);
-      if (l && l.cost && x.newPrice < l.cost - 0.5) below.push({ i, x, l });
+      // the robot's profit counts the shipping charge the buyer pays, so compare price + shipping with cost (not price alone)
+      const own = ((S.pricing[i.asin] || {}).offers || []).find((o) => Math.abs((Number(o.price) || 0) - x.newPrice) <= 1), ship = own ? Number(own.shipping) || 0 : 0;
+      if (l && l.cost && x.newPrice + ship < l.cost - 0.5) below.push({ i, x, l });
       if (x.oldPrice > 0 && x.newPrice < x.oldPrice * 0.75) bigCut.push({ i, x });
     });
     below.forEach((y) => console.log(`   BELOW COST ${acct} ${y.i.sku} ${String(y.i.name || '').slice(0, 40)}: ${y.x.oldPrice} -> ${y.x.newPrice}, LOTS cost ${y.l.cost} (${y.l.name})`));
