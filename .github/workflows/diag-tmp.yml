@@ -14,3 +14,5 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
+          OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
