@@ -89,6 +89,9 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
           '<label class="rf-meta" for="rfReason" style="display:block;margin-bottom:6px;">Reason for refund</label>' +
           '<select id="rfReason" style="width:100%;min-height:36px;margin-bottom:12px;">' + REASONS.map(function (r) { return '<option value="' + r[0] + '">' + r[1] + "</option>"; }).join("") + "</select>" +
           '<div id="rfFiles"><div class="rf-empty">Select orders first.</div></div></div>' +
+        '<div class="panel"><h2>Amazon refund files <span class="rf-meta">until Finance access</span></h2>' +
+          '<div class="rf-meta" style="margin-bottom:8px">Seller Central → Payments → <b>Transaction View</b> → type <b>Refund</b> → Download CSV. Upload per account; each file stays until that account\'s next upload. Orders in it count as <b>already refunded</b>.</div>' +
+          '<div id="rfAmzList"></div><input type="file" id="rfAmzFile" accept=".csv,.txt" style="display:none"></div>' +
         '<div class="panel"><h2>Refund robot <span class="rf-meta" id="rfRobotState"></span></h2><div id="rfRobot"><div class="rf-empty">No robot refunds yet.</div></div></div>' +
         '<div class="panel"><h2>How to upload</h2><div class="rf-rule">' +
           "<b>SASTA STORE &amp; Praso:</b> tick orders → check amounts → <b>Refund now</b>. The robot sends it to Amazon and shows Refunded / Failed below.<br><br><b>Other accounts:</b><br>" +
@@ -120,6 +123,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     $("rfReason").addEventListener("change", render);
     $("rfSyncBtn").addEventListener("click", syncNow);
     $("rfFile").addEventListener("change", uploadExport);
+    $("rfAmzFile").addEventListener("change", uploadAmzRefunds);
     ["rfDbFrom", "rfDbTo"].forEach(function (id) { $(id).addEventListener("change", function () { setDbf("range", $("rfDbFrom").value, $("rfDbTo").value); }); });
     p.addEventListener("click", function (e) {
       var c = e.target.closest("[data-rf-show]"); if (c) { showStatus(c.dataset.rfShow); return; }
@@ -130,6 +134,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
       var rv = e.target.closest("[data-rf-review]"); if (rv) { reviewReady(rv.dataset.rfReview, false); return; }
       var ap = e.target.closest("[data-rf-approve]"); if (ap) { reviewReady(ap.dataset.rfApprove, true); return; }
       var sk = e.target.closest("[data-rf-skip]"); if (sk) { skipOrder(sk.dataset.rfSkip); return; }
+      var au = e.target.closest("[data-rf-amzup]"); if (au) { amzAcc = au.dataset.rfAmzup; $("rfAmzFile").click(); return; }
     });
     p.addEventListener("change", function (e) {
       if (e.target.id === "rfAll") { var on = e.target.checked; sel.forEach(function (o) { o.off = !on || !dbOk(o) || !!refunded(o.i); }); render(); }
@@ -193,7 +198,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
         function timed(p, ms) { return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error("timeout")); }, ms); })]); }
         // the console's idle-pause can leave Firebase switched off -> switch it on and try again
         timed(ref.get(), 12000).catch(function () { try { db().enableNetwork(); } catch (e) {} return timed(ref.get(), 25000); })
-          .then(function (d) { var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true; return Promise.all([loadReady(), loadUpMeta()]); })
+          .then(function (d) { var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true; learn(store); return Promise.all([loadReady(), loadUpMeta(), loadAmzRef()]); })
           .catch(function () { toast("Could not read refund data — check internet, then click the tab again.", true); })
           .then(function () { loading = null; render(); res(); });
       }, 300);
@@ -202,7 +207,13 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
   }
   // Refund robot log (aikm_admin/refundLog) — listened to only while this tab is open
   var rlog = { entries: [] }, unsubLog = null;
-  function refunded(i) { return (rlog.entries || []).filter(function (e) { return e.i === i && e.status === "done" && !e.probe; })[0] || null; }
+  function refunded(i) {
+    var r = (rlog.entries || []).filter(function (e) { return e.i === i && e.status === "done" && !e.probe; })[0];
+    if (r) return r;
+    var x = amzRef[iToO[i]]; return x ? { at: x[0], amt: x[1], amz: 1 } : null;
+  }
+  var iToO = {};
+  function learn(list) { (list || []).forEach(function (o) { if (o && o.i) iToO[o.i] = o.o; }); }
   function listenLog() {
     if (unsubLog || !db()) return;
     unsubLog = db().collection("aikm_admin").doc("refundLog").onSnapshot(function (d) { rlog = d.exists ? d.data() : { entries: [] }; render(); }, function () {});
@@ -220,7 +231,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
   /* ---------- Robot: ready to refund (self-ship RTO started / received) ---------- */
   var ready = { items: [], at: null }, skipM = {}, dbIdx = null;
   function loadReady() {
-    var a = db().collection("aikm_admin").doc("refundProposals").get().then(function (d) { var x = d.exists ? d.data() : {}; ready = { items: x.items || [], at: x.at || null }; }).catch(function () {});
+    var a = db().collection("aikm_admin").doc("refundProposals").get().then(function (d) { var x = d.exists ? d.data() : {}; ready = { items: x.items || [], at: x.at || null }; learn(ready.items); }).catch(function () {});
     var b = mainDb() ? mainDb().collection("aikm_admin").doc("refundSkip").get().then(function (d) { skipM = (d.exists && d.data().m) || {}; }).catch(function () {}) : null;
     return Promise.all([a, b]);
   }
@@ -303,7 +314,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
 
   function indexBy(list) { var m = {}; list.forEach(function (o) { (m[o.o] = m[o.o] || []).push(o); }); return m; }
   function addSel(lines) {
-    var have = {}; sel.forEach(function (o) { have[o.i] = 1; });
+    var have = {}; sel.forEach(function (o) { have[o.i] = 1; }); learn(lines);
     lines.forEach(function (o) { if (o.i && !have[o.i]) { have[o.i] = 1; sel.push(Object.assign({}, o, { off: !o.nb || !!refunded(o.i) })); } }); // not refund pending / already refunded -> unticked
   }
 
@@ -343,8 +354,9 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     $("rfSyncLine").textContent = (loaded ? "Self-ship refund pending · NimbusPost · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship RTO · NimbusPost · last 60 days") +
       (upMeta ? " · OMS export saved: " + upMeta.name + " (" + Number(upMeta.lines || 0).toLocaleString("en-IN") + " lines, " + when(upMeta.at) + ")" : "");
     var pend = store.filter(function (o) { return !refunded(o.i); });
+    var amzDone = store.filter(function (o) { var r = refunded(o.i); return r && r.amz; }).length;
     $("rfKpiAvail").textContent = loaded ? pend.length : "–";
-    $("rfKpiAvailSub").textContent = loaded ? pend.filter(function (o) { return /^rto/.test(o.nb); }).length + " returned · " + pend.filter(function (o) { return o.nb === "late"; }).length + " pickup missed · " + pend.filter(function (o) { return o.nb === "lost"; }).length + " lost" : "loading…";
+    $("rfKpiAvailSub").textContent = loaded ? pend.filter(function (o) { return /^rto/.test(o.nb); }).length + " returned · " + pend.filter(function (o) { return o.nb === "late"; }).length + " pickup missed · " + pend.filter(function (o) { return o.nb === "lost"; }).length + " lost" + (amzDone ? " · " + amzDone + " already refunded (Amazon file)" : "") : "loading…";
 
     $("rfMiss").innerHTML = missing.length ? '<div class="rf-miss"><b>Not found (' + missing.length + "):</b> " + missing.map(esc).join(", ") +
       '<br><span style="opacity:.85">Not found in OMS' + (upMeta ? " or in the saved export (" + esc(upMeta.name) + ")" : "") + ' — older? Upload a newer OMS export (top right); it replaces the saved one.</span></div>' : "";
@@ -353,7 +365,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     var on = sel.filter(function (o) { return !o.off; }), vis = sel.filter(dbOk);
     $("rfCount").textContent = sel.length ? "· " + on.length + " of " + sel.length + " ticked" + (vis.length < sel.length ? " · showing " + vis.length + " by Deliver By" : "") : "";
     $("rfDbNote").textContent = dbf.mode !== "all" && sel.length ? vis.length + " line(s) match" + (sel.some(function (o) { return !o.db; }) ? " · " + sel.filter(function (o) { return !o.db; }).length + " without a Deliver By date hidden" : "") : "";
-    renderReady();
+    renderReady(); renderAmz();
     if (sel.length && !vis.length) { $("rfTable").innerHTML = '<div class="rf-empty">No lines with that Deliver By date. Pick another date or All.</div>'; }
     else if (!sel.length) { $("rfTable").innerHTML = '<div class="rf-empty">Paste order IDs above, or pick Returned / Pickup missed / Lost / All.</div>'; }
     else {
@@ -363,12 +375,12 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
         var rf = refunded(o.i);
         if (rf) o.off = true;
         var tag = rf ? "rf-tag green" : o.nb ? "rf-tag red" : "rf-tag";
-        var nsTxt = rf ? "Refunded ✓ " + new Date(rf.at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) : o.nb ? "Refund pending" : "Not refund pending";
+        var nsTxt = rf ? "Refunded ✓ " + new Date(rf.at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) + (rf.amz ? " · Amazon file" : "") : o.nb ? "Refund pending" : "Not refund pending";
         var why = /^rto/.test(o.nb || "") ? "Shipment returned · " + o.ns.replace(/^rto/i, "RTO")
           : o.nb === "late" ? "Not picked up · Deliver By " + dd(o.db) + " passed"
           : o.nb === "lost" ? (/damage/i.test(o.ns) ? "Damaged" : "Lost") + " in transit"
           : "Not RTO / lost / late in NimbusPost";
-        return "<tr" + (o.off ? ' style="opacity:.5"' : "") + "><td><input type='checkbox' data-rf-on='" + esc(o.i) + "'" + (o.off ? "" : " checked") + (rf ? " disabled title='Already refunded by the robot'" : "") + "></td>" +
+        return "<tr" + (o.off ? ' style="opacity:.5"' : "") + "><td><input type='checkbox' data-rf-on='" + esc(o.i) + "'" + (o.off ? "" : " checked") + (rf ? " disabled title='" + (rf.amz ? "Already refunded — found in the uploaded Amazon refund file" : "Already refunded by the robot") + "'" : "") + "></td>" +
           "<td class='cx-awb'>" + esc(o.o) + "<div class='rf-meta'>" + esc(o.i) + "</div></td><td>" + esc(o.a) + "</td>" +
           "<td style='white-space:nowrap'>" + (o.db ? "<span class='" + (o.db < today() ? "rf-db-late" : "") + "'>" + esc(new Date(o.db + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" })) + "</span>" + (o.db < today() ? "<div class='rf-meta'>passed</div>" : o.db === today() ? "<div class='rf-meta'>today</div>" : "") : "<span class='rf-meta'>—</span>") + "</td>" +
           "<td style='max-width:220px'><div style='white-space:nowrap;overflow:hidden;text-overflow:ellipsis' title='" + esc(o.n) + "'>" + esc(o.n) + "</div><div class='rf-meta'>Qty " + o.q + " · " + esc(o.ty) + "</div></td>" +
@@ -489,6 +501,83 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
       saveUpload(file.name, n);
     } catch (err) { toast("Could not read that file: " + err.message, true); }
   }
+  /* ---------- Amazon refund files (Seller Central → Payments → Transaction View → Refund, CSV) ----------
+     One doc in main Firebase: aikm_admin/refundUpload = { accts: { "<ACCOUNT>": { name, at, n, from, to, orders: { orderId: [date, amount] } } } }.
+     Each account's file replaces only that account's previous file. Read: 1 doc per tab open. */
+  var ACCTS = ["SASTA STORE", "PRASO ENTERPRISES", "E Commerce Munda", "Vishal E commerce", "AIKM PHARMA PRIVATE LIMITED"];
+  var amzDoc = {}, amzRef = {}, amzAcc = "";
+  function rebuildAmz() { amzRef = {}; Object.keys(amzDoc).forEach(function (a) { var m = (amzDoc[a] || {}).orders || {}; Object.keys(m).forEach(function (id) { amzRef[id] = m[id]; }); }); }
+  function loadAmzRef() {
+    if (!mainDb()) return Promise.resolve();
+    return mainDb().collection("aikm_admin").doc("refundUpload").get().then(function (d) { amzDoc = (d.exists && d.data().accts) || {}; rebuildAmz(); }).catch(function () {});
+  }
+  function renderAmz() {
+    if (!$("rfAmzList")) return;
+    var names = ACCTS.slice(); store.forEach(function (o) { if (o.a && names.indexOf(o.a) < 0) names.push(o.a); });
+    $("rfAmzList").innerHTML = names.map(function (a) {
+      var f = amzDoc[a], sub = f ? esc(f.name) + " · " + Number(f.n || 0).toLocaleString("en-IN") + " refunds · " + dmy(f.from) + " – " + dmy(f.to) + " · uploaded " + when(f.at) : "No file yet";
+      return '<div class="rf-acc"><div class="rf-acc-info"><div class="rf-acc-name">' + esc(a) + '</div><div class="rf-acc-sub">' + sub + "</div></div>" +
+        '<button type="button" class="' + (f ? "secondary" : "btn-gold") + '" data-rf-amzup="' + esc(a) + '"><i class="ti ti-upload"></i> ' + (f ? "Replace" : "Upload") + "</button></div>";
+    }).join("");
+  }
+  function dmy(x) { return x ? new Date(x + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—"; }
+  function csvRows(text) {
+    var out = [], row = [], cur = "", q = false;
+    for (var k = 0; k < text.length; k++) {
+      var ch = text[k];
+      if (q) { if (ch === '"') { if (text[k + 1] === '"') { cur += '"'; k++; } else q = false; } else cur += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === ",") { row.push(cur); cur = ""; }
+      else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[k + 1] === "\n") k++; row.push(cur); out.push(row); row = []; cur = ""; }
+      else cur += ch;
+    }
+    if (cur || row.length) { row.push(cur); out.push(row); }
+    return out.filter(function (r) { return r.some(function (c) { return String(c).trim(); }); });
+  }
+  async function uploadAmzRefunds(e) {
+    var file = e.target.files && e.target.files[0]; e.target.value = ""; if (!file) return;
+    var acc = amzAcc;
+    try {
+      var rows = csvRows((await file.text()).replace(/^\uFEFF/, ""));
+      var hi = rows.findIndex(function (r) { return r.some(function (c) { return /order id/i.test(c); }); });
+      if (hi < 0) throw new Error("no 'Order ID' column — download the CSV from Payments → Transaction View");
+      var H = rows[hi].map(function (c) { return c.trim().toLowerCase(); });
+      var col = function (re) { return H.findIndex(function (h) { return re.test(h); }); };
+      var cId = col(/^order id$/), cDate = col(/^date/), cType = col(/transaction type/), cProd = col(/product charges/), cOther = col(/^other$/), cTot = col(/^total/);
+      var orders = {}, n = 0, from = "", to = "";
+      rows.slice(hi + 1).forEach(function (r) {
+        var id = (String(r[cId] || "").match(/\d{3}-\d{7}-\d{7}/) || [])[0]; if (!id) return;
+        if (cType >= 0 && !/refund/i.test(r[cType] || "")) return;
+        var m = String(r[cDate] || "").match(/(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})/), d = m ? m[3] + "-" + ("0" + m[2]).slice(-2) + "-" + ("0" + m[1]).slice(-2) : "";
+        var amt = cProd >= 0 ? -(num(r[cProd]) + (cOther >= 0 ? num(r[cOther]) : 0)) : -num(r[cTot]);
+        var cur = orders[id]; orders[id] = [cur && cur[0] > d ? cur[0] : d, r2((cur ? cur[1] : 0) + amt)];
+        n++; if (d && (!from || d < from)) from = d; if (d && d > to) to = d;
+      });
+      var ids = Object.keys(orders);
+      if (!ids.length) throw new Error("no refund rows found in this file");
+      // which account do these orders belong to? (orders we know: 60-day list, ready list, pasted, saved export)
+      var hits = {}; ids.forEach(function (id) { var l = indexBy(store)[id] || extra[id]; if (l && l[0]) hits[l[0].a] = (hits[l[0].a] || 0) + 1; });
+      var best = Object.keys(hits).sort(function (a, b) { return hits[b] - hits[a]; })[0];
+      if (best && best !== acc && hits[best] > (hits[acc] || 0)) {
+        if (!confirm("This file looks like " + best + " (" + hits[best] + " of its orders match), not " + acc + ".\n\nOK = save it for " + best + "\nCancel = save it for " + acc + " anyway")) {} else acc = best;
+      }
+      if (!confirm("Save Amazon refund file for " + acc + "?\n\n" + file.name + "\n" + ids.length + " refunded order(s) · " + dmy(from) + " – " + dmy(to) + "\n\nIt replaces " + acc + "'s previous file and is shown on every device.")) return;
+      var data = { name: file.name, n: ids.length, from: from, to: to, at: new Date().toISOString(), orders: orders };
+      var size = JSON.stringify(Object.assign({}, amzDoc, (function () { var o = {}; o[acc] = data; return o; })())).length;
+      if (size > 900000) throw new Error("too many refunds to save (" + ids.length + ") — download a shorter date range");
+      var ref = mainDb().collection("aikm_admin").doc("refundUpload");
+      var snap = await ref.get();
+      if (snap.exists) {
+        if (firebase.firestore && firebase.firestore.FieldPath) await ref.update(new firebase.firestore.FieldPath("accts", acc), data);
+        else { var u = {}; u["accts." + acc] = data; await ref.update(u); }
+      }
+      else { var init = { accts: {} }; init.accts[acc] = data; await ref.set(init); }
+      amzDoc[acc] = data; rebuildAmz(); render();
+      var pendNow = store.filter(function (o) { return o.a === acc && !refunded(o.i); }).length;
+      toast(acc + ": " + ids.length + " refunded order(s) saved. Refund pending for " + acc + " is now " + pendNow + ".");
+    } catch (err) { toast("Could not read that file: " + err.message, true); }
+  }
+
   /* Uploaded OMS export is kept in the main Firebase until the next upload, so every device / person sees it.
      aikm_admin/omsUpload = { name, lines, parts, at }, parts in aikm_admin/omsUpload_0 … _N (≈700 KB each).
      Read: 1 doc when the tab opens; the parts only when a pasted order is not found elsewhere. */
