@@ -68,6 +68,8 @@ async function main() {
   try { Object.keys(((await omsDb.collection('aikm_admin').doc('refundChecks').get()).data() || {}).orders || {}).forEach((id) => doneOrder.add(id)); } catch (e) {}
   try { JSON.parse(((await omsDb.collection('aikm_admin').doc('rtoIndex').get()).data() || {}).rows || '[]').forEach((r) => { if (r.ref > 0) doneOrder.add(r.o); }); } catch (e) {}
   const skip = ((await db.collection('aikm_admin').doc('refundSkip').get()).data() || {}).m || {};
+  // Amazon refund files uploaded in the console (Payments → Transaction View → Refund), per account
+  try { Object.values(((await db.collection('aikm_admin').doc('refundUpload').get()).data() || {}).accts || {}).forEach((f) => Object.keys((f && f.orders) || {}).forEach((id) => doneOrder.add(id))); } catch (e) {}
   let dbIdx = {};
   try { (await db.collection('deliverByIndex').get()).forEach((d) => Object.assign(dbIdx, (d.data() || {}).orders || {})); } catch (e) {}
 

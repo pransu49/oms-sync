@@ -38,3 +38,6 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - Bulk Refund "🤖 Ready to refund" panel reads `aikm_admin/refundProposals` (OMS Firebase), built hourly 8 AM–10 PM by
   `refund-propose.js` (workflow `refund-propose.yml`). The robot only lines orders up + Telegram; money moves only when
   the owner presses Approve & refund (confirm box). "Don't refund" marks go to main Firebase `aikm_admin/refundSkip`.
+- Amazon refund files (Payments → Transaction View → Refund CSV), uploaded per account in Bulk Refund, live in ONE main-Firebase doc
+  `aikm_admin/refundUpload` { accts: { <ACCOUNT>: { name, n, from, to, at, orders: { orderId: [date, amount] } } } }.
+  Each upload replaces only that account. Console + `refund-propose.js` treat those orders as already refunded (stand-in until the Finance API role).
