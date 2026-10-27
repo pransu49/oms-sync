@@ -100,6 +100,11 @@ async function main() {
   const now = istNow();
   const fresh = [...new Set(items.map((o) => o.o))].filter((id) => !notified[id]);
   let sent = false;
+  if (!prev.at && !DRY) { // first run: remember what is already waiting, alert only for new RTOs from now on
+    [...new Set(items.map((o) => o.o))].forEach((id) => { notified[id] = now.date; });
+    console.log(`First run: ${Object.keys(notified).length} order(s) already waiting recorded — Telegram alerts start with the next new RTO.`);
+    fresh.length = 0;
+  }
   if (fresh.length && now.hour >= 8 && now.hour < 22) {
     const f = items.filter((o) => fresh.includes(o.o));
     const by = {}; f.forEach((o) => { const b = by[o.a] = by[o.a] || { n: new Set(), amt: 0 }; b.n.add(o.o); b.amt += o.amt; });
