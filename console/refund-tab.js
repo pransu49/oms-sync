@@ -56,7 +56,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     sub.innerHTML = '<span class="subtab-label">Amazon Bulk Refund</span>' +
       '<span class="rf-meta" id="rfSyncLine">Self-ship refund pending · NimbusPost · last 60 days</span>' +
       '<span style="flex:1"></span>' +
-      '<label class="subbtn" style="cursor:pointer;" title="Order older than 60 days? Upload an OMS Guru export (zip / csv / xlsx). Read here only, nothing is saved."><i class="ti ti-upload"></i> Upload OMS export<input type="file" id="rfFile" accept=".zip,.csv,.xlsx,.xls" style="display:none"></label>' +
+      '<label class="subbtn" style="cursor:pointer;" title="Order older than 60 days? Upload an OMS Guru export (zip / csv / xlsx). Saved for all devices until the next upload."><i class="ti ti-upload"></i> Upload OMS export<input type="file" id="rfFile" accept=".zip,.csv,.xlsx,.xls" style="display:none"></label>' +
       '<button type="button" class="subbtn" id="rfSyncBtn" title="Pull the latest 60 days from OMS Guru now (about 3–6 minutes)"><i class="ti ti-refresh"></i> Update now</button>';
     content.insertBefore(sub, content.firstChild);
 
@@ -193,7 +193,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
         function timed(p, ms) { return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error("timeout")); }, ms); })]); }
         // the console's idle-pause can leave Firebase switched off -> switch it on and try again
         timed(ref.get(), 12000).catch(function () { try { db().enableNetwork(); } catch (e) {} return timed(ref.get(), 25000); })
-          .then(function (d) { var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true; return loadReady(); })
+          .then(function (d) { var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true; return Promise.all([loadReady(), loadUpMeta()]); })
           .catch(function () { toast("Could not read refund data — check internet, then click the tab again.", true); })
           .then(function () { loading = null; render(); res(); });
       }, 300);
@@ -313,7 +313,9 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     $("rfFindBtn").disabled = true; chip("");
     try {
       await load(false);
-      var m = indexBy(store), ext = extra, left = [];
+      var m = indexBy(store);
+      if (ids.some(function (id) { return !m[id] && !extra[id]; })) await loadUpParts();
+      var ext = extra, left = [];
       ids.forEach(function (id) { var l = m[id] || ext[id]; if (l) addSel(l); else left.push(id); });
       if (left.length && db()) {
         $("rfMiss").innerHTML = '<div class="rf-meta" style="margin-top:10px">Looking in the last 15 days of OMS data…</div>';
@@ -338,13 +340,14 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
   /* ---------- 3. render ---------- */
   function render() {
     if (!$("tab-refund")) return;
-    $("rfSyncLine").textContent = loaded ? "Self-ship refund pending · NimbusPost · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship RTO · NimbusPost · last 60 days";
+    $("rfSyncLine").textContent = (loaded ? "Self-ship refund pending · NimbusPost · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship RTO · NimbusPost · last 60 days") +
+      (upMeta ? " · OMS export saved: " + upMeta.name + " (" + Number(upMeta.lines || 0).toLocaleString("en-IN") + " lines, " + when(upMeta.at) + ")" : "");
     var pend = store.filter(function (o) { return !refunded(o.i); });
     $("rfKpiAvail").textContent = loaded ? pend.length : "–";
     $("rfKpiAvailSub").textContent = loaded ? pend.filter(function (o) { return /^rto/.test(o.nb); }).length + " returned · " + pend.filter(function (o) { return o.nb === "late"; }).length + " pickup missed · " + pend.filter(function (o) { return o.nb === "lost"; }).length + " lost" : "loading…";
 
     $("rfMiss").innerHTML = missing.length ? '<div class="rf-miss"><b>Not found (' + missing.length + "):</b> " + missing.map(esc).join(", ") +
-      '<br><span style="opacity:.85">Not found in OMS — older than 70 days? Upload an OMS export (top right) and click Find again.</span></div>' : "";
+      '<br><span style="opacity:.85">Not found in OMS' + (upMeta ? " or in the saved export (" + esc(upMeta.name) + ")" : "") + ' — older? Upload a newer OMS export (top right); it replaces the saved one.</span></div>' : "";
 
     sel.forEach(function (o) { if (refunded(o.i) || !dbOk(o)) o.off = true; });
     var on = sel.filter(function (o) { return !o.off; }), vis = sel.filter(dbOk);
@@ -471,19 +474,58 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
       } else {
         rows = sheetRows(XLSX.read(new Uint8Array(await file.arrayBuffer()), { type: "array", raw: true }));
       }
-      var n = 0;
+      var n = 0, fresh = {};
       rows.forEach(function (r) {
         var ch = pick(r, ["Channel Name"]); if (!isAmazon(ch)) return;
         var o = { a: accName(ch), o: cleanId(pick(r, ["Channel Order Id"])), i: cleanId(pick(r, ["Channel Sub Order Id"])), q: num(pick(r, ["Qty"])) || 1,
           p: num(pick(r, ["Selling Price Per Item"])), s: num(pick(r, ["Shipping Charge Per Item"])), t: num(pick(r, ["Tax Rate"])),
-          st: pick(r, ["Order Status"]), d: pick(r, ["Order Date"]), ty: pick(r, ["Order Type"]), n: pick(r, ["Product Name"]) };
+          st: pick(r, ["Order Status"]), d: pick(r, ["Order Date"]), ty: pick(r, ["Order Type"]), n: pick(r, ["Product Name"]).slice(0, 60) };
         if (!o.o || !o.i) return;
-        var l = extra[o.o] = extra[o.o] || []; if (!l.some(function (x) { return x.i === o.i; })) { l.push(o); n++; }
+        var l = fresh[o.o] = fresh[o.o] || []; if (!l.some(function (x) { return x.i === o.i; })) { l.push(o); n++; }
       });
       if (!n) throw new Error("no Amazon orders found — is this an OMS Guru 'Export Data' file?");
-      toast(n + " Amazon order line(s) loaded from " + file.name + " — now paste IDs and click Find.");
-      if (missing.length) find();
+      extra = fresh; upLoaded = true;
+      toast(n + " Amazon order line(s) loaded from " + file.name + " — saving for all devices…");
+      saveUpload(file.name, n);
     } catch (err) { toast("Could not read that file: " + err.message, true); }
+  }
+  /* Uploaded OMS export is kept in the main Firebase until the next upload, so every device / person sees it.
+     aikm_admin/omsUpload = { name, lines, parts, at }, parts in aikm_admin/omsUpload_0 … _N (≈700 KB each).
+     Read: 1 doc when the tab opens; the parts only when a pasted order is not found elsewhere. */
+  var upMeta = null, upLoaded = false, upLoading = null;
+  function loadUpMeta() {
+    if (!mainDb()) return Promise.resolve();
+    return mainDb().collection("aikm_admin").doc("omsUpload").get().then(function (d) { upMeta = d.exists ? d.data() : null; }).catch(function () {});
+  }
+  function loadUpParts() {
+    if (upLoaded || !upMeta || !upMeta.parts || !mainDb()) return Promise.resolve();
+    if (upLoading) return upLoading;
+    var ps = []; for (var k = 0; k < upMeta.parts; k++) ps.push(mainDb().collection("aikm_admin").doc("omsUpload_" + k).get());
+    upLoading = Promise.all(ps).then(function (docs) {
+      var merged = {};
+      docs.forEach(function (d) { var x = d.exists ? d.data() : {}; if (x.stamp !== upMeta.stamp) return; (JSON.parse(x.rows || "[]")).forEach(function (o) { (merged[o.o] = merged[o.o] || []).push(o); }); });
+      Object.keys(extra).forEach(function (k) { merged[k] = extra[k]; }); // anything uploaded on this device wins
+      extra = merged; upLoaded = true; upLoading = null;
+    }).catch(function () { upLoading = null; });
+    return upLoading;
+  }
+  async function saveUpload(name, n) {
+    if (!mainDb()) { toast("Loaded here only — not connected, so other devices won't see it.", true); return; }
+    var all = []; Object.keys(extra).forEach(function (k) { all = all.concat(extra[k]); });
+    var parts = [], cur = [], size = 0;
+    all.forEach(function (o) { var j = JSON.stringify(o).length + 1; if (size + j > 700000 && cur.length) { parts.push(cur); cur = []; size = 0; } cur.push(o); size += j; });
+    if (cur.length) parts.push(cur);
+    if (parts.length > 25) { toast("File too big to save (" + all.length + " lines) — loaded on this device only. Export fewer days from OMS Guru.", true); return; }
+    var stamp = Date.now() + "_" + Math.random().toString(36).slice(2, 7), col = mainDb().collection("aikm_admin");
+    try {
+      for (var k = 0; k < parts.length; k++) await col.doc("omsUpload_" + k).set({ stamp: stamp, rows: JSON.stringify(parts[k]) });
+      var old = (upMeta && upMeta.parts) || 0;
+      upMeta = { name: name, lines: n, orders: Object.keys(extra).length, parts: parts.length, stamp: stamp, at: new Date().toISOString() };
+      await col.doc("omsUpload").set(upMeta);
+      for (var x = parts.length; x < old; x++) await col.doc("omsUpload_" + x).delete();
+      render(); toast("Saved for all devices — " + n + " line(s) from " + name + ". Kept until the next upload.");
+    } catch (err) { toast("Loaded here, but not saved for other devices: " + err.message, true); }
+    if (missing.length) find();
   }
   function sheetRows(wb) { return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "", raw: false }); }
   function pick(r, names) {
