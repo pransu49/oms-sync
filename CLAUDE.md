@@ -18,3 +18,17 @@
 - Auto sale bills (`console/sale-autobill.js`) is loaded on the Purchase & Sales page (`page.purchase-bills.liquid`)
   by the block `AIKM AUTO SALE BILLS LOADER` just before `</body>`. Keep that block when replacing that template.
   It saves records of kind `autobill_done` and `autobill_map` in Supabase — do not delete them.
+
+## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
+Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.
+Current daily use is on the console's Firebase usage card (aikm_admin/firebaseUsage). Keep each project **under ~35,000 reads/day**.
+Before shipping a change, estimate: *runs per day × documents read per run* (+ open console tabs × documents re-read when a robot writes).
+- A workflow started by `workflow_run` runs after EVERY upstream run, even when the upstream gate skipped its work
+  (upstream every 10 min = 144 runs/day). Gate it so it only runs after a real upstream run (see `robot-audit.yml`).
+- Never read a whole growing collection on every run. Filter in the query (time window, document-id range, status),
+  not in code after reading. Example: robot price records (`robot_*` ids) are skipped by id range in `loadManualPrices`.
+- Big lists that rarely change (LOTS catalogue ~25 docs, masterMapping): cache between runs (see the LOTS cache in
+  `spapi-sync.js` + workflow) or read only when their `savedAt` stamp changed.
+- Prefer one shared read per run over one per account / per item.
+- Write the estimate in the PR description ("adds ~N reads/day to <project>"). If it would push a project above ~35,000/day,
+  redesign first.

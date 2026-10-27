@@ -22,7 +22,35 @@ permissions:
   actions: read
 
 jobs:
+  # Read saver (27 Oct 2026): "Push LOTS stock" finishes every 10 min, but it really pushes only once an
+  # hour (its own gate skips the rest). Check only after a REAL push, so the watchdog runs ~24x a day, not ~144x.
+  # The hourly backup timer checks only when the stock push itself has not run for 70+ min.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - id: g
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ev="${{ github.event_name }}"
+          if [ "$ev" = "workflow_dispatch" ]; then echo "go=1" >> $GITHUB_OUTPUT; exit 0; fi
+          if [ "$ev" = "workflow_run" ]; then
+            ran=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/jobs" --jq '[.jobs[] | select(.name=="push") | .conclusion][0] // ""')
+            echo "stock push job: $ran"
+            if [ "$ran" = "success" ] || [ "$ran" = "failure" ]; then echo "go=1" >> $GITHUB_OUTPUT; else echo "go=0" >> $GITHUB_OUTPUT; fi
+            exit 0
+          fi
+          last=$(gh api "repos/${{ github.repository }}/actions/workflows/oms-inventory-push.yml/runs?per_page=20&status=success" --jq '[.workflow_runs[] | select(.conclusion=="success") | .created_at][0] // ""')
+          age=999999; [ -n "$last" ] && age=$(( $(date -u +%s) - $(date -u -d "$last" +%s) ))
+          echo "last stock push run $age s ago"
+          if [ $age -ge 4200 ]; then echo "go=1" >> $GITHUB_OUTPUT; else echo "go=0" >> $GITHUB_OUTPUT; fi
+
   audit:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:

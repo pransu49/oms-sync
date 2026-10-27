@@ -1209,7 +1209,16 @@ function fitPriceLimits(po, price, mrp) {
 const MANUAL_HOLD_MS = 7 * 864e5;
 async function loadManualPrices() {
   const out = new Map();
-  const snaps = await Promise.all([db, dbMain].map((d) => d.collection('spapiPriceUpdates').where('account', '==', ACCOUNT_LABEL).get().catch(() => null)));
+  // Read saver (27 Oct 2026): robot records (id "robot_...", ~400) are skipped below anyway, so they are
+  // not read at all: only ids before "robot_" or after "robot`" (= every other id). No extra index needed.
+  const col = (d) => d.collection('spapiPriceUpdates'), FP = admin.firestore.FieldPath.documentId();
+  const snaps = await Promise.all([db, dbMain].map((d) => Promise.all([
+    col(d).where('account', '==', ACCOUNT_LABEL).where(FP, '<', 'robot_').get(),
+    col(d).where('account', '==', ACCOUNT_LABEL).where(FP, '>=', 'robot`').get(),
+  ]).catch((e) => {   // safety net: if the short query ever fails, read the whole list as before
+    console.warn('Manual prices: short read failed, reading all:', e.message || e);
+    return col(d).where('account', '==', ACCOUNT_LABEL).get().then((q) => [q]).catch(() => []);
+  }))).then((x) => x.flat());
   snaps.forEach((sn) => sn && sn.docs.forEach((d) => { const x = d.data(); if (x.source === 'robot' || !x.sku) return;
     const t = ['appliedAt', 'requestedAt'].map((k) => (x[k] && x[k].toMillis ? x[k].toMillis() : 0)).reduce((a, b) => Math.max(a, b), 0);
     if ((x.status === 'applied' || x.status === 'pending') && Date.now() - t < MANUAL_HOLD_MS) out.set(x.sku, { price: x.newPrice, at: t }); }));
