@@ -18,6 +18,9 @@
 - Auto sale bills (`console/sale-autobill.js`) is loaded on the Purchase & Sales page (`page.purchase-bills.liquid`)
   by the block `AIKM AUTO SALE BILLS LOADER` just before `</body>`. Keep that block when replacing that template.
   It saves records of kind `autobill_done` and `autobill_map` in Supabase — do not delete them.
+- The Amazon robot does NOT change prices (owner, 27 Oct 2026): `spapi-sync.js` runs in suggest-only mode unless the workflow sets
+  `PRICE_AUTO=on`. Suggestions go to ONE doc per account, `spapiSnapshots/<acct>_priceSuggest` (quota-safe: 1 read + 1 write per run), and are shown by `console/price-suggest.js`, loaded by the block
+  at the end of `console/amazon-name-search.js` (`aikmPriceSuggestJs`). Keep that block. Do not turn PRICE_AUTO on without the owner.
 
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.

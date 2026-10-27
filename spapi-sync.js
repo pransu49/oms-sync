@@ -822,6 +822,7 @@ async function fixSuppressedPrice(sellerId, i, old, productType, why) {
     if (floor > mrp) return { done: false, note: `Earning ${RULE_TXT}/order needs ₹${floor}, above MRP ₹${mrp} - check the cost (${kc.src} ₹${kc.cost}).` };
     target = Math.floor(mrp);
   }
+  SUGGEST_KIND = 'blocked'; SUGGEST_WHY = `Amazon blocked it for its price (${String(why || '').slice(0, 80)}) · ${basis}`;
   await setOfferPrice(sellerId, i, old, productType, target);   // also moves min/max limits so the price fits
   const profit = orderProfit(i, kc.cost, target, ship);
   basis += ` · profit ₹${Math.round(profit)}/order`;
@@ -956,7 +957,7 @@ async function runRelistRobot(sellerId) {
       } else if (priceBlocked) {
         console.log(`Relist ${oldSku}: Amazon suppressed it for its price (${oldWhy}) - not relisted at the same price.`);
         st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
-        const fx = await fixSuppressedPrice(sellerId, i, old, sum.productType || await productTypeFor(sellerId, oldSku), oldWhy).catch((e) => ({ done: false, note: 'Price change failed: ' + (e.message || e) }));
+        const fx = await fixSuppressedPrice(sellerId, i, old, sum.productType || await productTypeFor(sellerId, oldSku), oldWhy).catch((e) => ({ done: false, note: (e.suggested ? '' : 'Price change failed: ') + (e.message || e) }));
         if (fx.done) { st.pfix[asin] = now; i.price = fx.price; }
         await log(i, fx.done ? { status: 'price_fixed', reason, why: oldWhy, newPrice: fx.price, basis: fx.basis, floor: fx.floor }
           : { status: 'price_issue', why: oldWhy, fixNote: fx.note || null });
@@ -1177,7 +1178,48 @@ const BB_MAX_PER_RUN = 80, BB_MAX_RAISE_PER_RUN = 30, BB_MAX_CUT = 0.3, BB_MAX_R
 // the workflow sets BB_RAISE=on. Raised listings that then lost the Buy Box go back to their price before the raise.
 const BB_RAISE_ON = String(process.env.BB_RAISE || '').toLowerCase() === 'on';
 const RAISE_UNDO_FROM = Date.parse('2026-10-20T12:00:00Z'), RAISE_UNDO_PER_RUN = 40;
+// Owner, 27 Oct 2026: "I want the robot to stop changing prices, just share the changes - I will implement myself."
+// SUGGEST-ONLY is the default: the robot works out the same prices but saves them as suggestions (spapiPriceSuggestions,
+// shown on the Amazon page + Telegram) instead of changing Amazon. Set PRICE_AUTO=on in the workflow to let it change prices again.
+// Your own pushes (Amazon page / Loss Orders) and Add ASIN still go to Amazon as before.
+const PRICE_AUTO = String(process.env.PRICE_AUTO || '').toLowerCase() === 'on';
+let SUGGEST_WHY = '', SUGGEST_KIND = '';
+const SUGGESTED = [];
+async function suggestPrice(i, price) {
+  SUGGESTED.push({ sku: i.sku, asin: i.asin || null, name: String(i.name || '').slice(0, 120), oldPrice: i.price ?? null, newPrice: price,
+    mrp: i.mrp || null, kind: SUGGEST_KIND || (price < (i.price || 0) ? 'lower' : 'raise'), why: SUGGEST_WHY || '', status: 'open', at: Date.now() });
+  console.log(`SUGGEST ${i.sku}: Rs ${i.price} -> Rs ${price} ${SUGGEST_KIND} ${SUGGEST_WHY}`);
+  SUGGEST_WHY = ''; SUGGEST_KIND = '';
+  const e = new Error(`Suggested only - you change it (₹${i.price} → ₹${price})`); e.suggested = true; throw e;
+}
+// After a full run: ONE doc per account holds all suggestions (1 read + at most 1 write per run - Firebase free quota).
+// Your Dismiss / Apply on the same price is kept; suggestions not found again this run are dropped.
+async function finishSuggestions() {
+  const ref = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_priceSuggest`), cur = (await ref.get()).data() || {}, prevItems = cur.items || {};
+  const items = {};
+  for (const r of SUGGESTED) {
+    const p = prevItems[r.sku];
+    if (p && Math.abs((p.appliedPrice ?? p.newPrice) - r.newPrice) < 1) items[r.sku] = { ...r, status: p.status, at: p.status === 'open' ? r.at : p.at, appliedPrice: p.appliedPrice ?? null };
+    else items[r.sku] = r;
+  }
+  const sig = (o) => Object.keys(o).sort().map((k) => `${k}@${o[k].newPrice}@${o[k].status}`).join('|');
+  if (sig(items) !== sig(prevItems)) await ref.set({ account: ACCOUNT_LABEL, at: Date.now(), items });
+  const openS = Object.values(items).filter((x) => x.status === 'open');
+  console.log(`Price suggestions: ${SUGGESTED.length} this run, ${openS.length} open (robot did NOT change Amazon prices).`);
+  if (!openS.length) return;
+  const seen = new Set(String(cur.told || '').split('\n')), newOnes = openS.filter((x) => !seen.has(x.sku + '@' + x.newPrice));
+  if (!newOnes.length && Date.now() - (cur.toldAt || 0) < 12 * 3600e3) return;
+  const u30 = unitsByAsin(30), label = ACCOUNT_LABEL === 'praso' ? 'Praso' : 'Sasta Store';
+  const K = { lower: '⬇️', raise: '⬆️', loss_guard: '⬆️', undo: '↩️', blocked: '🛠' };
+  const list = (newOnes.length ? newOnes : openS).slice().sort((a, b) => (u30[b.asin] || 0) - (u30[a.asin] || 0));
+  const { notify, esc } = require('./telegram');
+  await notify(`💡 <b>${label} · ${list.length} new price suggestion${list.length > 1 ? 's' : ''}</b> (robot did not change anything)\n` +
+    list.slice(0, 12).map((x) => `${K[x.kind] || '•'} ${esc(String(x.name || x.sku).slice(0, 36))} — ₹${x.oldPrice} → <b>₹${x.newPrice}</b> · sold ${u30[x.asin] || 0}/30d\n   <i>${esc(String(x.why).slice(0, 110))}</i>`).join('\n') +
+    (list.length > 12 ? `\n+${list.length - 12} more` : '') + `\nApply on the Amazon page → 💡 Price suggestions.`, { html: true });
+  await ref.set({ told: openS.map((x) => x.sku + '@' + x.newPrice).join('\n'), toldAt: Date.now() }, { merge: true });
+}
 async function setOfferPrice(sellerId, i, old, productType, price) {
+  if (!PRICE_AUTO) return suggestPrice(i, price);
   const po = JSON.parse(JSON.stringify(((old.attributes || {}).purchasable_offer || [])[0] || {}));
   delete po.start_at; delete po.end_at;
   ['discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
@@ -1270,6 +1312,7 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
       ...(att || {}) }).catch((e) => console.warn('Forecast not saved:', e.message || e));
   } catch (e) { console.warn('Buy Box forecast skipped:', e.message || e); }
   const patchPrice = async (i, target) => {
+    if (!PRICE_AUTO) return suggestPrice(i, target);   // suggest-only: no Amazon calls at all
     const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: i.sku },
       query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries'] } });
     const productType = ((old.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, i.sku);
@@ -1300,11 +1343,11 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     target = okMin;
     if (!target) { await log(i, { status: 'bb_skip', fixNote: `Sells at ₹${profit}/order. No price up to ₹${cap} (${cap === Math.floor(mrp) ? 'MRP' : '+30%'}) earns ${RULE_TXT}. Check the cost (${kc.src} ₹${kc.cost}) or stop selling it.` }); continue; }
     try {
-      const was = i.price; await patchPrice(i, target); guarded++; noteChange(st, i, 'raise', target, was);
+      SUGGEST_KIND = 'loss_guard'; SUGGEST_WHY = `Earns ₹${profit}/order now, under the ${RULE_TXT} minimum · cost ₹${kc.cost} (${kc.src})`; const was = i.price; await patchPrice(i, target); guarded++; noteChange(st, i, 'raise', target, was);
       const np = orderProfit(i, kc.cost, target, ship);
       console.log(`Loss guard RAISE ${i.sku}: Rs ${was} -> Rs ${target} (was Rs ${profit}/order, now Rs ${np})`);
       await log(i, { status: 'bb_raise', change: 'loss_guard', oldPrice: was, newPrice: target, profit: np, basis: `Was earning ₹${profit}/order (under the ${RULE_TXT} minimum) · cost ₹${kc.cost} (${kc.src}) · now ₹${np}/order` });
-    } catch (e) { console.warn(`Loss guard FAILED for ${i.sku}:`, e.message || e); }
+    } catch (e) { if (e.suggested) continue; console.warn(`Loss guard FAILED for ${i.sku}:`, e.message || e); }
     await new Promise((r) => setTimeout(r, 800));
   }
   // Go through ALL listings that lost on price (best sellers first) and stop after BB_MAX_PER_RUN real price cuts -
@@ -1324,10 +1367,10 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
       const target = Math.floor(L(win) - 1 - ship), profit = orderProfit(i, kc.cost, target, ship), floor = noLossFloor(i, kc.cost, target, ship);
       if (!priceOk(i, kc.cost, target, ship)) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Buy Box lost by ₹${gap}. Winning needs ₹${target}, which earns only ₹${profit} per order (minimum ${RULE_TXT}, lowest price allowed ₹${floor}). Price kept.` }); continue; }
       if (target < i.price * (1 - BB_MAX_CUT)) { skipped++; await logSkip(i, { status: 'bb_skip', fixNote: `Winning needs ₹${target}, a cut of over ${BB_MAX_CUT * 100}% from ₹${i.price}. Check the cost / competitor, then change it yourself.` }); continue; }
-      const was = i.price; await patchPrice(i, target); lowered++; noteChange(st, i, 'lower', target, was);
+      SUGGEST_KIND = 'lower'; SUGGEST_WHY = `Win Buy Box: Buy Box ₹${Math.round(L(win))} incl. shipping, you are ₹${gap} higher · profit after cut ₹${profit}/order`; const was = i.price; await patchPrice(i, target); lowered++; noteChange(st, i, 'lower', target, was);
       console.log(`Buy Box pricer LOWER ${i.sku}: Rs ${was} -> Rs ${target} (lost by Rs ${gap}, profit Rs ${profit}/order)`);
       await log(i, { status: 'bb_price', change: 'lower', oldPrice: was, newPrice: target, profit, floor, basis: `Buy Box ₹${Math.round(L(win))} incl. shipping · you were ₹${gap} higher · now ₹1 below · profit ₹${profit}/order${profit < TARGET_PROFIT ? ` (under ₹${TARGET_PROFIT} target, meets the ${RULE_TXT} minimum)` : ''}` });
-    } catch (e) { console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await logSkip(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
+    } catch (e) { if (e.suggested) continue; console.warn(`Buy Box pricer FAILED for ${i.sku}:`, e.message || e); await logSkip(i, { status: 'bb_skip', fixNote: 'Price change failed: ' + (e.message || e) }); }
     await new Promise((r) => setTimeout(r, 800));
   }
   if (!BB_RAISE_ON && raise.length) console.log(`Buy Box pricer: raising while holding the Buy Box is OFF (${raise.length} held listings keep their price).`);
@@ -1346,7 +1389,7 @@ async function runBuyBoxPricer(sellerId, eligible, st, log) {
     try {
       const kc = await knownCost(i);
       if (!kc) continue;   // unknown cost: leave alone
-      const was = i.price; await patchPrice(i, target); raised++; noteChange(st, i, 'raise', target, was);
+      SUGGEST_KIND = 'raise'; SUGGEST_WHY = `You hold the Buy Box · next seller ₹${Math.round(L(next))} incl. shipping`; const was = i.price; await patchPrice(i, target); raised++; noteChange(st, i, 'raise', target, was);
       const profit = orderProfit(i, kc.cost, target, ship);
       console.log(`Buy Box pricer RAISE ${i.sku}: Rs ${was} -> Rs ${target} (next seller Rs ${L(next)} incl. shipping, profit Rs ${profit}/order)`);
       await log(i, { status: 'bb_raise', change: 'raise', oldPrice: was, newPrice: target, profit, basis: `You held the Buy Box · next seller ₹${Math.round(L(next))} incl. shipping · now ₹1 below them · profit ₹${profit}/order` });
@@ -1420,7 +1463,7 @@ async function undoLostRaises(eligible, st, log, patchPrice, manual) {
     for (let j = k; j < ch.length; j++) { const f = Number(ch[j].from); if (f > 0 && (!kc || profitOk(i, kc.cost, f))) { orig = f; break; } }
     if (!orig || orig >= last.to) { m.raiseUndo = 'loss_guard'; skipped++; continue; }
     try {
-      await patchPrice(i, orig); undone++;
+      SUGGEST_KIND = 'undo'; SUGGEST_WHY = 'An earlier robot raise lost the Buy Box - go back to the old price'; await patchPrice(i, orig); undone++;
       m.raiseUndo = 'undone'; m.ceil = orig; m.ceilUntil = now + LEARN_REST_MS;
       m.ch.push({ at: now, kind: 'revert', from: last.to, to: orig, judged: 'revert' });
       st.bbCool[i.sku] = now + BB_COOL_MS;
@@ -1498,7 +1541,7 @@ async function learnFromChanges(sellerId, eligible, st, log, patchPrice) {
       continue;
     }
     try {
-      await patchPrice(i, c.from); reverted++;
+      SUGGEST_KIND = 'undo'; SUGGEST_WHY = `Earlier change did not pay - go back. ${facts}`; await patchPrice(i, c.from); reverted++;
       if (c.kind === 'lower') m.noLowerUntil = now + LEARN_REST_MS; else { m.ceil = c.from; m.ceilUntil = now + LEARN_REST_MS; }
       m.ch.push({ at: now, kind: 'revert', from: c.to, to: c.from, judged: 'revert' });
       console.log(`Robot learning REVERT ${sku}: Rs ${c.to} -> Rs ${c.from} (${facts})`);
@@ -2450,6 +2493,7 @@ async function run() {
   console.log('Step 3a1: relist robot ("Not selling" -> new SKU, old SKU deleted)...');
   if (SYNC_MODE === 'full') await refreshFeeEstimates().catch((e) => console.warn('Fee estimates skipped (sync continues):', e.message || e));
   if (SYNC_MODE === 'full') await runRelistRobot(sellerId).catch((e) => console.warn('Relist robot skipped (sync continues):', e.message || e));
+  if (SYNC_MODE === 'full' && !PRICE_AUTO) await finishSuggestions().catch((e) => console.warn('Price suggestions summary skipped:', e.message || e));
 
   console.log('Step 3a2: removing listings that no longer exist on Amazon...');
   await pruneRemovedListings(asinsFromInventory).catch((e) => console.warn('Prune skipped (sync continues):', e.message || e));
