@@ -26,6 +26,12 @@ html#aikm body #tab-refund .rf-miss{margin-top:10px;padding:10px 12px;border-rad
 html#aikm body #tab-refund .rf-rule{font-size:12px;color:var(--x-muted);line-height:1.65;}\
 html#aikm body #tab-refund .rf-rule b{color:var(--x-text-2);}\
 html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !important;color:var(--x-primary-ink) !important;border-color:var(--x-primary) !important;}\
+html#aikm body #tab-refund .rf-ready{border:1px solid var(--x-gold-line);background:linear-gradient(0deg,var(--x-gold-soft),var(--x-gold-soft)),var(--x-surface);}\
+html#aikm body #tab-refund .rf-ready h2{color:var(--x-gold) !important;}\
+html#aikm body #tab-refund .rf-dbf{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;}\
+html#aikm body #tab-refund .rf-dbf input[type=date]{min-height:32px;padding:4px 8px;border-radius:8px;border:1px solid var(--x-line-2);background:var(--x-surface-2);color:var(--x-text);}\
+html#aikm body #tab-refund .rf-db-late{color:var(--x-red);font-weight:600;}\
+html#aikm body #tab-refund .rf-link{background:none !important;border:0 !important;color:var(--x-muted) !important;text-decoration:underline;padding:0 !important;min-height:0 !important;font-size:11.5px;box-shadow:none !important;cursor:pointer;}\
 @media (max-width:1100px){html#aikm body #tab-refund .rf-grid{grid-template-columns:1fr;}}\
 ";document.head.appendChild(st);})();
 
@@ -62,6 +68,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
         kpi("rfKpiAmt", "Total refund", "rfKpiAmtSub") + kpi("rfKpiAcc", "Files to upload", "rfKpiAccSub") +
       "</div>" +
       '<div class="rf-grid"><div>' +
+        '<div class="panel rf-ready" id="rfReady"><h2><span>🤖 Ready to refund</span> <span class="rf-meta" id="rfReadyAt"></span></h2><div id="rfReadyBody"><div class="rf-empty">Loading…</div></div></div>' +
         '<div class="panel"><h2>1 · Pick orders</h2>' +
           '<textarea id="rfIds" placeholder="Paste Amazon order IDs here — one per line, or copy a whole column from Excel.&#10;e.g. 408-1718820-2871569"></textarea>' +
           '<div class="rf-row"><button type="button" class="btn-gold" id="rfFindBtn"><i class="ti ti-search"></i> Find orders</button>' +
@@ -72,6 +79,10 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
         '<div class="panel"><h2>2 · Check amounts <span class="rf-meta" id="rfCount"></span>' +
           '<label class="rf-meta" style="margin-left:auto;display:flex;align-items:center;gap:6px;"><input type="checkbox" id="rfShipChk" checked> Refund shipping too</label></h2>' +
           '<small class="hint">Same split as Seller Central\'s refund screen: price without tax + tax, shipping without tax + tax.</small>' +
+          '<div class="rf-dbf"><span class="rf-meta"><b>Deliver By:</b></span>' +
+            '<span class="rf-chip on" data-rf-dbf="all">All</span><span class="rf-chip" data-rf-dbf="passed">Passed</span><span class="rf-chip" data-rf-dbf="today">Today</span><span class="rf-chip" data-rf-dbf="next3">Next 3 days</span>' +
+            '<span class="rf-meta">or</span><input type="date" id="rfDbFrom" title="Deliver By from"><span class="rf-meta">to</span><input type="date" id="rfDbTo" title="Deliver By to">' +
+            '<span class="rf-meta" id="rfDbNote"></span></div>' +
           '<div id="rfTable" style="margin-top:10px"><div class="rf-empty">Paste order IDs above, or pick Returned / Pickup missed / Lost / All.</div></div></div>' +
       '</div><div>' +
         '<div class="panel"><h2>3 · Download &amp; upload</h2>' +
@@ -109,14 +120,19 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     $("rfReason").addEventListener("change", render);
     $("rfSyncBtn").addEventListener("click", syncNow);
     $("rfFile").addEventListener("change", uploadExport);
+    ["rfDbFrom", "rfDbTo"].forEach(function (id) { $(id).addEventListener("change", function () { setDbf("range", $("rfDbFrom").value, $("rfDbTo").value); }); });
     p.addEventListener("click", function (e) {
       var c = e.target.closest("[data-rf-show]"); if (c) { showStatus(c.dataset.rfShow); return; }
       var d = e.target.closest("[data-rf-dl]"); if (d) { download(d.dataset.rfDl); return; }
       var rn = e.target.closest("[data-rf-now]"); if (rn) { refundNow(rn.dataset.rfNow); return; }
-      var x = e.target.closest("[data-rf-x]"); if (x) { sel = sel.filter(function (o) { return o.i !== x.dataset.rfX; }); render(); }
+      var x = e.target.closest("[data-rf-x]"); if (x) { sel = sel.filter(function (o) { return o.i !== x.dataset.rfX; }); render(); return; }
+      var f = e.target.closest("[data-rf-dbf]"); if (f) { setDbf(f.dataset.rfDbf, "", ""); return; }
+      var rv = e.target.closest("[data-rf-review]"); if (rv) { reviewReady(rv.dataset.rfReview, false); return; }
+      var ap = e.target.closest("[data-rf-approve]"); if (ap) { reviewReady(ap.dataset.rfApprove, true); return; }
+      var sk = e.target.closest("[data-rf-skip]"); if (sk) { skipOrder(sk.dataset.rfSkip); return; }
     });
     p.addEventListener("change", function (e) {
-      if (e.target.id === "rfAll") { var on = e.target.checked; sel.forEach(function (o) { o.off = !on; }); render(); }
+      if (e.target.id === "rfAll") { var on = e.target.checked; sel.forEach(function (o) { o.off = !on || !dbOk(o) || !!refunded(o.i); }); render(); }
       else if (e.target.dataset && e.target.dataset.rfOn) { var o = sel.filter(function (x) { return x.i === e.target.dataset.rfOn; })[0]; if (o) { o.off = !e.target.checked; render(); } }
     });
   }
@@ -177,7 +193,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
         function timed(p, ms) { return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error("timeout")); }, ms); })]); }
         // the console's idle-pause can leave Firebase switched off -> switch it on and try again
         timed(ref.get(), 12000).catch(function () { try { db().enableNetwork(); } catch (e) {} return timed(ref.get(), 25000); })
-          .then(function (d) { var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true; })
+          .then(function (d) { var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true; return loadReady(); })
           .catch(function () { toast("Could not read refund data — check internet, then click the tab again.", true); })
           .then(function () { loading = null; render(); res(); });
       }, 300);
@@ -200,6 +216,76 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
   document.addEventListener("visibilitychange", function () {
     if (document.hidden) stopLog(); else if (document.querySelector('.tabbtn.active[data-tab="refund"]')) listenLog();
   });
+
+  /* ---------- Robot: ready to refund (self-ship RTO started / received) ---------- */
+  var ready = { items: [], at: null }, skipM = {}, dbIdx = null;
+  function loadReady() {
+    var a = db().collection("aikm_admin").doc("refundProposals").get().then(function (d) { var x = d.exists ? d.data() : {}; ready = { items: x.items || [], at: x.at || null }; }).catch(function () {});
+    var b = mainDb() ? mainDb().collection("aikm_admin").doc("refundSkip").get().then(function (d) { skipM = (d.exists && d.data().m) || {}; }).catch(function () {}) : null;
+    return Promise.all([a, b]);
+  }
+  function readyItems() { return ready.items.filter(function (o) { return !refunded(o.i) && !skipM[o.o]; }); }
+  function renderReady() {
+    if (!$("rfReadyBody")) return;
+    $("rfReadyAt").textContent = ready.at ? "· checked " + when(ready.at) : "";
+    var it = readyItems();
+    if (!loaded) return;
+    if (!it.length) { $("rfReadyBody").innerHTML = '<div class="rf-meta">Nothing waiting. The robot checks every hour (8 AM–10 PM) for self-ship orders whose RTO started or came back, and sends you a Telegram message.</div>'; return; }
+    var by = {};
+    it.forEach(function (o) { var b = by[o.a] = by[o.a] || { o: {}, back: {}, amt: 0 }; b.o[o.o] = 1; if (o.nb === "rto_delivered") b.back[o.o] = 1; b.amt = r2(b.amt + calc(o).tot); });
+    $("rfReadyBody").innerHTML = '<div class="rf-meta" style="margin-bottom:10px">Self-ship orders whose <b>RTO started or came back</b> — not refunded yet. Check, then approve. Nothing is refunded without your OK.</div>' +
+      Object.keys(by).sort().map(function (a) {
+        var b = by[a], n = Object.keys(b.o).length, back = Object.keys(b.back).length;
+        return '<div class="rf-acc"><div class="rf-acc-info"><div class="rf-acc-name">' + esc(a) + '</div><div class="rf-acc-sub">' + n + " order(s) · " + inr(b.amt) + " · RTO received " + back + " · on the way " + (n - back) + "</div></div>" +
+          '<button type="button" class="secondary" data-rf-review="' + esc(a) + '"><i class="ti ti-list-check"></i> Review</button>' +
+          (ROBOT[a] ? '<button type="button" class="btn-gold" data-rf-approve="' + esc(a) + '"><i class="ti ti-circle-check"></i> Approve &amp; refund</button>' : '<button type="button" class="btn-gold" data-rf-review="' + esc(a) + '"><i class="ti ti-download"></i> Review &amp; file</button>') + "</div>";
+      }).join("");
+  }
+  function reviewReady(acc, approve) {
+    chip(""); missing = []; setDbf("all", "", "", true);
+    sel = []; addSel(readyItems().filter(function (o) { return o.a === acc; }));
+    sel.forEach(function (o) { o.off = !!refunded(o.i); });
+    render();
+    try { $("rfTable").scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) {}
+    if (approve) setTimeout(function () { refundNow(acc); }, 350); // shows the confirm box with the total first
+    else toast(sel.length + " line(s) ticked for " + acc + " — check, then press Refund now on the right.");
+  }
+  function skipOrder(id) {
+    if (!mainDb()) { toast("Not connected — try again.", true); return; }
+    if (!confirm("Don't refund " + id + "?\n\nThe robot will stop suggesting it. (You can still refund it by pasting the ID.)")) return;
+    skipM[id] = { at: new Date().toISOString() };
+    var m = {}; m[id] = skipM[id];
+    mainDb().collection("aikm_admin").doc("refundSkip").set({ m: m }, { merge: true }).catch(function (e) { toast("Not saved: " + e.message, true); });
+    sel = sel.filter(function (o) { return o.o !== id; }); render();
+  }
+
+  /* ---------- Deliver By filter ---------- */
+  var dbf = { mode: "all", from: "", to: "" };
+  function addDays(d, n) { var x = new Date(d + "T00:00:00Z"); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); }
+  function dbOk(o) {
+    if (dbf.mode === "all") return true;
+    var d = o.db || "", t = today();
+    if (!d) return false;
+    if (dbf.mode === "passed") return d < t;
+    if (dbf.mode === "today") return d === t;
+    if (dbf.mode === "next3") return d >= t && d <= addDays(t, 3);
+    return (!dbf.from || d >= dbf.from) && (!dbf.to || d <= dbf.to);
+  }
+  function setDbf(mode, from, to, quiet) {
+    dbf = { mode: mode, from: from, to: to };
+    document.querySelectorAll("#tab-refund [data-rf-dbf]").forEach(function (c) { c.classList.toggle("on", c.dataset.rfDbf === mode); });
+    if (mode !== "range") { $("rfDbFrom").value = ""; $("rfDbTo").value = ""; }
+    if (quiet) return;
+    // rows outside the filter are unticked (never refunded by mistake); rows inside are ticked
+    fillDeliverBy().then(function () { sel.forEach(function (o) { o.off = !dbOk(o) || !!refunded(o.i) || (mode === "all" && o.off); }); render(); });
+  }
+  // Deliver By for lines that came without it (pasted IDs, uploaded export): 2 reads, once per page load
+  function fillDeliverBy() {
+    var need = sel.some(function (o) { return !o.db; });
+    if (!need) return Promise.resolve();
+    var go = dbIdx ? Promise.resolve() : (mainDb() ? mainDb().collection("deliverByIndex").get().then(function (snap) { dbIdx = {}; snap.forEach(function (d) { Object.assign(dbIdx, (d.data() || {}).orders || {}); }); }).catch(function () { dbIdx = {}; }) : Promise.resolve());
+    return go.then(function () { if (dbIdx) sel.forEach(function (o) { if (!o.db && dbIdx[o.o]) o.db = dbIdx[o.o]; }); });
+  }
 
   // 15-day OMS data — only read when a pasted order is not in the 60-day refund list
   function loadFifteen() {
@@ -237,7 +323,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
       }
       missing = left;
     } catch (e) { toast("Lookup failed: " + e.message, true); }
-    $("rfFindBtn").disabled = false; render();
+    $("rfFindBtn").disabled = false; await fillDeliverBy(); render();
   }
   async function showStatus(k) {
     await load(false); chip(k); sel = []; missing = [];
@@ -245,7 +331,7 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
       return !refunded(o.i) && (k === "all" ? true : k === "rto" ? /^rto/.test(o.nb) : o.nb === k);
     }));
     sel.forEach(function (o) { o.off = true; }); // nothing ticked until you choose
-    render();
+    await fillDeliverBy(); render();
     toast(sel.length + " refund-pending line(s) shown — tick the ones to refund.");
   }
 
@@ -260,12 +346,15 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
     $("rfMiss").innerHTML = missing.length ? '<div class="rf-miss"><b>Not found (' + missing.length + "):</b> " + missing.map(esc).join(", ") +
       '<br><span style="opacity:.85">Not found in OMS — older than 70 days? Upload an OMS export (top right) and click Find again.</span></div>' : "";
 
-    sel.forEach(function (o) { if (refunded(o.i)) o.off = true; });
-    var on = sel.filter(function (o) { return !o.off; });
-    $("rfCount").textContent = sel.length ? "· " + on.length + " of " + sel.length + " ticked" : "";
-    if (!sel.length) { $("rfTable").innerHTML = '<div class="rf-empty">Paste order IDs above, or pick Returned / Pickup missed / Lost / All.</div>'; }
+    sel.forEach(function (o) { if (refunded(o.i) || !dbOk(o)) o.off = true; });
+    var on = sel.filter(function (o) { return !o.off; }), vis = sel.filter(dbOk);
+    $("rfCount").textContent = sel.length ? "· " + on.length + " of " + sel.length + " ticked" + (vis.length < sel.length ? " · showing " + vis.length + " by Deliver By" : "") : "";
+    $("rfDbNote").textContent = dbf.mode !== "all" && sel.length ? vis.length + " line(s) match" + (sel.some(function (o) { return !o.db; }) ? " · " + sel.filter(function (o) { return !o.db; }).length + " without a Deliver By date hidden" : "") : "";
+    renderReady();
+    if (sel.length && !vis.length) { $("rfTable").innerHTML = '<div class="rf-empty">No lines with that Deliver By date. Pick another date or All.</div>'; }
+    else if (!sel.length) { $("rfTable").innerHTML = '<div class="rf-empty">Paste order IDs above, or pick Returned / Pickup missed / Lost / All.</div>'; }
     else {
-      var rows = sel.map(function (o) {
+      var rows = vis.map(function (o) {
         var c = calc(o);
         var dd = function (x) { return x ? x.slice(8, 10) + "/" + x.slice(5, 7) : ""; };
         var rf = refunded(o.i);
@@ -278,16 +367,17 @@ html#aikm body #subtab-refund .rf-btn-main{background:var(--x-primary) !importan
           : "Not RTO / lost / late in NimbusPost";
         return "<tr" + (o.off ? ' style="opacity:.5"' : "") + "><td><input type='checkbox' data-rf-on='" + esc(o.i) + "'" + (o.off ? "" : " checked") + (rf ? " disabled title='Already refunded by the robot'" : "") + "></td>" +
           "<td class='cx-awb'>" + esc(o.o) + "<div class='rf-meta'>" + esc(o.i) + "</div></td><td>" + esc(o.a) + "</td>" +
+          "<td style='white-space:nowrap'>" + (o.db ? "<span class='" + (o.db < today() ? "rf-db-late" : "") + "'>" + esc(new Date(o.db + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" })) + "</span>" + (o.db < today() ? "<div class='rf-meta'>passed</div>" : o.db === today() ? "<div class='rf-meta'>today</div>" : "") : "<span class='rf-meta'>—</span>") + "</td>" +
           "<td style='max-width:220px'><div style='white-space:nowrap;overflow:hidden;text-overflow:ellipsis' title='" + esc(o.n) + "'>" + esc(o.n) + "</div><div class='rf-meta'>Qty " + o.q + " · " + esc(o.ty) + "</div></td>" +
-          "<td><span class='" + tag + "'>" + esc(nsTxt) + "</span><div class='rf-meta' style='color:var(--x-text-2)'>" + esc(why) + "</div><div class='rf-meta'>" + (o.aw ? esc(o.aw) + (o.nd && o.nb !== "late" ? " · " + esc(dd(o.nd)) : "") : "") + "</div><div class='rf-meta'>OMS: " + esc(o.st) + "</div></td>" +
+          "<td><span class='" + tag + "'>" + esc(nsTxt) + "</span><div class='rf-meta' style='color:var(--x-text-2)'>" + esc(why) + "</div><div class='rf-meta'>" + (o.aw ? esc(o.aw) + (o.nd && o.nb !== "late" ? " · " + esc(dd(o.nd)) : "") : "") + "</div><div class='rf-meta'>OMS: " + esc(o.st) + "</div>" + (o.robot && !rf ? "<button type='button' class='rf-link' data-rf-skip='" + esc(o.o) + "'>Don't refund</button>" : "") + "</td>" +
           "<td class='num'>" + f2(c.ip) + "<div class='rf-meta'>+" + f2(c.it) + " tax</div></td>" +
           "<td class='num'>" + f2(c.sp) + "<div class='rf-meta'>+" + f2(c.stx) + " tax</div></td>" +
           "<td class='num'><b>" + inr(c.tot) + "</b></td>" +
           "<td><button type='button' class='secondary' data-rf-x='" + esc(o.i) + "' title='Remove' style='padding:2px 7px;min-height:0'><i class='ti ti-x'></i></button></td></tr>";
       });
-      var allOn = on.length === sel.length;
+      var allOn = vis.length && vis.every(function (o) { return !o.off || refunded(o.i); });
       $("rfTable").innerHTML = '<div class="table-scroll" style="max-height:520px;"><table class="data"><thead><tr><th><input type="checkbox" id="rfAll"' + (allOn ? " checked" : "") + '></th>' +
-        "<th>Order / item ID</th><th>Account</th><th>Product</th><th>Status</th><th class='num'>Item</th><th class='num'>Shipping</th><th class='num'>Refund</th><th></th></tr></thead><tbody>" + rows.join("") + "</tbody></table></div>";
+        "<th>Order / item ID</th><th>Account</th><th>Deliver By</th><th>Product</th><th>Status</th><th class='num'>Item</th><th class='num'>Shipping</th><th class='num'>Refund</th><th></th></tr></thead><tbody>" + rows.join("") + "</tbody></table></div>";
     }
 
     // per-account files

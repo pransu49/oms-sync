@@ -35,3 +35,6 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - Prefer one shared read per run over one per account / per item.
 - Write the estimate in the PR description ("adds ~N reads/day to <project>"). If it would push a project above ~35,000/day,
   redesign first.
+- Bulk Refund "🤖 Ready to refund" panel reads `aikm_admin/refundProposals` (OMS Firebase), built hourly 8 AM–10 PM by
+  `refund-propose.js` (workflow `refund-propose.yml`). The robot only lines orders up + Telegram; money moves only when
+  the owner presses Approve & refund (confirm box). "Don't refund" marks go to main Firebase `aikm_admin/refundSkip`.

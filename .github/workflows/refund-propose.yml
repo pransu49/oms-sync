@@ -1,0 +1,48 @@
+name: Refund robot - ready to refund (self-ship RTO)
+
+# Lines up self-ship orders whose RTO started or was received, for the owner to approve in the console.
+# Never refunds by itself. Reads per run: ~34 main Firebase + ~30 OMS Firebase (15 runs/day ≈ 500 + 450 reads/day).
+on:
+  schedule:
+    - cron: '23 2-16 * * *'      # hourly, ~7:53 AM to ~9:53 PM IST
+  workflow_run:
+    workflows: ['Refund robot (on command only)', 'Refund orders (self-ship RTO, 60 days)']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = only print, save nothing, no Telegram'
+        default: 'false'
+
+concurrency:
+  group: refund-propose
+  cancel-in-progress: false
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - shell: bash
+        run: set -o pipefail; node refund-propose.js 2>&1 | tee run.log
+        env:
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+
+      - name: Report sync health to console
+        if: always() && inputs.dry_run != 'true'
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node report-health.js refundpropose "Ready to refund" run.log || true
