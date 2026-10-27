@@ -38,6 +38,14 @@ async function loadSnap(acct) {
   }
   return out;
 }
+// Read saver (27 Oct 2026): read only price changes applied in the last 24 h (~20 documents) instead of
+// every robot price record ever saved (~400) - once per check, shared by both accounts.
+let recentPU = null;
+async function recentPriceDocs() {
+  if (!recentPU) recentPU = spa.collection('spapiPriceUpdates').where('appliedAt', '>=', admin.firestore.Timestamp.fromMillis(now - 864e5)).get()
+    .then((q) => q.docs).catch((e) => { console.warn('Robot price changes not read:', e.message || e); return []; });
+  return recentPU;
+}
 async function loadLots() {
   const A = main.collection('aikm_admin');
   const [ch, m1, m2] = await Promise.all([A.doc('lotsCatalog').collection('chunks').get(), A.doc('spapiAsinLotsMap').get(), A.doc('spapiAsinLotsMap2').get().catch(() => null)]);
@@ -127,10 +135,10 @@ function lotsFor(asin, L) {
 
     // 3 + 4: robot price changes in the last 24 h
     const bySku = Object.fromEntries(self.map((i) => [i.sku, i]));
-    const pu = await spa.collection('spapiPriceUpdates').where('account', '==', acct).where('source', '==', 'robot').get().catch(() => null);
     const below = [], bigCut = [];
-    (pu ? pu.docs : []).forEach((d) => {
-      const x = d.data(), t = x.appliedAt && x.appliedAt.toMillis ? x.appliedAt.toMillis() : 0;
+    (await recentPriceDocs()).forEach((d) => {
+      const x = d.data(); if (x.account !== acct || x.source !== 'robot') return;
+      const t = x.appliedAt && x.appliedAt.toMillis ? x.appliedAt.toMillis() : 0;
       if (!t || now - t > 864e5 || !(x.newPrice > 0)) return;
       const i = bySku[x.sku]; if (!i || Math.abs((i.price || 0) - x.newPrice) > 0.5) return;      // price changed since - not the robot's any more
       const l = lotsFor(i.asin, L);
