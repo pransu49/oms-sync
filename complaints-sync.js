@@ -82,6 +82,7 @@ async function main() {
   const oms = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_OMS)) }, 'oms');
   const main = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) }, 'main');
   const omsDb = oms.firestore(), db = main.firestore();
+  omsDb.settings({ ignoreUndefinedProperties: true }); db.settings({ ignoreUndefinedProperties: true });
 
   // ---- Amazon ----
   const items = [], hp = {}, errors = {};
