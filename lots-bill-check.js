@@ -199,8 +199,12 @@ function compare(cart, bill, master) {
   for (const [, c, b] of sc) { if (matched.has(c.code) || used.has(b.barcode)) continue; matched.add(c.code); used.add(b.barcode); swaps.push({ name: c.name, billName: b.name, qty: c.qty, cartTotal: c.total, billTotal: b.total }); }
   const notBilled = open.filter((c) => !matched.has(c.code)).sort((a, b) => b.total - a.total);
   const extra = billList.filter((b) => !used.has(b.barcode)).sort((a, b) => b.total - a.total);
-  const qtyDiff = pairs.filter(([c, b]) => Math.abs(b.qty - c.qty) > 0.001)
-    .map(([c, b]) => ({ name: c.name || b.name, billName: b.name, cartQty: c.qty, billQty: b.qty, rate: b.rate, value: r2((b.qty - c.qty) * b.rate) }))
+  // same qty but a very different value = pack size billed wrong (e.g. 2 cases of 12 ordered, 2 single bottles billed)
+  const packOff = (c, b) => Math.abs(b.qty - c.qty) < 0.001 && c.total > 50 && (b.total < 0.6 * c.total || b.total > 1.6 * c.total);
+  const qtyDiff = pairs.filter(([c, b]) => Math.abs(b.qty - c.qty) > 0.001 || packOff(c, b))
+    .map(([c, b]) => (packOff(c, b)
+      ? { name: c.name || b.name, billName: b.name, cartQty: c.qty, billQty: b.qty, rate: b.rate, value: r2(b.total - c.total), pack: true, cartTotal: c.total, billTotal: b.total }
+      : { name: c.name || b.name, billName: b.name, cartQty: c.qty, billQty: b.qty, rate: b.rate, value: r2((b.qty - c.qty) * b.rate) }))
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
   const cartTotal = r2(cart.lines.reduce((s, x) => s + x.total, 0));
   return {
@@ -340,8 +344,8 @@ async function reportPdf(bill, res, order) {
     ['', 'Total not billed', '', res.notBilled.reduce((s, x) => s + x.qty, 0), '', inr(res.notBilledValue)]);
   if (res.extra.length) table(`${++sec}. Billed but NOT in cart (${res.extra.length} items)`, ['#', 'Product (as billed)', 'Barcode', 'Qty', 'Rate', 'Amount'], [0.05, 0.45, 0.17, 0.07, 0.12, 0.14],
     res.extra.map((b, i) => [i + 1, b.name, b.barcode, b.qty, inr(b.rate), inr(b.total)]), ['', 'Total extra billed', '', '', '', inr(res.extraValue)], (ri, i) => (i === 5 ? RED : null));
-  if (res.qtyDiff.length) table(`${++sec}. Billed with different quantity (${res.qtyDiff.length} items)`, ['#', 'Product', 'Cart qty', 'Billed', 'Diff', 'Value impact'], [0.05, 0.47, 0.1, 0.1, 0.08, 0.2],
-    res.qtyDiff.map((q, i) => { const d = q.billQty - q.cartQty; return [i + 1, q.name, q.cartQty, q.billQty, (d > 0 ? '+' : '') + d, (q.value > 0 ? '+' : '-') + inr(Math.abs(q.value)) + (q.value > 0 ? ' extra billed' : ' short billed')]; }),
+  if (res.qtyDiff.length) table(`${++sec}. Billed with different qty or pack (${res.qtyDiff.length} items)`, ['#', 'Product', 'Cart qty', 'Billed', 'Diff', 'Value impact'], [0.05, 0.47, 0.1, 0.1, 0.08, 0.2],
+    res.qtyDiff.map((q, i) => { const d = q.billQty - q.cartQty; return [i + 1, q.name + (q.pack ? ' (pack size? value differs)' : ''), q.cartQty, q.billQty, q.pack ? 'pack' : (d > 0 ? '+' : '') + d, (q.value > 0 ? '+' : '-') + inr(Math.abs(q.value)) + (q.value > 0 ? ' extra billed' : ' short billed')]; }),
     ['', 'Net qty impact', '', '', '', (res.qtyValue > 0 ? '+' : '-') + inr(Math.abs(res.qtyValue))],
     (ri, i, tot) => (i >= 4 ? ((tot ? res.qtyValue : res.qtyDiff[ri].value) > 0 ? RED : GREEN) : null));
   if (res.swaps.length) table(`${++sec}. Different variant billed (${res.swaps.length} items)`, ['#', 'In cart', 'Billed as', 'Qty', 'Cart', 'Bill'], [0.05, 0.33, 0.33, 0.07, 0.11, 0.11],
@@ -380,7 +384,9 @@ function message(bill, res, order) {
   const list = (arr, fmt, max = 8) => arr.slice(0, max).map(fmt).concat(arr.length > max ? [`  …and ${arr.length - max} more (see PDF)`] : []);
   if (res.notBilled.length) { L.push('', `❌ <b>Not billed: ${res.notBilled.length} items · ${inr0(res.notBilledValue)}</b>`); L.push(...list(res.notBilled, (c) => `• ${esc(c.name)} ×${c.qty} — ${inr0(c.total)}`)); }
   if (res.extra.length) { L.push('', `⚠️ <b>Billed but NOT ordered: ${res.extra.length} items · ${inr0(res.extraValue)}</b>`); L.push(...list(res.extra, (b) => `• ${esc(b.name)} ×${b.qty} — ${inr0(b.total)}`)); }
-  if (res.qtyDiff.length) { L.push('', `↕️ <b>Qty different: ${res.qtyDiff.length} items</b>`); L.push(...list(res.qtyDiff, (q) => `• ${esc(q.name)}: cart ${q.cartQty} → bill ${q.billQty} (${q.value > 0 ? '+' : '−'}${inr0(Math.abs(q.value))})`)); }
+  if (res.qtyDiff.length) { L.push('', `↕️ <b>Qty / pack different: ${res.qtyDiff.length} items</b>`); L.push(...list(res.qtyDiff, (q) => q.pack
+    ? `• ${esc(q.name)}: qty ${q.cartQty} both, but billed ${inr0(q.billTotal)} vs cart ${inr0(q.cartTotal)} — pack size? (${q.value > 0 ? '+' : '−'}${inr0(Math.abs(q.value))})`
+    : `• ${esc(q.name)}: cart ${q.cartQty} → bill ${q.billQty} (${q.value > 0 ? '+' : '−'}${inr0(Math.abs(q.value))})`)); }
   if (res.swaps.length) { L.push('', `🔁 <b>Different variant billed: ${res.swaps.length}</b>`); L.push(...list(res.swaps, (w) => `• ${esc(w.name)} → billed as ${esc(w.billName)} ×${w.qty}`)); }
   L.push('', `✔ ${res.matchedOk} items match.${res.extra.length || res.qtyDiff.some((q) => q.value > 0) ? ' Count the extra stock before paying.' : ' Check the delivery and claim the short items.'}`);
   return L.join('\n');
@@ -423,7 +429,7 @@ async function checkBill(inv, master, state, force) {
   const dupOf = [...new Set(pick.filter((u) => u.billedIn).map((u) => u.billedIn))];
   const order = {
     ...cartOf(pick), createdAtMs: Math.min(...pick.map((u) => u.group.createdAtMs)), edited: pick.some((u) => u.edited),
-    batchLabel: pick[0].group.batchTotal > 1 || pick.length > 1 ? 'Batch ' + pick.map((u) => u.bn).join(' + ') + ' of ' + Math.max(...pick.map((u) => u.group.batchTotal)) : '',
+    batchLabel: pick[0].group.batchTotal > 1 || pick.length > 1 ? 'Batch ' + pick.map((u) => u.bn).sort((a, b) => a - b).join(' + ') + ' of ' + Math.max(...pick.map((u) => u.group.batchTotal)) : '',
     status: batchStatus(pick, inv.no, billedUnits), dupOf,
   };
   log(`Bill covers: ${pick.map((u) => `${u.root.slice(0, 6)}#${u.bn} (${u.lines.length} items, cov ${u.cov.toFixed(2)})`).join(' + ')}${dupOf.length ? ' — ALREADY BILLED in ' + dupOf.join(', ') : ''}`);
