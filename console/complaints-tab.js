@@ -101,9 +101,39 @@
   }
 
   /* ---------- page ---------- */
+  var EMBED = false;
+  var SECTION = '<div class="panel" style="margin-bottom:12px"><div class="cp-chips" style="justify-content:space-between">' +
+      '<b style="font-size:15px;color:var(--x-text)">⭐ Amazon feedback &amp; account health</b>' +
+      '<span style="display:flex;gap:10px;align-items:center"><span id="cpSyncLine" style="font-size:12px;color:var(--x-muted)"></span>' +
+      '<button type="button" class="subbtn" id="cpSyncBtn" title="Fetch the latest feedback and account health from Amazon now (about 2–4 minutes)"><i class="ti ti-refresh"></i> Update now</button></span></div></div>' +
+    '<div class="cp-health" id="cpHealth"></div>' +
+    '<div class="panel"><div class="cp-chips" id="cpChips"></div>' +
+    '<div class="cp-chips" style="margin-top:10px"><input type="text" id="cpQ" placeholder="Search order ID, customer, product, words in the complaint…"></div></div>' +
+    '<div id="cpNote"></div><div id="cpList" style="max-height:620px;overflow:auto;padding-right:4px"><div class="cp-empty">Loading…</div></div>';
+  function wire(p) {
+    var deb; $("cpQ").addEventListener("input", function () { clearTimeout(deb); deb = setTimeout(function () { S.q = $("cpQ").value.trim().toLowerCase(); render(); }, 150); });
+    $("cpSyncBtn").addEventListener("click", syncNow);
+    p.addEventListener("click", function (e) {
+      var c = e.target.closest("[data-cp-f]"); if (c) { var f = c.dataset.cpF.split(":"); if (f[0] === "acc") S.acc = S.acc === f[1] ? "" : f[1]; else { S.view = f[1]; if (S.view === "msg") loadMsgs(); } render(); return; }
+      var cp = e.target.closest("[data-cp-copy]"); if (cp) { try { navigator.clipboard.writeText(cp.dataset.cpCopy); toast("Copied " + cp.dataset.cpCopy); } catch (er) {} return; }
+      var dn = e.target.closest("[data-cp-done]"); if (dn) { markDone(dn.dataset.cpDone, !S.done[dn.dataset.cpDone]); return; }
+      var ap = e.target.closest("[data-cp-send]"); if (ap) { sendReply(ap.dataset.cpSend); return; }
+    });
+  }
   function mount() {
     var bar = $("mainTabbar"), content = document.querySelector(".app-content");
-    if (!bar || !content || $("tab-complaints")) return;
+    if (!bar || !content || $("cpHost")) return;
+    var old = $("tab-complaints");
+    if (old) { // console's own Complaints tab (Gmail messages page) -> our section goes on top of it
+      EMBED = true;
+      var host = document.createElement("div"); host.id = "cpHost"; host.innerHTML = SECTION;
+      old.insertBefore(host, old.firstChild);
+      var btn = bar.querySelector('[data-tab="complaints"]');
+      if (btn && !$("cpSideCount")) btn.insertAdjacentHTML("beforeend", '<span class="rtab-count" id="cpSideCount" style="display:none">0</span>');
+      document.addEventListener("click", function (e) { if (e.target.closest('.tabbtn[data-tab="complaints"]')) load(false); });
+      wire(host); render();
+      return;
+    }
     var b = document.createElement("button");
     b.className = "tabbtn"; b.dataset.tab = "complaints";
     b.innerHTML = '<i class="ti ti-message-report tab-ic"></i>Complaints<span class="rtab-count" id="cpSideCount" style="display:none">0</span>';
@@ -111,15 +141,11 @@
     after ? after.insertAdjacentElement("afterend", b) : bar.appendChild(b);
     var sub = document.createElement("div");
     sub.className = "subtabbar no-print"; sub.id = "subtab-complaints"; sub.style.display = "none";
-    sub.innerHTML = '<span class="subtab-label">Complaints</span><span class="cp-muted" id="cpSyncLine" style="font-size:12px;color:var(--x-muted)">Amazon feedback + account health · buyer messages from Gmail</span><span style="flex:1"></span>' +
-      '<button type="button" class="subbtn" id="cpSyncBtn" title="Fetch the latest feedback and account health from Amazon now (about 2–4 minutes)"><i class="ti ti-refresh"></i> Update now</button>';
+    sub.innerHTML = '<span class="subtab-label">Complaints</span>';
     content.insertBefore(sub, content.firstChild);
     var p = document.createElement("div");
     p.id = "tab-complaints"; p.className = "tabpanel";
-    p.innerHTML = '<div class="cp-health" id="cpHealth"></div>' +
-      '<div class="panel"><div class="cp-chips" id="cpChips"></div>' +
-      '<div class="cp-chips" style="margin-top:10px"><input type="text" id="cpQ" placeholder="Search order ID, customer, product, words in the complaint…"></div></div>' +
-      '<div id="cpNote"></div><div id="cpList"><div class="cp-empty">Loading…</div></div>';
+    p.innerHTML = '<div id="cpHost">' + SECTION + "</div>";
     content.appendChild(p);
 
     b.addEventListener("click", function () {
@@ -131,14 +157,7 @@
       load(false); if (S.view === "msg") loadMsgs();
     });
     document.addEventListener("click", function (e) { var t = e.target.closest(".tabbtn[data-tab]"); if (t && t.dataset.tab !== "complaints") stopMsgs(); });
-    var deb; $("cpQ").addEventListener("input", function () { clearTimeout(deb); deb = setTimeout(function () { S.q = $("cpQ").value.trim().toLowerCase(); render(); }, 150); });
-    $("cpSyncBtn").addEventListener("click", syncNow);
-    p.addEventListener("click", function (e) {
-      var c = e.target.closest("[data-cp-f]"); if (c) { var f = c.dataset.cpF.split(":"); if (f[0] === "acc") S.acc = S.acc === f[1] ? "" : f[1]; else { S.view = f[1]; if (S.view === "msg") loadMsgs(); } render(); return; }
-      var cp = e.target.closest("[data-cp-copy]"); if (cp) { try { navigator.clipboard.writeText(cp.dataset.cpCopy); toast("Copied " + cp.dataset.cpCopy); } catch (er) {} return; }
-      var dn = e.target.closest("[data-cp-done]"); if (dn) { markDone(dn.dataset.cpDone, !S.done[dn.dataset.cpDone]); return; }
-      var ap = e.target.closest("[data-cp-send]"); if (ap) { sendReply(ap.dataset.cpSend); return; }
-    });
+    wire(p);
   }
 
   function healthCard(acc, h) {
@@ -214,10 +233,10 @@
   }
 
   function render() {
-    if (!$("tab-complaints")) return;
+    if (!$("cpHost") || !$("cpChips")) return;
     var negOpen = S.items.filter(function (x) { return x.rt <= 2 && !S.done[x.acc + "|" + x.o]; }).length;
     var sc = $("cpSideCount"); if (sc) { sc.textContent = negOpen; sc.style.display = negOpen ? "" : "none"; }
-    if (S.at && S.at.toDate) { var mn = Math.round((Date.now() - S.at.toDate().getTime()) / 60000); $("cpSyncLine").textContent = "Amazon feedback + account health · updated " + (mn < 1 ? "just now" : mn < 120 ? mn + " min ago" : Math.round(mn / 60) + " h ago") + " · buyer messages from Gmail"; }
+    if (S.at && S.at.toDate && $("cpSyncLine")) { var mn = Math.round((Date.now() - S.at.toDate().getTime()) / 60000); $("cpSyncLine").textContent = "updated " + (mn < 1 ? "just now" : mn < 120 ? mn + " min ago" : Math.round(mn / 60) + " h ago") ; }
     $("cpHealth").innerHTML = Object.keys(S.health).sort().map(function (a) { return healthCard(a, S.health[a]); }).join("");
     var cnt = function (fn) { return S.items.filter(function (x) { return (!S.acc || short(x.acc) === S.acc) && fn(x); }).length; };
     var accs = []; S.items.forEach(function (x) { var s = short(x.acc); if (accs.indexOf(s) < 0) accs.push(s); });
@@ -226,8 +245,7 @@
       ["view:neg", "Negative (1–2★)", cnt(function (x) { return x.rt <= 2; })],
       ["view:neu", "Neutral (3★)", cnt(function (x) { return x.rt === 3; })],
       ["view:all", "All feedback", cnt(function () { return true; })],
-      ["view:msg", "💬 Buyer messages & cases", S.msgs ? S.msgs.length : ""],
-    ].map(function (c) { var f = c[0].split(":"); return '<span class="cp-chip' + (S.view === f[1] ? " on" : "") + '" data-cp-f="' + c[0] + '">' + esc(c[1]) + (c[2] !== "" ? " <b>" + c[2] + "</b>" : "") + "</span>"; }).join("") +
+    ].concat(EMBED ? [] : [["view:msg", "💬 Buyer messages & cases", S.msgs ? S.msgs.length : ""]]).map(function (c) { var f = c[0].split(":"); return '<span class="cp-chip' + (S.view === f[1] ? " on" : "") + '" data-cp-f="' + c[0] + '">' + esc(c[1]) + (c[2] !== "" ? " <b>" + c[2] + "</b>" : "") + "</span>"; }).join("") +
       '<span class="cp-sep"></span>' + accs.map(function (a) { return '<span class="cp-chip' + (S.acc === a ? " on" : "") + '" data-cp-f="acc:' + esc(a) + '">' + esc(a) + "</span>"; }).join("");
     var errs = Object.keys(S.errors || {});
     $("cpNote").innerHTML = errs.length ? '<div class="cp-note">⚠ Amazon did not allow: ' + errs.map(function (a) { return "<b>" + esc(short(a)) + "</b>"; }).join(", ") + " — that account's key needs the new Amazon roles (re-authorize the app and update its GitHub key).</div>" : "";
@@ -263,7 +281,7 @@
   }
 
   mount(); document.addEventListener("DOMContentLoaded", mount);
-  var tries = 0, w = setInterval(function () { tries++; if ($("tab-complaints") || tries > 40) { clearInterval(w); return; } mount(); }, 500);
+  var tries = 0, w = setInterval(function () { tries++; if ($("cpHost") || tries > 40) { clearInterval(w); return; } mount(); }, 500);
   // side badge: count of negative feedback to handle (1 read once per page load, after 8 s)
   setTimeout(function () { if (!S.loaded) load(false); }, 8000);
 })();
