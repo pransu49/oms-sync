@@ -1,0 +1,49 @@
+name: Complaints (Amazon feedback + account health)
+
+# Read-only on Amazon. Builds the console's Complaints tab (aikm-oms-sync aikm_admin/complaintsIndex)
+# and sends a Telegram alert for new 1-2 star feedback. ~26 OMS + 2 main Firebase reads per run, 6 runs/day.
+on:
+  schedule:
+    - cron: '7 2,5,8,11,14,16 * * *'   # ~7:37 AM, 10:37, 1:37 PM, 4:37, 7:37, 9:37 PM IST
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true = print only'
+        default: 'false'
+
+concurrency:
+  group: complaints-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-save amazon-sp-api firebase-admin@12
+      - shell: bash
+        run: set -o pipefail; node complaints-sync.js 2>&1 | tee run.log
+        env:
+          SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
+          SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
+          SPAPI_REFRESH_TOKEN_PRASO: ${{ secrets.SPAPI_REFRESH_TOKEN }}
+          SPAPI_REFRESH_TOKEN_SASTASTORE: ${{ secrets.SPAPI_REFRESH_TOKEN_SASTASTORE }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+
+      - name: Report sync health to console
+        if: always() && inputs.dry_run != 'true'
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node report-health.js complaints "Complaints" run.log || true
