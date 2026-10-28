@@ -46,3 +46,6 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - Amazon refund files (Payments → Transaction View → Refund CSV), uploaded per account in Bulk Refund, live in ONE main-Firebase doc
   `aikm_admin/refundUpload` { accts: { <ACCOUNT>: { name, n, from, to, at, orders: { orderId: [date, amount] } } } }.
   Each upload replaces only that account. Console + `refund-propose.js` treat those orders as already refunded (stand-in until the Finance API role).
+- The Complaints tab (`console/complaints-tab.js`) is loaded by the block at the end of `console/refund-tab.js` (`aikmComplaintsJs`) — keep it.
+  Feedback + account health come from `complaints-sync.js` (SP-API reports, 6 runs/day) -> OMS Firebase `aikm_admin/complaintsIndex`.
+  Buyer messages are NOT in any Amazon API: they come from the per-account Gmail robots (main Firebase collection `amazon_complaints`).
