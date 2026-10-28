@@ -198,7 +198,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
         function timed(p, ms) { return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error("timeout")); }, ms); })]); }
         // the console's idle-pause can leave Firebase switched off -> switch it on and try again
         timed(ref.get(), 12000).catch(function () { try { db().enableNetwork(); } catch (e) {} return timed(ref.get(), 25000); })
-          .then(function (d) { var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true; learn(store); return Promise.all([loadReady(), loadUpMeta(), loadAmzRef()]); })
+          .then(function (d) { var x = d.exists ? d.data() : {}; store = x.orders || []; storeAt = x.at || null; loaded = true; learn(store); return Promise.all([loadReady(), loadUpMeta(), loadAmzRef(), loadApiRef()]); })
           .catch(function () { toast("Could not read refund data — check internet, then click the tab again.", true); })
           .then(function () { loading = null; render(); res(); });
       }, 300);
@@ -210,9 +210,13 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
   function refunded(i) {
     var r = (rlog.entries || []).filter(function (e) { return e.i === i && e.status === "done" && !e.probe; })[0];
     if (r) return r;
-    var x = amzRef[iToO[i]]; return x ? { at: x[0], amt: x[1], amz: 1 } : null;
+    var oid = iToO[i], c = apiRef[oid];
+    if (c) return { at: c.at, amt: c.r, amz: 1, api: 1 };
+    var x = amzRef[oid]; return x ? { at: x[0], amt: x[1], amz: 1 } : null;
   }
-  var iToO = {};
+  var iToO = {}, apiRef = {};
+  // Amazon's own refund records (Finances API, refund-check.yml) — 1 read per tab open
+  function loadApiRef() { return db().collection("aikm_admin").doc("refundChecks").get().then(function (d) { apiRef = (d.exists && d.data().orders) || {}; }).catch(function () {}); }
   function learn(list) { (list || []).forEach(function (o) { if (o && o.i) iToO[o.i] = o.o; }); }
   function listenLog() {
     if (unsubLog || !db()) return;
@@ -356,7 +360,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     var pend = store.filter(function (o) { return !refunded(o.i); });
     var amzDone = store.filter(function (o) { var r = refunded(o.i); return r && r.amz; }).length;
     $("rfKpiAvail").textContent = loaded ? pend.length : "–";
-    $("rfKpiAvailSub").textContent = loaded ? pend.filter(function (o) { return /^rto/.test(o.nb); }).length + " returned · " + pend.filter(function (o) { return o.nb === "late"; }).length + " pickup missed · " + pend.filter(function (o) { return o.nb === "lost"; }).length + " lost" + (amzDone ? " · " + amzDone + " already refunded (Amazon file)" : "") : "loading…";
+    $("rfKpiAvailSub").textContent = loaded ? pend.filter(function (o) { return /^rto/.test(o.nb); }).length + " returned · " + pend.filter(function (o) { return o.nb === "late"; }).length + " pickup missed · " + pend.filter(function (o) { return o.nb === "lost"; }).length + " lost" + (amzDone ? " · " + amzDone + " already refunded on Amazon" : "") : "loading…";
 
     $("rfMiss").innerHTML = missing.length ? '<div class="rf-miss"><b>Not found (' + missing.length + "):</b> " + missing.map(esc).join(", ") +
       '<br><span style="opacity:.85">Not found in OMS' + (upMeta ? " or in the saved export (" + esc(upMeta.name) + ")" : "") + ' — older? Upload a newer OMS export (top right); it replaces the saved one.</span></div>' : "";
@@ -375,7 +379,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
         var rf = refunded(o.i);
         if (rf) o.off = true;
         var tag = rf ? "rf-tag green" : o.nb ? "rf-tag red" : "rf-tag";
-        var nsTxt = rf ? "Refunded ✓ " + new Date(rf.at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) + (rf.amz ? " · Amazon file" : "") : o.nb ? "Refund pending" : "Not refund pending";
+        var nsTxt = rf ? "Refunded ✓ " + new Date(rf.at).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }) + (rf.api ? " · Amazon" : rf.amz ? " · Amazon file" : "") : o.nb ? "Refund pending" : "Not refund pending";
         var why = /^rto/.test(o.nb || "") ? "Shipment returned · " + o.ns.replace(/^rto/i, "RTO")
           : o.nb === "late" ? "Not picked up · Deliver By " + dd(o.db) + " passed"
           : o.nb === "lost" ? (/damage/i.test(o.ns) ? "Damaged" : "Lost") + " in transit"
