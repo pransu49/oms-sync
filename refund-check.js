@@ -54,6 +54,15 @@ if (require.main === module) (async () => {
   if (probe) { // "ACCOUNT:orderId,ACCOUNT:orderId"
     for (const pair of probe.split(',')) {
       const [acc, id] = pair.split(':').map((x) => x.trim());
+      // read-only access check: which Amazon roles does this key really have?
+      for (const [label, args] of [
+        ['Sellers (account)', { operation: 'getMarketplaceParticipations', endpoint: 'sellers' }],
+        ['Orders', { operation: 'getOrder', endpoint: 'orders', path: { orderId: id } }],
+        ['Finances (groups)', { operation: 'listFinancialEventGroups', endpoint: 'finances', query: { MaxResultsPerPage: 1 } }],
+      ]) {
+        try { const r = await client(acc).callAPI(args); console.log(`ACCESS ${acc} ${label}: OK`, JSON.stringify(r).slice(0, 160)); }
+        catch (e) { console.log(`ACCESS ${acc} ${label}: DENIED/ERROR ${e.code || ''} ${String(e.message || e).slice(0, 120)}`); }
+      }
       try { console.log(acc, id, '->', JSON.stringify(await refundOf(acc, id, true))); }
       catch (e) { console.log(acc, id, 'ERROR', e.code || '', e.message || e); }
       await sleep(2100);
