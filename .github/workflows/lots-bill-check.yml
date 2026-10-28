@@ -6,7 +6,7 @@ on:
     - cron: '*/20 4-10 * * *'
   push:
     branches: [main]
-    paths: ['lots-bill-check.js', '.github/workflows/lots-bill-check.yml']   # runs once right after an update
+    paths: ['lots-bill-check.js', '.github/workflows/lots-bill-check.yml']   # test run right after an update (log only, no Telegram)
   workflow_dispatch:
     inputs:
       bill:
@@ -47,7 +47,7 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: node lots-bill-check.js "${{ github.event.inputs.bill }}"
+        run: node lots-bill-check.js "${{ github.event.inputs.bill }}" ${{ github.event_name == 'push' && '--dry' || '' }}   # after a code update: dry run (log only)
 
       - name: Telegram alert if the check crashed
         if: failure()

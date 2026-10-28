@@ -1,17 +1,19 @@
 /**
  * LOTS-GN bill check robot.
  *
- * Every 20 min, 10 AM – 3 PM IST:
+ * Every 20 min, 10 AM – 4 PM IST:
  *   1. Looks for today's LOTS-GN tax invoice in LOTS' invoice storage — the same place the
  *      Purchase Bills page auto-fetches from (no login, no OTP).
- *   2. Finds the LOTS-GN order it belongs to in the Order Mapper (Firestore lotsCartQueue):
- *      all batches merged + your "Save my final cart" edits — the same cart as the Picking List PDF.
+ *   2. Finds which Order Mapper batch(es) the bill belongs to (Firestore lotsCartQueue). Big orders go to
+ *      LOTS in batches of 160 and LOTS bills each placed batch separately, so every bill is matched to the
+ *      batch(es) it covers — each batch's final cart incl. your "Save my final cart" edits.
  *   3. Compares bill vs cart and sends Telegram: not billed, billed but not ordered, qty differences
  *      — with a PDF report.
  * Read-only on LOTS. It never changes the cart or the bill.
  *
  *   node lots-bill-check.js            normal run (only new bills are checked)
  *   node lots-bill-check.js 1061027IN/005527   re-check one bill now (sends Telegram again)
+ *   node lots-bill-check.js --dry      re-check today's bills, log only (no Telegram, nothing saved)
  *
  * Firebase use: 1 read per run when there is no new bill; ~30 reads + 1 write when a new bill arrives.
  * Secrets: FIREBASE_SERVICE_ACCOUNT (main AIKM Firebase, has lotsCartQueue), TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID.
@@ -123,10 +125,17 @@ function mergeSeries(series) {
     else byBatch[bn].push = x;
   });
   nums.sort((a, b) => a - b);
-  const lines = {}, order = []; let failed = [], edited = 0;
+  const lines = {}, order = [], units = []; let failed = [], edited = 0;
   nums.forEach((bn) => {
     const g = byBatch[bn], use = g.refresh || g.push;
     if (g.refresh) edited++;
+    const ul = {};
+    (use.cartLines || []).forEach((l) => {
+      const k = keyOf(l.code), q = Number(l.qty) || 0; if (q <= 0) return;
+      if (!ul[k]) ul[k] = { code: k, name: l.name || '', qty: 0, total: 0, price: l.price };
+      ul[k].qty += q; ul[k].total += l.total != null ? Number(l.total) : (l.price != null ? l.price * q : 0);
+    });
+    units.push({ bn, edited: !!g.refresh, atMs: use.cartReadAtMs || use.createdAtMs || 0, lines: Object.values(ul).map((x) => ({ ...x, total: r2(x.total) })) });
     (use.cartLines || []).forEach((l) => {
       const k = keyOf(l.code), q = Number(l.qty) || 0; if (q <= 0) return;
       if (!lines[k]) { lines[k] = { code: k, name: l.name || '', qty: 0, total: 0, price: l.price }; order.push(k); }
@@ -136,8 +145,10 @@ function mergeSeries(series) {
   });
   failed = failed.filter((f) => !lines[keyOf(f.code)]);
   const times = series.map((s) => s.cartReadAtMs || s.createdAtMs || 0);
+  const newest = series.slice().sort((a, b) => (b.createdAtMs || 0) - (a.createdAtMs || 0))[0] || {};
   return {
-    createdAtMs: (series[0] || {}).createdAtMs || 0, lastAtMs: Math.max(...times), batches: nums.length, edited,
+    createdAtMs: (series[0] || {}).createdAtMs || 0, lastAtMs: Math.max(...times), batches: nums.length, edited, units,
+    batchTotal: Math.max(nums.length, ...series.map((x) => x.batchTotal || 1)), waiting: (newest.remainingItems || []).length,
     lines: order.map((k) => ({ ...lines[k], total: r2(lines[k].total) })), failed,
   };
 }
@@ -199,6 +210,67 @@ function compare(cart, bill, master) {
     qtyValue: r2(qtyDiff.reduce((s, x) => s + x.value, 0)),
   };
 }
+function hitter(bill, master) {
+  const bcs = new Set(bill.items.map((b) => b.barcode)), names = bill.items.map((b) => clean(b.name));
+  return (c) => {
+    const bc = master[c.code] && master[c.code].b;
+    if (bc && bcs.has(bc)) return true;
+    const cn = clean(c.name);
+    return names.some((n) => n && (cn.startsWith(n.slice(0, 25)) || n.startsWith(cn.slice(0, 25))));
+  };
+}
+// Which batch(es) does this bill cover? One LOTS bill = one placed batch (sometimes 2 batches billed together).
+// - coverage = share of a batch's products found on the bill (batches never share products, so this is sharp)
+// - the same order re-sent / re-saved: keep only the newest copy (skip a batch whose products are already picked)
+// - a batch already matched to an earlier bill is used only if nothing else fits (= possible duplicate bill)
+function pickBatches(groups, bill, master, billedUnits) {
+  const hit = hitter(bill, master), units = [];
+  groups.forEach((g) => g.units.forEach((u) => {
+    if (!u.lines.length) return;
+    const cov = u.lines.filter(hit).length / u.lines.length;
+    units.push({ ...u, root: g.root, id: `${g.root}#${u.bn}`, group: g, cov, billedIn: billedUnits[`${g.root}#${u.bn}`] || null });
+  }));
+  // an older send of the same products (order re-sent / re-built) is replaced by the newer one
+  units.forEach((u) => {
+    const mine = new Set(u.lines.map((l) => l.code));
+    u.superseded = units.some((v) => v !== u && v.atMs > u.atMs && v.lines.filter((l) => mine.has(l.code)).length >= mine.size * 0.5);
+  });
+  const pickFrom = (min) => {
+    const c = units.filter((u) => u.cov >= min && !u.superseded)
+      .sort((a, b) => (!!a.billedIn - !!b.billedIn) || (Math.round(b.cov * 20) - Math.round(a.cov * 20)) || (b.atMs - a.atMs));
+    const pick = [], covered = new Set();
+    for (const u of c) {
+      const codes = u.lines.map((l) => l.code), dup = codes.filter((x) => covered.has(x)).length;
+      if (dup >= codes.length * 0.5) continue;
+      pick.push(u); codes.forEach((x) => covered.add(x));
+    }
+    return pick;
+  };
+  let pick = pickFrom(0.5);
+  if (!pick.length) pick = pickFrom(0.2).slice(0, 1);     // heavily short-billed: best single batch
+  log('Batches:', units.map((u) => `${u.root.slice(0, 6)}#${u.bn} ${u.lines.length} items cov ${u.cov.toFixed(2)}${u.billedIn ? ' billed ' + u.billedIn : ''}${u.superseded ? ' (older copy)' : ''}`).join(' | ') || 'none');
+  return pick;
+}
+function cartOf(pick) {
+  const m = {};
+  pick.forEach((u) => u.lines.forEach((l) => { const x = m[l.code] || (m[l.code] = { ...l, qty: 0, total: 0 }); x.qty += l.qty; x.total = r2(x.total + l.total); }));
+  return { lines: Object.values(m) };
+}
+// one line per batch of the order(s): which bill it went on, or still waiting
+function batchStatus(pick, billNo, billedUnits) {
+  const roots = [...new Set(pick.map((u) => u.root))], ids = new Set(pick.map((u) => u.id)), out = [];
+  roots.forEach((r) => {
+    const g = pick.find((u) => u.root === r).group;
+    if (g.batchTotal <= 1 && !g.waiting) return;
+    const parts = [];
+    for (let bn = 1; bn <= g.batchTotal; bn++) {
+      const id = `${r}#${bn}`, u = g.units.find((x) => x.bn === bn);
+      parts.push(`B${bn} ${ids.has(id) ? '🧾 this bill' : billedUnits[id] ? '✅ ' + billedUnits[id] : u ? '⏳ not billed yet' : '⏸ not sent to LOTS yet'}`);
+    }
+    out.push(`Order of ${new Date(g.createdAtMs + 5.5 * 3600e3).toISOString().slice(5, 16).replace('T', ' ')} · ${g.batchTotal} batches: ${parts.join(' · ')}${g.waiting ? ` · ${g.waiting} products still waiting to be sent` : ''}`);
+  });
+  return out;
+}
 function overlap(cart, bill, master) {
   const bcs = new Set(bill.items.map((b) => b.barcode)), names = bill.items.map((b) => clean(b.name));
   let hit = 0;
@@ -231,7 +303,7 @@ async function reportPdf(bill, res, order) {
     page.drawRectangle({ x: 0, y: H - bh - 3, width: W, height: 3, color: GOLD });
     if (first) {
       text('LOTS-GN Bill vs Cart - Reconciliation', M, H - 34, { size: 16, bold: true, color: GOLD });
-      text(`Invoice ${bill.billNo} dated ${bill.billDate.split('-').reverse().join('/')}  -  Order Mapper cart of ${new Date(order.createdAtMs + 5.5 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} IST${order.batches > 1 ? ` (${order.batches} batches)` : ''}${order.edited ? ' incl. your edits' : ''}`, M, H - 54, { size: 8.5, color: rgb(0.9, 0.88, 0.8) });
+      text(`Invoice ${bill.billNo} dated ${bill.billDate.split('-').reverse().join('/')}  -  Order Mapper cart of ${new Date(order.createdAtMs + 5.5 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')} IST${order.batchLabel ? ` - ${order.batchLabel}` : ''}${order.edited ? ' incl. your edits' : ''}`, M, H - 54, { size: 8.5, color: rgb(0.9, 0.88, 0.8) });
     } else text('LOTS-GN Bill vs Cart - ' + bill.billNo, M, H - 22, { size: 10, bold: true, color: GOLD });
     y = H - bh - 3 - 18;
   };
@@ -244,6 +316,9 @@ async function reportPdf(bill, res, order) {
   page.drawRectangle({ x: M, y: y - 34, width: CW, height: 40, color: CREAM, borderColor: GOLD, borderWidth: 0.6 });
   k.forEach(([a, b], i) => { text(a, M + 8 + i * kw, y - 8, { size: 6.5, color: MUTED }); text(fit(b, kw - 12, bold, 8.5), M + 8 + i * kw, y - 24, { size: 8.5, bold: true, color: i >= 2 && !(i === 4 && !res.extra.length) ? RED : i === 4 ? GREEN : INK }); });
   y -= 52;
+  if (order.dupOf && order.dupOf.length) { text(`WARNING: these products were already billed in ${order.dupOf.join(', ')} - possible duplicate bill.`, M, y, { size: 9.5, bold: true, color: RED }); y -= 16; }
+  (order.status || []).forEach((t) => { text(t.replace(/🧾|✅|⏳|⏸/g, '').replace(/\s+/g, ' '), M, y, { size: 8, color: MUTED }); y -= 12; });
+  if ((order.status || []).length) y -= 6;
   const table = (title, head, widths, rows, total, colorCol) => {
     ensure(60);
     text(title, M, y, { size: 11, bold: true, color: NAVY }); y -= 10;
@@ -279,7 +354,9 @@ async function reportPdf(bill, res, order) {
 }
 
 // ---------------- 6) Telegram ----------------
+let DRY = process.argv.includes('--dry');
 async function tg(method, body, isForm) {
+  if (DRY) { log(`[dry run] Telegram ${method}:`, isForm ? '(PDF)' : String(body.text).replace(/<[^>]+>/g, '').slice(0, 1500)); return true; }
   const token = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chat) { log('Telegram not sent: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID missing'); return false; }
   try {
@@ -295,9 +372,11 @@ const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</
 function message(bill, res, order) {
   const ok = !res.notBilled.length && !res.extra.length && !res.qtyDiff.length && !res.swaps.length;
   const L = [];
-  L.push(`${ok ? '✅' : '🧾'} <b>LOTS-GN bill check</b> — ${esc(bill.billNo)}`);
+  L.push(`${ok ? '✅' : '🧾'} <b>LOTS-GN bill check</b> — ${esc(bill.billNo)}${order.batchLabel ? ` · ${esc(order.batchLabel)}` : ''}`);
   L.push(`Cart ${inr0(res.cartTotal)} (${res.cartLines} items) · Bill ${inr0(bill.total)} (${bill.items.length} lines)`);
-  if (ok) { L.push('', 'Every cart item is billed with the same quantity.'); return L.join('\n'); }
+  if (order.dupOf && order.dupOf.length) L.push(`🚨 <b>These products were already billed in ${esc(order.dupOf.join(', '))} — possible DUPLICATE bill.</b>`);
+  (order.status || []).forEach((t) => L.push(esc(t)));
+  if (ok) { L.push('', 'Every cart item of this batch is billed with the same quantity.'); return L.join('\n'); }
   const list = (arr, fmt, max = 8) => arr.slice(0, max).map(fmt).concat(arr.length > max ? [`  …and ${arr.length - max} more (see PDF)`] : []);
   if (res.notBilled.length) { L.push('', `❌ <b>Not billed: ${res.notBilled.length} items · ${inr0(res.notBilledValue)}</b>`); L.push(...list(res.notBilled, (c) => `• ${esc(c.name)} ×${c.qty} — ${inr0(c.total)}`)); }
   if (res.extra.length) { L.push('', `⚠️ <b>Billed but NOT ordered: ${res.extra.length} items · ${inr0(res.extraValue)}</b>`); L.push(...list(res.extra, (b) => `• ${esc(b.name)} ×${b.qty} — ${inr0(b.total)}`)); }
@@ -334,17 +413,20 @@ async function checkBill(inv, master, state, force) {
   const snap = await initDb().collection(QUEUE).where('createdAtMs', '>=', billAtMs - LOOKBACK_H * 3600e3).orderBy('createdAtMs', 'desc').limit(40).get();
   const groups = groupsFrom(snap.docs.map((x) => ({ id: x.id, d: x.data() })))
     .filter((g) => g.lines.length && g.createdAtMs < billAtMs);
-  const usedRoots = new Set(Object.values(state.done || {}).filter((x) => x.no !== inv.no).map((x) => x.root));
-  const scored = groups.map((g) => ({ g, s: overlap(g, bill, master) - (usedRoots.has(g.root) ? 0.25 : 0) })).sort((a, b) => b.s - a.s);
-  log('Candidate orders:', scored.map((x) => `${x.g.root.slice(0, 6)} ${x.g.lines.length} items ${new Date(x.g.createdAtMs).toISOString().slice(0, 16)} score ${x.s.toFixed(2)}`).join(' | ') || 'none');
-  // same order sent more than once (re-sent / re-saved): take the NEWEST of the near-equal matches
-  const top = scored.length ? scored[0].s : 0;
-  const best = scored.filter((x) => x.s >= top - 0.05).sort((a, b) => b.g.lastAtMs - a.g.lastAtMs)[0];
-  if (!best || best.s < 0.2) {
+  const billedUnits = {};
+  Object.values(state.done || {}).forEach((x) => { if (x.no !== inv.no) (x.units || []).forEach((id) => { billedUnits[id] = x.no; }); });
+  const pick = pickBatches(groups, bill, master, billedUnits);
+  if (!pick.length) {
     const sentNo = await tg('sendMessage', { text: `🧾 LOTS-GN bill ${inv.no} (${inr0(bill.total)}, ${bill.items.length} lines) arrived, but no matching LOTS-GN order was found in the Order Mapper for the last 4 days. Was it ordered by hand? Use "Read hand-filled LOTS cart" before ordering next time.` });
-    return { no: inv.no, at: inv.at, root: null, billTotal: bill.total, note: 'no matching order', sent: sentNo };
+    return { no: inv.no, at: inv.at, root: null, units: [], billTotal: bill.total, note: 'no matching order', sent: sentNo };
   }
-  const order = best.g;
+  const dupOf = [...new Set(pick.filter((u) => u.billedIn).map((u) => u.billedIn))];
+  const order = {
+    ...cartOf(pick), createdAtMs: Math.min(...pick.map((u) => u.group.createdAtMs)), edited: pick.some((u) => u.edited),
+    batchLabel: pick[0].group.batchTotal > 1 || pick.length > 1 ? 'Batch ' + pick.map((u) => u.bn).join(' + ') + ' of ' + Math.max(...pick.map((u) => u.group.batchTotal)) : '',
+    status: batchStatus(pick, inv.no, billedUnits), dupOf,
+  };
+  log(`Bill covers: ${pick.map((u) => `${u.root.slice(0, 6)}#${u.bn} (${u.lines.length} items, cov ${u.cov.toFixed(2)})`).join(' + ')}${dupOf.length ? ' — ALREADY BILLED in ' + dupOf.join(', ') : ''}`);
   const res = compare(order, bill, master);
   log(`Not billed ${res.notBilled.length} (${res.notBilledValue}) · extra ${res.extra.length} (${res.extraValue}) · qty diff ${res.qtyDiff.length} · ok ${res.matchedOk}`);
   const pdfBuf = await reportPdf(bill, res, order);
@@ -359,7 +441,7 @@ async function checkBill(inv, master, state, force) {
   fd.append('caption', `LOTS-GN ${bill.billNo} vs cart`);
   await tg('sendDocument', fd, true);
   return {
-    no: inv.no, at: inv.at, root: order.root, billTotal: bill.total, cartTotal: res.cartTotal, checkedAt: new Date().toISOString(), sent,
+    no: inv.no, at: inv.at, root: pick[0].root, units: pick.map((u) => u.id), billTotal: bill.total, cartTotal: res.cartTotal, checkedAt: new Date().toISOString(), sent,
     notBilled: res.notBilled.map((c) => ({ code: c.code, name: c.name, qty: c.qty, total: c.total })),
     extra: res.extra.map((b) => ({ barcode: b.barcode, name: b.name, qty: b.qty, total: b.total })),
     qtyDiff: res.qtyDiff.map((q) => ({ name: q.name, cartQty: q.cartQty, billQty: q.billQty, value: q.value })), swaps: res.swaps, matchedOk: res.matchedOk,
@@ -367,7 +449,8 @@ async function checkBill(inv, master, state, force) {
 }
 
 async function main() {
-  const only = process.argv[2] && process.argv[2] !== 'local' ? process.argv[2].replace('/', '-') : null;
+  const arg = process.argv.slice(2).find((x) => x && !x.startsWith('--'));
+  const only = arg ? arg.replace('/', '-') : null;
   const now = istNow();
   const master = await loadMaster();
   const base = await invoiceBase();
@@ -379,26 +462,27 @@ async function main() {
   const state = (await ref.get()).data() || { done: {} };
   state.done = state.done || {};
   // new bills + bills whose Telegram alert did not go out yet (max 3 tries)
-  const todo = today.filter((x) => only || !state.done[x.file] || (!state.done[x.file].sent && (state.done[x.file].tries || 1) < 3));
+  const todo = today.filter((x) => only || DRY || !state.done[x.file] || (!state.done[x.file].sent && (state.done[x.file].tries || 1) < 3));
   let changed = false;
   for (const inv of todo) {
     try { const tries = ((state.done[inv.file] || {}).tries || 0) + 1; state.done[inv.file] = { ...(await checkBill(inv, master, state, !!only)), tries }; changed = true; }
     catch (e) { log('FAILED', inv.no, e.message); await tg('sendMessage', { text: `🔴 LOTS-GN bill check failed for ${inv.no}: ${e.message}` }); }
   }
-  // 3 PM: an order was placed but no LOTS-GN bill came today -> one reminder
-  if (!only && !today.length && now.hour >= 15 && state.noBillAlert !== now.date) {
-    const since = Date.now() - 30 * 3600e3;
-    const snap = await initDb().collection(QUEUE).where('createdAtMs', '>=', since).orderBy('createdAtMs', 'desc').limit(30).get();
-    const groups = groupsFrom(snap.docs.map((x) => ({ id: x.id, d: x.data() }))).filter((g) => g.lines.length);
-    const billedRoots = new Set(Object.values(state.done).map((x) => x.root));
-    const waiting = groups.filter((g) => !billedRoots.has(g.root));
-    if (waiting.length) {
-      const g = waiting[0];
-      await tg('sendMessage', { text: `⏳ No LOTS-GN bill uploaded yet today. Pending order: ${g.lines.length} items (${inr0(g.lines.reduce((s, x) => s + x.total, 0))}). The robot keeps checking — ask LOTS to upload the bill.` });
+  // 3 PM: batches of the newest LOTS-GN order still without a bill -> one reminder a day
+  if (!only && !DRY && now.hour >= 15 && state.noBillAlert !== now.date) {
+    const snap = await initDb().collection(QUEUE).where('createdAtMs', '>=', Date.now() - 30 * 3600e3).orderBy('createdAtMs', 'desc').limit(30).get();
+    const g = groupsFrom(snap.docs.map((x) => ({ id: x.id, d: x.data() }))).filter((x) => x.lines.length).sort((a, b) => b.lastAtMs - a.lastAtMs)[0];
+    if (g) {
+      const billed = new Set(); Object.values(state.done).forEach((x) => (x.units || []).forEach((id) => billed.add(id)));
+      const open = g.units.filter((u) => u.lines.length && !billed.has(`${g.root}#${u.bn}`));
+      if (open.length) {
+        const val = open.reduce((s, u) => s + u.lines.reduce((t, l) => t + l.total, 0), 0);
+        await tg('sendMessage', { text: `⏳ LOTS-GN: no bill yet for ${g.batchTotal > 1 ? 'batch ' + open.map((u) => u.bn).join(', ') + ' of ' + g.batchTotal : 'your last order'} (${open.reduce((s, u) => s + u.lines.length, 0)} items, ${inr0(val)}). The robot keeps checking until 4 PM — ask LOTS to upload the bill.` });
+      }
     }
     state.noBillAlert = now.date; changed = true;
   }
-  if (changed) {
+  if (changed && !DRY) {
     const keys = Object.keys(state.done).sort((a, b) => (state.done[b].at || '').localeCompare(state.done[a].at || '')).slice(0, 60);
     state.done = Object.fromEntries(keys.map((k) => [k, state.done[k]]));
     state.updatedAt = new Date().toISOString();
@@ -407,7 +491,7 @@ async function main() {
   log('Done.');
 }
 
-module.exports = { parseBill, mergeSeries, groupsFrom, compare, overlap, reportPdf, message, nameScore, listInvoices, invoiceBase };
+module.exports = { pickBatches, cartOf, batchStatus, parseBill, mergeSeries, groupsFrom, compare, overlap, reportPdf, message, nameScore, listInvoices, invoiceBase };
 if (require.main === module) main().then(() => process.exit(0)).catch((e) => {
   console.error(e);
   const isQuota = /RESOURCE_EXHAUSTED|Quota exceeded/i.test(String(e && e.message));
