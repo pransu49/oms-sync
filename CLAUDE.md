@@ -49,3 +49,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - The Complaints tab (`console/complaints-tab.js`) is loaded by the block at the end of `console/refund-tab.js` (`aikmComplaintsJs`) — keep it.
   Feedback + account health come from `complaints-sync.js` (SP-API reports, 6 runs/day) -> OMS Firebase `aikm_admin/complaintsIndex`.
   Buyer messages are NOT in any Amazon API: they come from the per-account Gmail robots (main Firebase collection `amazon_complaints`).
+- **LOTS-GN bill check** (`lots-bill-check.js`, workflow `lots-bill-check.yml`, owner 28 Oct 2026): every 20 min 10 AM–4 PM IST it reads
+  today's LOTS-GN tax invoice from LOTS' invoice storage (same source as the Purchase Bills page auto-fetch — no login/OTP), merges the
+  ordered cart from main-Firebase `lotsCartQueue` exactly like the Picking List PDF (all batches + "Save my final cart" edits), compares
+  (barcode via lots-price-sync's `lots-item-master.json`, then name), and sends Telegram text + PDF. State: ONE doc `aikm_admin/lotsBillCheck`
+  (1 read per run; ~40 reads + 1 write per new bill). Read-only on LOTS — never touches the cart.
