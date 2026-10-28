@@ -21,6 +21,11 @@
 - The Amazon robot does NOT change prices (owner, 27 Oct 2026): `spapi-sync.js` runs in suggest-only mode unless the workflow sets
   `PRICE_AUTO=on`. Suggestions go to ONE doc per account, `spapiSnapshots/<acct>_priceSuggest` (quota-safe: 1 read + 1 write per run), and are shown by `console/price-suggest.js`, loaded by the block
   at the end of `console/amazon-name-search.js` (`aikmPriceSuggestJs`). Keep that block. Do not turn PRICE_AUTO on without the owner.
+- **SP-API guard** (`sp-guard.js`, owner 28 Oct 2026): every `spClient.callAPI` in `spapi-sync.js` goes through it. It pauses an API for 24 h
+  after "no permission" (403), slows down on "too fast" (429), skips SKUs Amazon said don't exist (404) for 3 days, and counts calls in
+  `spapiSnapshots/<acct>_guard` (1 read + 1 write per run). Shown as the 🩺 pill on the Amazon page (`console/api-health.js`, block `aikmApiHealthJs`
+  at the end of `amazon-name-search.js` — keep it). Keep the client option `auto_request_throttled: false` (the guard does the retries).
+  The shipping-label (MFN) test call runs only with env `SPAPI_MFN_TEST=on`.
 
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.

@@ -23,9 +23,19 @@ const spClient = new SellingPartnerAPI({
     SELLING_PARTNER_APP_CLIENT_ID: process.env.SPAPI_CLIENT_ID,
     SELLING_PARTNER_APP_CLIENT_SECRET: process.env.SPAPI_CLIENT_SECRET,
   },
+  // "Too fast" retries are done by sp-guard.js (it slows down instead of hammering Amazon).
+  options: { auto_request_throttled: false },
 });
 
 const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
+// API guard (28 Oct 2026): pauses APIs with no permission, slows down on "too fast", skips SKUs Amazon
+// said do not exist, and counts every call. See sp-guard.js. State: spapiSnapshots/<account>_guard.
+const apiGuard = require('./sp-guard').createGuard({
+  db, docId: `${ACCOUNT_LABEL}_guard`, account: ACCOUNT_LABEL,
+  notify: (t) => require('./telegram').notify(t, { html: true }),
+  isLive: (sku) => inventoryFresh && reportSkus.has(sku),
+});
+apiGuard.wrap(spClient);
 // QUICK vs FULL sync
 //   quick (every 15 min): write-backs, orders changed since last sync, stock/price/MRP report.
 //   full  (hourly Praso / 2-hourly Sasta Store): everything, incl. competitor prices & buy box.
@@ -274,7 +284,8 @@ async function syncOrders() {
     if (!(existing && existing.items && existing.items.length)) await new Promise((r) => setTimeout(r, 600));
 
     let amazonFees = existing && existing.amazonFees != null ? existing.amazonFees : null;
-    if (amazonFees == null && (!existing || SYNC_MODE === 'full')) try {
+    // Finance API paused by the guard (no permission yet) -> do not even try, no waiting.
+    if (amazonFees == null && (!existing || SYNC_MODE === 'full') && !apiGuard.isBlocked('finances', 'listFinancialEventsByOrderId')) try {
       const finRes = await spClient.callAPI({
         operation: 'listFinancialEventsByOrderId',
         endpoint: 'finances',
@@ -293,7 +304,7 @@ async function syncOrders() {
       });
       if (hasFeeData) amazonFees = Math.abs(feeTotal);
       await new Promise((r) => setTimeout(r, 600));
-    } catch (e) { financeFailCount++; await new Promise((r) => setTimeout(r, 600)); }
+    } catch (e) { financeFailCount++; if (!e.guardSkipped) await new Promise((r) => setTimeout(r, 600)); }
 
     const ref = db.collection('spapiOrders').doc(`${ACCOUNT_LABEL}_${order.AmazonOrderId}`);
     const orderData = {
@@ -2359,6 +2370,11 @@ async function publishListingIndex() {
 }
 
 async function run() {
+  await apiGuard.load();
+  try { await runSync(); } finally { await apiGuard.save(); }
+}
+
+async function runSync() {
   if (SYNC_MODE === 'fast') {
     try {
       const m = (await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_meta`).get()).data() || {};
@@ -2504,6 +2520,8 @@ async function run() {
   await publishListingIndex().catch((e) => console.warn('Listing index skipped (sync continues):', e.message || e));
 
   if (SYNC_MODE === 'fast') { console.log(`Quick sync complete in ${Math.round((Date.now() - RUN_STARTED) / 1000)}s.`); return; }
+  // Step 4 (shipping-label API test) runs only on request: it failed 1.2K times (no permission) - owner 28 Oct 2026.
+  if (String(process.env.SPAPI_MFN_TEST || '') !== 'on') { console.log('SP-API sync complete.'); return; }
   console.log('Step 4: testing Merchant Fulfillment API access (shipping labels)...');
   try {
     const mfnTest = await spClient.callAPI({
