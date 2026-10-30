@@ -38,18 +38,28 @@ const inr = (n) => 'Rs ' + Number(n || 0).toLocaleString('en-IN', { minimumFract
 const inr0 = (n) => '₹' + Math.round(Number(n || 0)).toLocaleString('en-IN');
 
 // ---------------- 1) LOTS invoice storage (same calls as the Purchase Bills page) ----------------
+// LOTS' invoice address book sometimes refuses (HTTP 403 since 30 Oct 2026); the storage link itself keeps working,
+// so fall back to the last known link (the Purchase Bills page does the same with its saved "base").
+const KNOWN_BASE = process.env.LOTS_INVOICE_BASE || 'https://objectstorage.ap-hyderabad-1.oraclecloud.com/p/2rhzcKf4iMfLfND2NHJVzEWC7cYm0lKdEccWy2Q7OAV46vYMGZnI7aYPI3BkuxLr/n/axg29whcmhb3/b/cpwi-invoices/o/';
 async function invoiceBase() {
-  const r = await fetch('https://prd-wrapper-api.lotswholesale.com/inv/v1/card/' + encodeURIComponent(CARD));
-  if (!r.ok) throw new Error(`LOTS invoice list did not answer (HTTP ${r.status})`);
-  const a = await r.json();
-  if (!a[0] || !a[0].url) throw new Error('LOTS invoice list is empty for this card');
-  return a[0].url.split('/o/')[0] + '/o/';
+  try {
+    const r = await fetch('https://prd-wrapper-api.lotswholesale.com/inv/v1/card/' + encodeURIComponent(CARD));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const a = await r.json();
+    if (a[0] && a[0].url) return a[0].url.split('/o/')[0] + '/o/';
+    throw new Error('empty list');
+  } catch (e) {
+    log(`LOTS invoice address book did not answer (${e.message}) - using the saved storage link.`);
+    return KNOWN_BASE;
+  }
 }
 async function listInvoices(base, prefix) {
   const out = []; let start = '';
   for (let p = 0; p < 40; p++) {
     const u = `${base}?prefix=${encodeURIComponent(`prod/${CARD}/${prefix}`)}&fields=name,size,timeCreated${start ? '&start=' + encodeURIComponent(start) : ''}`;
-    const j = await (await fetch(u)).json();
+    const res = await fetch(u);
+    if (!res.ok) throw new Error(`LOTS invoice storage refused the list (HTTP ${res.status}) - the storage link may have changed; open the Purchase Bills page once and tell Claude.`);
+    const j = await res.json();
     out.push(...(j.objects || []));
     if (!j.nextStartWith) break;
     start = j.nextStartWith;
