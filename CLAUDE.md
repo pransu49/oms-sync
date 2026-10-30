@@ -49,7 +49,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - The Complaints tab (`console/complaints-tab.js`) is loaded by the block at the end of `console/refund-tab.js` (`aikmComplaintsJs`) — keep it.
   Feedback + account health come from `complaints-sync.js` (SP-API reports, 6 runs/day) -> OMS Firebase `aikm_admin/complaintsIndex`.
   Buyer messages are NOT in any Amazon API: they come from the per-account Gmail robots (main Firebase collection `amazon_complaints`).
-- **LOTS-GN bill check** (`lots-bill-check.js`, workflow `lots-bill-check.yml`, owner 28 Oct 2026): every 20 min 10 AM–4 PM IST it reads
+- **LOTS-GN bill check** (`lots-bill-check.js`, workflow `lots-bill-check.yml`, owner 28 Oct 2026): every 10 min 10 AM–8 PM IST (started after "Sync OMS Guru Orders", which cron-job.org runs; GitHub schedule = backup) it reads
   today's (and missed last-3-days) LOTS-GN tax invoice from LOTS' invoice storage (same source as the Purchase Bills page auto-fetch — no login/OTP), matches it to
   the Order Mapper BATCH(ES) it covers in main-Firebase `lotsCartQueue` (LOTS bills each placed batch separately; per batch = robot upload or
   newest "Save my final cart"; older re-sent copies ignored; a batch already on an earlier bill = duplicate-bill alert), compares
