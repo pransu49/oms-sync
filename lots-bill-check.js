@@ -1,7 +1,7 @@
 /**
  * LOTS-GN bill check robot.
  *
- * Every 20 min, 10 AM – 4 PM IST:
+ * Every 10 min, 10 AM – 8 PM IST (started after each OMS sync run):
  *   1. Looks for today's LOTS-GN tax invoice in LOTS' invoice storage — the same place the
  *      Purchase Bills page auto-fetches from (no login, no OTP).
  *   2. Finds which Order Mapper batch(es) the bill belongs to (Firestore lotsCartQueue). Big orders go to
@@ -464,6 +464,13 @@ async function main() {
   const today = all.filter((x) => x.type === 'IN' && x.file.startsWith(GN_PREFIX) && (only ? x.file === only : istDate(x.at) === now.date));
   log(`LOTS-GN bills ${only ? 'asked for' : 'uploaded today'}: ${today.map((x) => x.no).join(', ') || 'none'}`);
 
+  // bills from the last 3 days that were never checked (robot did not run that day) are checked too
+  if (!only) {
+    const back = all.filter((x) => x.type === 'IN' && x.file.startsWith(GN_PREFIX) && Date.now() - new Date(x.at).getTime() < 3 * 86400e3 && !today.includes(x));
+    today.push(...back);
+  }
+  // no LOTS-GN bill and before the 3 PM reminder: nothing to do, don't touch Firebase
+  if (!only && !DRY && !today.length && now.hour < 15) { log('No bill yet - nothing to do.'); return; }
   const ref = initDb().collection(STATE_DOC[0]).doc(STATE_DOC[1]);
   const state = (await ref.get()).data() || { done: {} };
   state.done = state.done || {};

@@ -1,9 +1,13 @@
 name: LOTS-GN Bill Check
 
 on:
+  # GitHub's own timer is unreliable (fired 2x in 2 days, hours late). Ride on the OMS sync, which
+  # cron-job.org starts every 10 min; the gate below lets it through only 10 AM - 8 PM IST.
+  workflow_run:
+    workflows: ['Sync OMS Guru Orders']
+    types: [completed]
   schedule:
-    # every 20 min, 10:00 AM – 3:40 PM IST (LOTS uploads bills 10 AM – 2 PM)
-    - cron: '*/20 4-10 * * *'
+    - cron: '*/30 4-14 * * *'   # backup only
   push:
     branches: [main]
     paths: ['lots-bill-check.js', '.github/workflows/lots-bill-check.yml']   # test run right after an update (log only, no Telegram)
@@ -23,11 +27,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Only inside the bill window (10 AM – 4 PM IST) unless started by hand
+      - name: Only inside the bill window (10 AM – 8 PM IST) unless started by hand
         id: gate
         run: |
           H=$(TZ=Asia/Kolkata date +%H)
-          if [ "${{ github.event_name }}" != "schedule" ] || { [ "$H" -ge 10 ] && [ "$H" -lt 16 ]; }; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "Outside 10 AM–4 PM IST - skipping."; fi
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$H" -ge 10 ] && [ "$H" -lt 20 ]; }; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "Outside 10 AM–8 PM IST - skipping."; fi
 
       - uses: actions/checkout@v4
         if: steps.gate.outputs.go == 'true'
