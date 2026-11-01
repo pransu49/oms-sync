@@ -96,7 +96,10 @@ async function parseBill(buf) {
   const items = []; let totalRow = null, skipped = 0;
   for (const t of rows) {
     if (t[0] === 'Total:') { totalRow = t; break; }
-    const a = /^[A-Z]$/.test(t[0]) ? t.slice(1) : /^[A-Z]\s+\d{6,14}$/.test(t[0]) ? [t[0].replace(/^[A-Z]\s+/, ''), ...t.slice(1)] : t;
+    // article no. may carry a short prefix: "A", "TM", "*" — alone in the first cell or stuck to the number
+    let a = t;
+    if (/^[A-Z*]{1,4}$/.test(a[0]) && /^\d{6,14}$/.test(a[1] || '')) a = a.slice(1);
+    const m0 = String(a[0] || '').match(/^[A-Z*]{1,4}\s*(\d{6,14})$/); if (m0) a = [m0[1], ...a.slice(1)];
     if (!/^\d{6,14}$/.test(a[0]) || a.length < 15) continue;
     const d = a.slice(-14), [q, , , amt, disc, taxable, cgst, , sgst] = d;
     const nameParts = a.slice(1, a.length - 14);
