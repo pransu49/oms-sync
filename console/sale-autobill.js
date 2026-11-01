@@ -486,6 +486,7 @@
   /* =====================================================================
      SAVE — creates a normal sale invoice (same format and number series as the tool)
      ===================================================================== */
+  const RSV_TAKEN = new Set();   // reserved numbers handed out in this visit (never given twice)
   async function saveDraft(d) {
     if (!d.items.length) throw new Error("No matched products in this bill.");
     if (d.hsnBad) throw new Error("Enter the HSN for every product first (red boxes).");
@@ -505,7 +506,8 @@
     const rsv = ((await sb("GET", "docs?kind=eq.setting&id=eq.autobill_reserve&select=data"))[0] || {}).data;
     if (rsv && num(rsv.to) >= num(rsv.from)) {
       const used = new Set((await sbAll(`kind=eq.sale&select=id,no:data->>invoiceNo`)).map(r => r.no));
-      for (let k = num(rsv.from); k <= num(rsv.to); k++) if (!used.has(pre + pad(k))) { seq = k; break; }
+      RSV_TAKEN.forEach(x => used.add(x));
+      for (let k = num(rsv.from); k <= num(rsv.to); k++) if (!used.has(pre + pad(k))) { seq = k; RSV_TAKEN.add(pre + pad(k)); break; }
     }
     if (!seq) {
       seq = await sb("POST", "rpc/next_number", { p_name: ctr, p_start: Math.max(1, num(st.startNo) || 1) });
