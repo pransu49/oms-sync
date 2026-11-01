@@ -500,9 +500,18 @@
     const cust = D.customers.find(c => String(c.gstin || "").toUpperCase() === d.co.gstin) || { name: d.co.label.toUpperCase(), gstin: d.co.gstin };
     const fy = fyOf(d.date), pre = String(st.prefix || "AIKM/{FY}/").replace(/\{FY\}/gi, fyShort(fy)), pad = s => String(s).padStart(4, "0");
     const ctr = /\{FY\}/i.test(String(st.prefix || "")) ? "SALES_SEQ_" + fy : "SALES_SEQ";
-    let seq = await sb("POST", "rpc/next_number", { p_name: ctr, p_start: Math.max(1, num(st.startNo) || 1) });
-    for (let g = 0; g < 50 && (await sb("GET", `docs?kind=eq.sale&data->>invoiceNo=eq.${encodeURIComponent(pre + pad(seq))}&select=id&limit=1`)).length; g++)
-      seq = await sb("POST", "rpc/next_number", { p_name: ctr, p_start: 1 });
+    // numbers kept aside for back-dated auto bills (so a bill made today can take a later number)
+    let seq = 0;
+    const rsv = ((await sb("GET", "docs?kind=eq.setting&id=eq.autobill_reserve&select=data"))[0] || {}).data;
+    if (rsv && num(rsv.to) >= num(rsv.from)) {
+      const used = new Set((await sbAll(`kind=eq.sale&select=id,no:data->>invoiceNo`)).map(r => r.no));
+      for (let k = num(rsv.from); k <= num(rsv.to); k++) if (!used.has(pre + pad(k))) { seq = k; break; }
+    }
+    if (!seq) {
+      seq = await sb("POST", "rpc/next_number", { p_name: ctr, p_start: Math.max(1, num(st.startNo) || 1) });
+      for (let g = 0; g < 50 && (await sb("GET", `docs?kind=eq.sale&data->>invoiceNo=eq.${encodeURIComponent(pre + pad(seq))}&select=id&limit=1`)).length; g++)
+        seq = await sb("POST", "rpc/next_number", { p_name: ctr, p_start: 1 });
+    }
     const co = /^\d{2}/.test(st.gstin || "") ? st.gstin.slice(0, 2) : "09";
     const code = d.co.gstin.slice(0, 2), inter = code !== co;
     const items = d.items.map(i => ({ exp: "", hsn: String(i.hsn), key: i.p.key, mrp: money(i.p.mrp), qty: money(i.qty), free: 0, name: i.p.name, pack: "", rate: money(i.rate), batch: "", gstPct: i.p.gst, ...(i.p.barcode ? { barcode: i.p.barcode } : {}), discPct: 0 }));
