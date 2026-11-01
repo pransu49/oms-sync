@@ -1002,6 +1002,56 @@
     });
   }
 
+  /* =====================================================================
+     LOTS PDF REPAIR — the main tool's LOTS PDF reader skips lines whose article no. has a prefix
+     ("*100136731", "TM 8850006962800"), which saved some bills with 0 product lines.
+     This re-reads those PDFs with the prefix handled and fills the lines in, only when the
+     lines add up to the printed total. Runs quietly a few seconds after the page opens.
+     ===================================================================== */
+  const GAS_URL = "https://script.google.com/macros/s/AKfycbzQLjDLx1PkJ2IquZKcRyyaEMgIj1AANtjOevQRHepjnUHaecleSGdYxD-Ky0e2jGoJ/exec", GAS_KEY = "aikm_t6JIARbQD360oZ8MiZnE4oE-";
+  async function lotsPdfLines(doc) {
+    const f = t => parseFloat(String(t).replace(/,/g, "")) || 0, r2 = t => Math.round(100 * t) / 100, rows = [];
+    for (let pg = 1; pg <= doc.numPages; pg++) {
+      const tc = await (await doc.getPage(pg)).getTextContent(), ln = [];
+      for (const it of tc.items) { if (!it.str || !it.str.trim()) continue; const y = it.transform[5]; let L = ln.find(l => Math.abs(l.y - y) < 2.5); if (!L) ln.push(L = { y, it: [] }); L.it.push({ x: it.transform[4], s: it.str.trim() }); }
+      ln.sort((a, b) => b.y - a.y).forEach(l => rows.push(l.it.sort((a, b) => a.x - b.x).map(c => c.s)));
+    }
+    const items = []; let totalRow = null;
+    for (let t of rows) {
+      if (t[0] === "Total:") { totalRow = t; break; }
+      if (/^[A-Z*]{1,4}$/.test(t[0]) && /^\d{6,14}$/.test(t[1] || "")) t = t.slice(1);
+      const m0 = String(t[0] || "").match(/^[A-Z*]{1,4}\s*(\d{6,14})$/); if (m0) t = [m0[1], ...t.slice(1)];
+      if (!/^\d{6,14}$/.test(t[0]) || t.length < 15) continue;
+      const last = t.slice(-14), [q, , , amt, disc, tx, cg, , sg] = last, mid = t.slice(1, t.length - 14);
+      const hsn = /^\d{4,8}$/.test(mid[mid.length - 1]) ? mid.pop() : "";
+      if (!/^[\d.]+$/.test(q) || !hsn) return null;          // a line we can't read — don't guess
+      const qty = f(q), a = f(amt), d = Math.abs(f(disc));
+      items.push({ name: mid.join(" "), barcode: t[0], hsn, pack: "", qty, free: 0, mrp: 0, rate: qty ? r2(a / qty) : 0, discPct: a ? r2(d / a * 100) : 0, gstPct: r2(f(cg) + f(sg)), taxable: f(tx), lineTotal: f(last[12]), batch: "", exp: "" });
+    }
+    const nums = (totalRow || []).filter(c => /^-?[\d,]+\.\d+$/.test(c)).map(f);
+    return { items, sum: r2(items.reduce((a, i) => a + i.lineTotal, 0)), printed: nums[nums.length - 1] || 0 };
+  }
+  async function repairLotsPdf() {
+    if (!window.pdfjsLib) return;
+    const rows = await sb("GET", `docs?kind=eq.bill&data->>itemsFrom=eq.lots-pdf&data->items=eq.%5B%5D&select=id,fy,data&limit=50`).catch(() => []);
+    let fixed = 0;
+    for (const r of rows) {
+      try {
+        const img = ((r.data && r.data.images) || []).find(i => /pdf/i.test(i.type || i.name || "")); if (!img) continue;
+        const res = await (await fetch(GAS_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ token: GAS_KEY, action: "photo", data: { id: img.id } }) })).json();
+        if (!res.ok) continue;
+        const bin = atob(res.data.b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        const p = await lotsPdfLines(await window.pdfjsLib.getDocument({ data: u8 }).promise);
+        if (!p || !p.items.length || Math.abs(p.sum - p.printed) > 1 || Math.abs(Math.round(p.sum) - Math.round(num(r.data.total))) > 1) continue;
+        const d = { ...r.data, items: p.items, roundOff: money(num(r.data.total) - p.sum), updatedAt: nowIso(), repairedAt: nowIso() };
+        await sbPut([{ kind: "bill", id: r.id, fy: r.fy, data: d }]); fixed++;
+      } catch (e) { console.warn("LOTS PDF repair", r.id, e); }
+    }
+    if (fixed) toast(`${fixed} LOTS bill${fixed > 1 ? "s" : ""} had no product lines — lines added from the PDF. Refreshing…`, 6000);
+  }
+  setTimeout(() => { repairLotsPdf().catch(() => {}); }, 9000);
+  setInterval(() => { if (!document.hidden) repairLotsPdf().catch(() => {}); }, 10 * 60 * 1000);
+
   async function runSave(list) {
     if (S.busy) return; S.busy = true;
     const msg = $("#abFoot .msg"); $("#abFoot").querySelectorAll("button").forEach(b => b.disabled = true);
