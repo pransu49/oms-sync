@@ -27,6 +27,10 @@
   at the end of `amazon-name-search.js` — keep it). Keep the client option `auto_request_throttled: false` (the guard does the retries).
   The shipping-label (MFN) test call runs only with env `SPAPI_MFN_TEST=on`.
 
+- Bulk price drop on the Competitor Pricing tab (`console/bulk-price.js`, owner 3 Nov 2026) is loaded by the block at the end of
+  `console/amazon-name-search.js` (`aikmBulkPriceJs`) — keep it. It queues owner price pushes in `spapiPriceUpdates` (0 reads, 1 write each);
+  `applyPendingPriceUpdates` sends the oldest 150 per sync.
+
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.
 Current daily use is on the console's Firebase usage card (aikm_admin/firebaseUsage). Keep each project **under ~35,000 reads/day**.

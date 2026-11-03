@@ -680,3 +680,14 @@
     .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
     .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
 } catch (e) {} })();
+
+/* ===== DO NOT REMOVE — loads bulk price drop (console/bulk-price.js) on the Competitor Pricing tab. Keep this block when replacing amazon-name-search.js. ===== */
+(function () { try { if (document.getElementById("aikmBulkPriceJs")) return;
+  function add(ref) { if (document.getElementById("aikmBulkPriceJs")) return; var s = document.createElement("script"); s.id = "aikmBulkPriceJs"; s.defer = true;
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/bulk-price.js"; document.head.appendChild(s); }
+  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
+  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/bulk-price.js&per_page=1")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
+} catch (e) {} })();

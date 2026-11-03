@@ -1569,9 +1569,12 @@ async function applyPendingPriceUpdates(sellerId) {
   // Requests come from the Amazon page (SP-API Firebase) and from the Admin Console (main Firebase)
   const snaps = await Promise.all([db, dbMain].map((d) => d.collection('spapiPriceUpdates')
     .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get()));
-  const docs = snaps.flatMap((s) => s.docs);
-  if (!docs.length) { console.log('No pending price updates.'); return; }
-  console.log(`Applying ${docs.length} pending price update(s)...`);
+  const all = snaps.flatMap((s) => s.docs), tms = (d) => { const x = d.data().requestedAt; return x && x.toMillis ? x.toMillis() : 0; };
+  if (!all.length) { console.log('No pending price updates.'); return; }
+  // Bulk drops from the Amazon page can queue hundreds at once - send the oldest 150 per run so a sync never runs
+  // for half an hour; the rest stay "pending" and go at the next sync (every 15 min).
+  const PER_RUN = 150, docs = all.sort((a, b) => tms(a) - tms(b)).slice(0, PER_RUN);
+  console.log(`Applying ${docs.length} pending price update(s)${all.length > docs.length ? ` (${all.length - docs.length} more wait for the next sync)` : ''}...`);
 
   for (const doc of docs) {
     const { sku } = doc.data(); const newPrice = Math.round(Number(doc.data().newPrice) * 100) / 100;
