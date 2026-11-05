@@ -71,36 +71,39 @@
   function decorate() {
     var c = $("spapiPricingTable_cards"); if (!c) return;
     var tools = c.querySelector(".ap-tools"); if (!tools) return;
-    var view = viewItems().filter(function (p) { return (p.offers || []).some(function (o) { return isMineOfferKpi(o); }); });
+    var view = viewItems();
     if (!$("bpBar")) {
       tools.insertAdjacentHTML("afterend", '<div id="bpBar"><label><input type="checkbox" class="bpCk" id="bpAll"> Select all in this view <span class="bp-n" id="bpViewN"></span></label>' +
         '<span id="bpSelN" style="font-weight:700;color:#B08A36"></span><span class="bp-l">Drop price by</span>' +
         [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" class="bp-b" data-drop="' + n + '">₹' + n + "</button>"; }).join("") +
         '<input id="bpCustom" type="number" min="0.5" step="0.5" placeholder="₹ any"><button type="button" class="bp-b" data-drop="custom">Drop</button>' +
         '<button type="button" class="bp-b gold" data-drop="beat" title="New price = Buy Box (incl. shipping) − ₹1 − your shipping">Beat Buy Box by ₹1</button>' +
-        '<button type="button" class="bp-b" id="bpClr">Clear</button></div>');
+        '<button type="button" class="bp-b" id="bpClr">Clear</button>' +
+        '<span class="bp-l" style="margin-left:auto">ASINs</span><button type="button" class="bp-b" id="bpCopy" title="Copy ASINs (selected, or all in this view)">⧉ Copy</button>' +
+        '<button type="button" class="bp-b" id="bpCsv" title="Download Excel (CSV) with ASIN, SKU, prices and Buy Box">⬇ Excel</button></div>');
     }
     $("bpViewN").textContent = "(" + view.length + ")";
     $("bpAll").checked = view.length > 0 && view.every(function (p) { return sel.has(p.asin); });
     $("bpAll").indeterminate = !$("bpAll").checked && view.some(function (p) { return sel.has(p.asin); });
     $("bpSelN").textContent = sel.size ? sel.size + " selected" : "";
+    $("bpCopy").textContent = "⧉ Copy " + (sel.size || view.length); $("bpCsv").textContent = "⬇ Excel " + (sel.size || view.length);
     c.querySelectorAll("#bpBar [data-drop], #bpClr").forEach(function (b) { sel.size ? b.removeAttribute("disabled") : b.setAttribute("disabled", ""); });
     var P = byAsin();
     c.querySelectorAll("table.sp-tbl tbody tr").forEach(function (tr) {
       if (tr.querySelector(".bpCk")) { var x = tr.querySelector(".bpCk"); x.checked = sel.has(x.dataset.asin); return; }
       var a = tr.querySelector('td a[href*="/dp/"]'), cell = tr.querySelector(".pcell"); if (!a || !cell) return;
       var asin = (a.getAttribute("href").match(/dp\/([A-Z0-9]+)/i) || [])[1]; if (!asin) return;
-      var p = P.get(asin), mine = p && (p.offers || []).some(function (o) { return isMineOfferKpi(o); });
-      cell.insertAdjacentHTML("afterbegin", '<input type="checkbox" class="bpCk" data-asin="' + esc(asin) + '"' + (mine ? "" : ' disabled title="You have no live offer on this ASIN"') + (sel.has(asin) ? " checked" : "") + ">");
+      cell.insertAdjacentHTML("afterbegin", '<input type="checkbox" class="bpCk" data-asin="' + esc(asin) + '"' + (sel.has(asin) ? " checked" : "") + ">");
     });
   }
   document.addEventListener("change", function (e) {
     var t = e.target; if (!t.classList || !t.classList.contains("bpCk")) return;
-    if (t.id === "bpAll") { viewItems().forEach(function (p) { if (!(p.offers || []).some(function (o) { return isMineOfferKpi(o); })) return; t.checked ? sel.add(p.asin) : sel.delete(p.asin); }); }
+    if (t.id === "bpAll") { viewItems().forEach(function (p) { t.checked ? sel.add(p.asin) : sel.delete(p.asin); }); }
     else if (t.dataset.asin) { t.checked ? sel.add(t.dataset.asin) : sel.delete(t.dataset.asin); }
     decorate();
   });
   document.addEventListener("click", function (e) {
+    var x = e.target.closest && e.target.closest("#bpCopy, #bpCsv"); if (x) { extract(x.id === "bpCsv"); return; }
     var b = e.target.closest && e.target.closest("#bpBar [data-drop], #bpClr"); if (!b) return;
     if (b.id === "bpClr") { sel.clear(); decorate(); return; }
     var d = b.dataset.drop;
@@ -108,11 +111,37 @@
     else if (d === "beat") preview({ beat: true }); else preview({ by: +d });
   });
 
+  /* ---- extract ASINs: selected rows, or everything in the current view (tile filter + search + column filters) ---- */
+  function extract(csv) {
+    var P = byAsin(), list = sel.size ? Array.from(sel).map(function (a) { return P.get(a); }).filter(Boolean) : viewItems();
+    if (!list.length) return toast("Nothing in this view", true);
+    if (!csv) {
+      var txt = list.map(function (p) { return p.asin; }).join("\n");
+      (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(function () { toast("✓ " + list.length + " ASINs copied — paste anywhere (one per line)"); })
+        .catch(function () { var ta = document.createElement("textarea"); ta.value = txt; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); toast("✓ " + list.length + " ASINs copied"); });
+      return;
+    }
+    var q = function (v) { v = v == null ? "" : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+    var head = ["ASIN", "SKU", "Product", "Your price", "Your shipping", "Lowest landed", "Buy Box (incl. ship)", "Buy Box seller", "Status", "Sellers", "MRP", "Cost", "Amazon link"];
+    var rows = list.map(function (p) {
+      var x = info(p), win = (p.offers || []).find(function (o) { return o.isBuyBoxWinner; });
+      var st = !x.mine ? "Not selling" : x.held ? "Buy Box held" : win ? "Buy Box not held" : "No Buy Box";
+      return [p.asin, x.sku || "", x.name || "", x.price ?? "", x.ship || "", p.lowestCompetitorPrice ?? "", x.winL ?? "",
+        win ? (typeof bbSellerLabel === "function" ? bbSellerLabel(win) : win.sellerId || "") : "", st, (p.offers || []).length, x.mrp ?? "", x.cost != null ? Math.round(x.cost * 100) / 100 : "", "https://www.amazon.in/dp/" + p.asin];
+    });
+    var body = "\ufeff" + [head].concat(rows).map(function (r) { return r.map(q).join(","); }).join("\r\n");
+    var a = document.createElement("a"), f = document.querySelector(".ap-filter b"), tag = (f ? f.textContent : "all").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+    a.href = URL.createObjectURL(new Blob([body], { type: "text/csv;charset=utf-8" }));
+    a.download = "AIKM_" + acct() + "_ASINs_" + tag + "_" + new Date().toISOString().slice(0, 10) + ".csv"; document.body.appendChild(a); a.click(); a.remove();
+    toast("✓ " + list.length + " ASINs downloaded");
+  }
+
   /* ---- preview, checks, queue ---- */
   function plan(mode, skipCost, skipBig) {
     var P = byAsin();
     return Array.from(sel).map(function (asin) {
       var p = P.get(asin); if (!p) return null; var x = info(p), r = { x: x, newP: null, why: "", cls: "ok", skip: false };
+      if (!x.mine) { r.skip = true; r.cls = "warn"; r.why = "You're not selling — no live offer"; return r; }
       if (!x.sku || x.price == null) { r.skip = true; r.cls = "bad"; r.why = "No SKU / price found"; return r; }
       if (mode.beat) {
         if (x.held) { r.skip = true; r.cls = "warn"; r.why = "You already hold the Buy Box"; return r; }
