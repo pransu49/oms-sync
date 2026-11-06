@@ -354,13 +354,14 @@ const FEE_KEYS = (t) => /commission|referral/i.test(t) ? 'r' : /closing/i.test(t
 const money = (x) => { const v = parseFloat(x && (x.CurrencyAmount ?? x.Amount)); return isNaN(v) ? 0 : v; };
 const r2 = (v) => Math.round(v * 100) / 100;
 function orderFeesFrom(ev) {
-  const o = { ref: 0, close: 0, ship: 0, other: 0, shipCharge: 0, refunded: false, types: {} };
+  const o = { ref: 0, close: 0, ship: 0, other: 0, shipCharge: 0, refundAmt: 0, refunded: false, types: {} };
   Object.entries(ev).forEach(([k, e]) => {
     if (k.startsWith('R')) o.refunded = true;
     o.ref -= e[0]; o.close -= e[1]; o.ship -= e[2]; o.other -= e[3]; o.shipCharge += e[4];
+    o.refundAmt -= e[6] || 0;
     Object.entries(e[5] || {}).forEach(([t, v]) => { o.types[t] = r2((o.types[t] || 0) - v); });
   });
-  ['ref', 'close', 'ship', 'other', 'shipCharge'].forEach((k) => { o[k] = r2(o[k]); });
+  ['ref', 'close', 'ship', 'other', 'shipCharge', 'refundAmt'].forEach((k) => { o[k] = r2(o[k]); });
   o.total = r2(o.ref + o.close + o.ship + o.other);
   return o;
 }
@@ -375,13 +376,16 @@ async function syncOrderFees() {
     const id = se.AmazonOrderId, docId = `${ACCOUNT_LABEL}_${id}`, o = id && SNAP.orders[docId];
     events++;
     if (!o) return;
-    const e = [0, 0, 0, 0, 0, {}];
+    const e = [0, 0, 0, 0, 0, {}];   // referral, closing, ship fees, other fees, shipping charged, {fee types}, [refund]
     (se[itemsKey] || []).forEach((it) => {
       (it[feesKey] || []).forEach((f) => { const v = money(f.FeeAmount), t = f.FeeType || 'Fee'; if (!v) return;
         e['rcso'.indexOf(FEE_KEYS(t))] += v; e[5][t] = r2((e[5][t] || 0) + v); });
-      (it[chargesKey] || []).forEach((c) => { if (/shipping/i.test(c.ChargeType || '') && !/tax|discount/i.test(c.ChargeType)) e[4] += money(c.ChargeAmount); });
+      (it[chargesKey] || []).forEach((c) => { const v = money(c.ChargeAmount);
+        if (/shipping/i.test(c.ChargeType || '') && !/tax|discount/i.test(c.ChargeType)) e[4] += v;
+        if (kind === 'R') e[6] = (e[6] || 0) + v; });   // money given back to the buyer (incl. GST), negative
     });
     for (let i = 0; i < 5; i++) e[i] = r2(e[i]);
+    if (e[6] != null) e[6] = r2(e[6]);
     const ev = { ...((o.fees && o.fees.ev) || {}) };
     ev[`${kind}${se.PostedDate || ''}`] = e;   // same event read twice (overlap) just overwrites itself
     snapPatch('orders', docId, { fees: { ...orderFeesFrom(ev), ev, at: now } });
