@@ -1,0 +1,29 @@
+name: Meesho panel robot (office PC)
+# Runs on the office Windows PC (self-hosted runner with label "meesho") because Meesho blocks cloud servers.
+# login = open Chrome on the PC so the owner signs in once · check = read-only test, result on Telegram
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'login or check'
+        default: 'check'
+      account:
+        description: 'Meesho account short name'
+        default: 'noworry'
+jobs:
+  run:
+    runs-on: [self-hosted, meesho]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-save playwright@1.47.2
+      - run: npx playwright install chromium
+      - run: node meesho-panel.js
+        env:
+          MODE: ${{ inputs.mode }}
+          ACCOUNT: ${{ inputs.account }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
