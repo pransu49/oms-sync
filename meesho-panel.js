@@ -53,7 +53,7 @@ async function processOrders(p, ctx) {
   await p.goto(BASE + 'ready-to-ship', { waitUntil: 'domcontentloaded' });
   await p.getByText(/Product Details/i).first().waitFor({ timeout: 45000 }).catch(() => {});
   await p.waitForTimeout(5000); await closePopups(p);
-  const want = new Set(done.accepted);
+  const want = new Set(done.accepted.concat((process.env.ORDERS || '').split(',').map(x => x.trim()).filter(Boolean)));
   const all = await rows(p); const cnt = await all.count();
   console.log('READY TO SHIP ROWS:', cnt);
   for (let i = 0; i < cnt; i++) {
@@ -65,7 +65,9 @@ async function processOrders(p, ctx) {
     console.log('LABEL', oid, prod);
     try {
       const dl = p.waitForEvent('download', { timeout: 60000 });
-      await r.getByRole('button', { name: /^Label$/i }).first().click();
+      const btn = r.locator('button').filter({ hasText: /^\s*Label\s*$/i }).first();
+      await btn.scrollIntoViewIfNeeded().catch(() => {});
+      await btn.click({ timeout: 8000 }).catch(async () => { console.log('normal click blocked (popup on top?) - clicking directly'); await btn.evaluate(b => b.click()); });
       await p.waitForTimeout(2500);
       const modalBtn = p.locator('[role=dialog], .MuiDialog-root, .modal').getByRole('button', { name: /download/i });
       if (await modalBtn.count()) { console.log('LABEL DIALOG:', (await p.locator('[role=dialog], .MuiDialog-root, .modal').first().innerText()).slice(0, 300)); await modalBtn.first().click(); }

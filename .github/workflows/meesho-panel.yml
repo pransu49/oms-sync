@@ -13,6 +13,9 @@ on:
       limit:
         description: 'process at most this many pending orders (0 = all)'
         default: '1'
+      orders:
+        description: 'also download labels for these order IDs (comma separated, optional)'
+        default: ''
 jobs:
   run:
     runs-on: [self-hosted, Windows, X64]
@@ -32,5 +35,6 @@ jobs:
           MODE: ${{ inputs.mode }}
           ACCOUNT: ${{ inputs.account }}
           LIMIT: ${{ inputs.limit }}
+          ORDERS: ${{ inputs.orders }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
