@@ -26,13 +26,14 @@ const loggedIn = (u) => /supplier\.meesho\.com\/panel/.test(u) && !/login/i.test
 
 (async () => {
   fs.mkdirSync(PROFILE, { recursive: true });
-  const opts = { headless: MODE !== 'login', viewport: { width: 1366, height: 860 }, locale: 'en-IN' };
+  const opts = { headless: false, // Meesho treats headless browsers as signed out; a window opens briefly on the PC
+    viewport: { width: 1366, height: 860 }, locale: 'en-IN' };
   let ctx;
   try { ctx = await chromium.launchPersistentContext(PROFILE, { ...opts, channel: 'chrome' }); }
   catch (e) { console.log('Chrome not found, using built-in browser'); ctx = await chromium.launchPersistentContext(PROFILE, opts); }
   const p = ctx.pages()[0] || await ctx.newPage();
   await p.goto(HOME, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await p.waitForTimeout(8000);
+  for (let i = 0; i < 10 && !loggedIn(p.url()); i++) await p.waitForTimeout(2000); // give the panel time to redirect when signed in
   console.log('URL:', p.url(), 'TITLE:', await p.title());
   if (/access denied/i.test(await p.title())) { await tg('❌ Meesho (' + ACCT + '): Access Denied from this PC'); throw new Error('Access Denied'); }
 
