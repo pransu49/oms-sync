@@ -112,6 +112,7 @@ async function main() {
   const results = [];
   const add = (x, status, msg, feedId) => results.push({ a: x.a, o: x.o, i: x.i, r: x.r,
     amt: Math.round((Number(x.ip || 0) + Number(x.it || 0) + Number(x.sp || 0) + Number(x.stx || 0)) * 100) / 100,
+    ip: Number(x.ip || 0), it: Number(x.it || 0), sp: Number(x.sp || 0), stx: Number(x.stx || 0), // exact split sent (shown in Failed Refunds tab)
     status, msg: String(msg || '').slice(0, 300), feedId: feedId || '', at: nowIso(), by: BY, probe: PROBE });
 
   const byAcc = {};
