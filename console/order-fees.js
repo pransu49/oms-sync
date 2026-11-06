@@ -1,7 +1,9 @@
 /* AIKM · Amazon page · Orders tab: real Referral fee + Closing fee (owner, 6 Nov 2026)
    Fees come from Amazon's Finance API (saved on each order by spapi-sync.js -> order.fees, snapshot only).
    - Adds "Referral fee" and "Closing fee" columns (sortable / filterable like the others).
-   - Est. profit uses Amazon's real fees when they are posted (after shipment); until then the old estimate is used.
+   - "Net profit" (owner, 6 Nov 2026) = same maths as the price robot:
+       order total − GST payable on the margin − product cost − Amazon fees − courier − ₹3 return buffer − refunds.
+     Amazon's real fees / Easy Ship fee / refunds are used once posted; before that, estimates. Hover = line-by-line breakdown.
    - 0 extra Firebase reads or writes. Loaded by the block at the end of console/amazon-name-search.js (aikmOrderFeesJs). */
 (function () {
   if (window.__aikmOrderFees) return; window.__aikmOrderFees = true;
@@ -41,22 +43,50 @@
         { key: "closeFee", label: "Closing fee", num: true, right: true, fmt: function (v) { return "₹" + v.toFixed(2); } });
     }
 
-    /* 2. Row values + profit with real fees */
+    /* 2. Row values + NET profit (same maths as the price robot) */
+    var pc = ORDER_COLS.find(function (c) { return c.key === "profit"; }); if (pc) pc.label = "Net profit";
     var orig = window.orderRow;
     window.orderRow = function (e, r) {
-      var x = orig(e, r), f = e.fees, est = estimate(e, r);
-      if (f && (f.total || f.ref || f.close)) {
-        x.v.refFee = f.ref; x.v.closeFee = f.close; x.feeSrc = "amz";
-        if (x.v.profit != null) {
-          /* swap estimated fees for Amazon's: referral + closing always; Easy Ship fee too when Amazon charged one */
-          var shipSwap = e.isEasyShip && f.ship ? est.ship - f.ship : 0;
-          x.v.profit = x.v.profit + est.ref + est.close - f.ref - f.close - (f.other || 0) + shipSwap;
-        }
-      } else if (est.inv && !e.isCanceled) {
-        x.v.refFee = est.ref; x.v.closeFee = est.close; x.feeSrc = "est";
-      } else { x.v.refFee = null; x.v.closeFee = null; x.feeSrc = null; }
+      var x = orig(e, r), f = e.fees && (e.fees.total || e.fees.ref || e.fees.close || e.fees.refunded) ? e.fees : null, est = estimate(e, r);
+      x.feeSrc = f ? "amz" : (est.inv && !e.isCanceled ? "est" : null);
+      x.v.refFee = f ? f.ref : x.feeSrc ? est.ref : null;
+      x.v.closeFee = f ? f.close : x.feeSrc ? est.close : null;
+      x.net = net(e, r, x, f, est);
+      x.v.profit = x.net ? x.net.value : null;
       return x;
     };
+    function rate(it, inv) {
+      if (it.price > 0 && it.tax > 0) return it.tax / (it.price - it.tax);
+      var c = inv && inv.taxCode, t = typeof TAXCODE_RATE !== "undefined" && c in TAXCODE_RATE ? TAXCODE_RATE[c] : 5;
+      return t / 100;
+    }
+    function courier(kg) { var n = Math.max(+kg || .5, .5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
+    function net(e, r, x, f, est) {
+      var total = parseFloat(e.total), items = e.items || [];
+      if (isNaN(total) || !items.length || x.v.cost == null || x.missingCost) return null;
+      var itemSum = 0, outGst = 0, base = 0, kg = 0;
+      items.forEach(function (it) {
+        var inv = r.find(it.sku, it.asin, it.title), g = rate(it, inv), p = +it.price || 0;
+        itemSum += p; outGst += it.tax > 0 ? +it.tax : p * g / (1 + g); base += p - (it.tax > 0 ? +it.tax : p * g / (1 + g));
+        kg += (inv && +inv.weightKg ? +inv.weightKg : .5) * (+it.qty || 1);
+      });
+      var g = base > 0 ? outGst / base : .05;
+      var shipIn = Math.max(0, total - itemSum), shipGst = shipIn * g / (1 + g);
+      var refund = f && f.refundAmt > 0 ? Math.min(f.refundAmt, total) : 0, keep = total > 0 ? (total - refund) / total : 1;
+      var gstOut = (outGst + shipGst) * keep, gstIn = x.v.cost * g / (1 + g), gstPay = Math.max(0, gstOut - gstIn);
+      var ref = f ? f.ref : est.ref, close = f ? f.close : est.close, other = f ? (f.other || 0) : 0;
+      var cour = e.isEasyShip ? (f && f.ship ? f.ship : (est.ship || 55)) : courier(kg), courSrc = e.isEasyShip ? (f && f.ship ? "Amazon Easy Ship fee" : "Easy Ship fee (estimate)") : "courier (estimate ₹40/kg)";
+      var value = total - refund - gstPay - x.v.cost - ref - close - other - (f && !e.isEasyShip ? (f.ship || 0) : 0) - cour - 3;
+      var L = [["Order total (incl. GST & shipping)", total]];
+      if (refund) L.push(["Refunded to buyer", -refund]);
+      L.push(["GST payable (₹" + gstOut.toFixed(2) + " collected − ₹" + gstIn.toFixed(2) + " paid on purchase)", -gstPay],
+        ["Product cost", -x.v.cost], ["Referral fee" + (f ? "" : " (estimate)"), -ref], ["Closing fee" + (f ? "" : " (estimate)"), -close]);
+      if (other) L.push(["Other Amazon fees", -other]);
+      if (f && !e.isEasyShip && f.ship) L.push(["Amazon shipping fees", -f.ship]);
+      L.push([courSrc.charAt(0).toUpperCase() + courSrc.slice(1), -cour], ["Return buffer", -3]);
+      x.v.ship = cour;   /* Shipping column = the courier cost used here */
+      return { value: Math.round(value * 100) / 100, lines: L, real: !!f, refunded: !!(f && f.refunded) };
+    }
 
     /* 3. Draw the two cells in each row */
     var draw = window.drawOrders;
@@ -64,7 +94,7 @@
       draw.apply(this, arguments);
       var body = document.getElementById("spapiOrdersBody"); if (!body) return;
       var byId = {}; (CM.rows.orders || []).forEach(function (x) { byId[x.raw.orderId] = x; });
-      var at = ORDER_COLS.findIndex(function (c) { return c.key === "refFee"; });
+      var at = ORDER_COLS.findIndex(function (c) { return c.key === "refFee"; }), pAt = ORDER_COLS.findIndex(function (c) { return c.key === "profit"; });
       body.querySelectorAll("tr").forEach(function (tr) {
         if (tr.dataset.fees) return;
         var idCell = tr.querySelector("td[data-orig]"), x = idCell && byId[idCell.dataset.orig]; if (!x) return;
@@ -78,6 +108,12 @@
         var ref = tr.children[at];
         if (!ref) return;
         ref.insertAdjacentHTML("beforebegin", cell(x.v.refFee, true) + cell(x.v.closeFee, false));
+        var pcell = tr.children[pAt];
+        if (pcell && x.net) {
+          pcell.title = x.net.lines.map(function (l) { return l[0] + ":  " + (l[1] < 0 ? "−₹" : "₹") + Math.abs(l[1]).toFixed(2); }).join("\n") + "\n────────\nNet profit:  " + (x.net.value < 0 ? "−₹" : "₹") + Math.abs(x.net.value).toFixed(2) + "\n\nNot deducted: GST on Amazon fees (you claim it back), TCS / TDS (adjusted in your returns).";
+          pcell.style.cursor = "help";
+          pcell.insertAdjacentHTML("beforeend", '<span class="fee-src ' + (x.net.refunded ? "est" : x.net.real ? "amz" : "est") + '">' + (x.net.refunded ? "refund incl." : x.net.real ? "✓ after tax" : "after tax · est. fees") + "</span>");
+        }
         tr.dataset.fees = "1";
       });
     };
