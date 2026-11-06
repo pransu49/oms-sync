@@ -214,7 +214,12 @@
     const customers = by("customer").map(r => r.data).filter(Boolean);
     const abSales = {}, otherSales = [];
     let lastInv = "";
-    (await sbAll(`kind=eq.sale&select=kind,id,data`)).forEach(r => { if (!r.data) return; if (r.data.status !== "Cancelled" && (r.data.invoiceDate || "") > lastInv) lastInv = r.data.invoiceDate; if (r.data.source === "autobill") abSales[r.id] = r.data; else otherSales.push(r.data); });
+    // numbers kept aside for back-dated auto bills: invoices numbered AFTER that range (e.g. today's manual bill) don't block older dates
+    const rsv = ((await sb("GET", "docs?kind=eq.setting&id=eq.autobill_reserve&select=data"))[0] || {}).data || null;
+    const allSales = await sbAll(`kind=eq.sale&select=kind,id,data`);
+    const rsvLeft = rsv ? Array.from({ length: Math.max(0, num(rsv.to) - num(rsv.from) + 1) }, (_, i) => num(rsv.from) + i).filter(k => !allSales.some(r => r.data && num(r.data.seq) === k)).length : 0;
+    const afterRsv = v => rsvLeft > 0 && num(v.seq) > num(rsv.to);
+    allSales.forEach(r => { if (!r.data) return; if (r.data.status !== "Cancelled" && !afterRsv(r.data) && (r.data.invoiceDate || "") > lastInv) lastInv = r.data.invoiceDate; if (r.data.source === "autobill") abSales[r.id] = r.data; else otherSales.push(r.data); });
 
     /* product index from purchase bills (latest purchase wins) */
     const mergeTo = k => { const m = merge.map || {}; for (let i = 0; i < 6 && m[k] && m[k] !== k; i++) k = m[k]; return k; };
@@ -493,7 +498,10 @@
     if (d.overMrp) throw new Error("A rate is above MRP. Lower it first.");
     if (d.total > CAP && !d.co.noCap) throw new Error("Bill is above ₹49,999 — lower a rate.");
     if (d.blockedBy) throw new Error(`Approve ${fmtD(d.blockedBy)} first (bills go in date order).`);
-    const later = await sb("GET", `docs?kind=eq.sale&data->>invoiceDate=gt.${d.date}&data->>status=neq.Cancelled&select=data->>invoiceNo,data->>invoiceDate&limit=1`);
+    const rsv0 = ((await sb("GET", "docs?kind=eq.setting&id=eq.autobill_reserve&select=data"))[0] || {}).data;
+    const later = (await sb("GET", `docs?kind=eq.sale&data->>invoiceDate=gt.${d.date}&data->>status=neq.Cancelled&select=no:data->>invoiceNo,invoiceDate:data->>invoiceDate,seq:data->>seq&limit=200`))
+      .filter(x => !(rsv0 && num(x.seq) > num(rsv0.to)))      // numbered after the kept-aside range: fine
+      .map(x => ({ invoiceNo: x.no, invoiceDate: x.invoiceDate }));
     if (later.length) throw new Error(`Invoice ${later[0].invoiceNo} is dated ${fmtD(later[0].invoiceDate)} — a bill dated ${fmtD(d.date)} now would break the number order.`);
     const exist = await sb("GET", `docs?kind=eq.autobill_done&id=eq.${encodeURIComponent(d.id)}&select=data`);
     if (exist.length) throw new Error(`Already billed: ${exist[0].data.invoiceNo}`);
@@ -510,6 +518,8 @@
       for (let k = num(rsv.from); k <= num(rsv.to); k++) if (!used.has(pre + pad(k))) { seq = k; RSV_TAKEN.add(pre + pad(k)); break; }
     }
     if (!seq) {
+      const late = await sb("GET", `docs?kind=eq.sale&data->>invoiceDate=gt.${d.date}&data->>status=neq.Cancelled&select=no:data->>invoiceNo,dt:data->>invoiceDate&limit=1`);
+      if (late.length) throw new Error(`All kept-aside numbers are used. Invoice ${late[0].no} is dated ${fmtD(late[0].dt)}, so a bill dated ${fmtD(d.date)} would break the number order.`);
       seq = await sb("POST", "rpc/next_number", { p_name: ctr, p_start: Math.max(1, num(st.startNo) || 1) });
       for (let g = 0; g < 50 && (await sb("GET", `docs?kind=eq.sale&data->>invoiceNo=eq.${encodeURIComponent(pre + pad(seq))}&select=id&limit=1`)).length; g++)
         seq = await sb("POST", "rpc/next_number", { p_name: ctr, p_start: 1 });
