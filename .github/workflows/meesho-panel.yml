@@ -5,11 +5,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'login or check'
+        description: 'login, check (read only) or process (accept + labels)'
         default: 'check'
       account:
         description: 'Meesho account short name'
         default: 'noworry'
+      limit:
+        description: 'process at most this many pending orders (0 = all)'
+        default: '1'
 jobs:
   run:
     runs-on: [self-hosted, Windows, X64]
@@ -28,5 +31,6 @@ jobs:
         env:
           MODE: ${{ inputs.mode }}
           ACCOUNT: ${{ inputs.account }}
+          LIMIT: ${{ inputs.limit }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
