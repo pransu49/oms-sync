@@ -37,7 +37,7 @@ const isThrottle = (e) => /QuotaExceeded|TooManyRequests|throttl|\b429\b/i.test(
 const isDenied = (e) => /^\s*Unauthorized\b|access to requested resource is denied/i.test(txt(e)) && !/token.*expired/i.test(txt(e));
 const isNotFound = (e) => /^\s*NotFound\b|\b404\b|not found/i.test(txt(e));
 
-function createGuard({ db, docId, account, notify, isLive }) {
+function createGuard({ db, docId, account, notify, isLive, tokenTag }) {
   const ref = db.collection('spapiSnapshots').doc(docId);
   let state = { blocked: {}, dead: {}, day: today(), stats: {} };
   let dirty = false;
@@ -48,7 +48,13 @@ function createGuard({ db, docId, account, notify, isLive }) {
   async function load() {
     try {
       const d = (await ref.get()).data();
-      if (d) state = { blocked: d.blocked || {}, dead: d.dead || {}, day: d.day || today(), stats: d.stats || {} };
+      if (d) state = { blocked: d.blocked || {}, dead: d.dead || {}, day: d.day || today(), stats: d.stats || {}, tokenTag: d.tokenTag || null };
+      // New Amazon key saved (e.g. after adding a role) -> try every paused API again right away (owner, 6 Nov 2026).
+      if (tokenTag && state.tokenTag && state.tokenTag !== tokenTag && Object.keys(state.blocked).length) {
+        console.log(`API guard: new Amazon key detected - clearing pauses: ${Object.keys(state.blocked).join(', ')}`);
+        state.blocked = {}; dirty = true;
+      }
+      if (tokenTag && state.tokenTag !== tokenTag) { state.tokenTag = tokenTag; dirty = true; }
     } catch (e) { console.warn('API guard: could not read saved state (continuing):', e.message || e); }
     if (state.day !== today()) { state.yesterday = state.stats; state.stats = {}; state.day = today(); dirty = true; }
     const now = Date.now();
@@ -148,7 +154,7 @@ function createGuard({ db, docId, account, notify, isLive }) {
       // dead-SKU list is capped so the doc stays small
       const dead = Object.fromEntries(Object.entries(state.dead).sort((a, b) => b[1] - a[1]).slice(0, 3000));
       await ref.set({ account, blocked: state.blocked, dead, day: state.day, stats: state.stats, yesterday: state.yesterday || null,
-        today: d, lastRun: { ...r, at: Date.now() }, updatedAt: Date.now() });
+        today: d, lastRun: { ...r, at: Date.now() }, tokenTag: state.tokenTag || null, updatedAt: Date.now() });
       dirty = false;
     } catch (e) { console.warn('API guard: could not save state:', e.message || e); }
   }

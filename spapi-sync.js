@@ -34,6 +34,7 @@ const apiGuard = require('./sp-guard').createGuard({
   db, docId: `${ACCOUNT_LABEL}_guard`, account: ACCOUNT_LABEL,
   notify: (t) => require('./telegram').notify(t, { html: true }),
   isLive: (sku) => inventoryFresh && reportSkus.has(sku),
+  tokenTag: require('crypto').createHash('sha256').update(String(process.env.SPAPI_REFRESH_TOKEN || '')).digest('hex').slice(0, 12),
 });
 apiGuard.wrap(spClient);
 // QUICK vs FULL sync
