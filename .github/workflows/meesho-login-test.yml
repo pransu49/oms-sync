@@ -1,0 +1,20 @@
+name: Meesho login test (on command only)
+# One-off check: does Meesho ask for an OTP when the robot logs in? Screenshot goes to Telegram.
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-save playwright@1.47.2 && npx playwright install --with-deps chromium
+      - run: node meesho-login-test.js
+        env:
+          MEESHO_EMAIL: ${{ secrets.MEESHO_EMAIL_AIKM }}
+          MEESHO_PASSWORD: ${{ secrets.MEESHO_PASSWORD_AIKM }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
