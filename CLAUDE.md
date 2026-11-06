@@ -31,6 +31,11 @@
   `console/amazon-name-search.js` (`aikmBulkPriceJs`) — keep it. It queues owner price pushes in `spapiPriceUpdates` (0 reads, 1 write each);
   `applyPendingPriceUpdates` sends the oldest 150 per sync.
 
+- **Real order fees** (Finance API, owner 6 Nov 2026): `syncOrderFees()` in `spapi-sync.js` (full syncs only) reads `listFinancialEvents`
+  (100 orders per call, 15-day windows until caught up, progress in `<acct>_meta.feesPostedAt`) and saves `order.fees`
+  {ref, close, ship, other, total, shipCharge, refunded, types, ev} on each order in the SNAPSHOT only — 0 extra Firebase reads/writes.
+  Shown as Referral fee / Closing fee columns on the Orders tab by `console/order-fees.js` (loader block `aikmOrderFeesJs` at the end of `amazon-name-search.js` — keep it once added).
+
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.
 Current daily use is on the console's Firebase usage card (aikm_admin/firebaseUsage). Keep each project **under ~35,000 reads/day**.

@@ -22,7 +22,7 @@ const ROLE_APIS = new Set(['finances', 'merchantFulfillment', 'easyShip', 'shipp
 // Minimum gap (ms) between two calls of the same operation (Amazon rate limits, with a small safety margin).
 const MIN_GAP = {
   getOrders: 1100, getOrder: 1100, getOrderItems: 2100, getOrderAddress: 2100, getOrderBuyerInfo: 2100,
-  listFinancialEventsByOrderId: 2100,
+  listFinancialEventsByOrderId: 2100, listFinancialEvents: 2100,
   getItemOffers: 2100, getListingOffers: 2100, getItemOffersBatch: 10500, getListingOffersBatch: 10500,
   getCompetitivePricing: 2100, getPricing: 2100, getMyFeesEstimates: 2100, getMyFeesEstimateForSKU: 2100,
   searchCatalogItems: 600, getCatalogItem: 600,

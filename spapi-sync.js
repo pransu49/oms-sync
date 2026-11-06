@@ -67,7 +67,8 @@ const SNAP_COL = 'spapiSnapshots';
 const ORDERS_WINDOW_DAYS = 90;
 const CHUNK_BYTES = 700 * 1024; // Firestore max is 1 MiB per document - stay well under
 let prevSnapMeta = null;
-let mrpCheckedAt = null;            // when verifyMrpPushes last ran (kept in the snapshot meta doc)
+let mrpCheckedAt = null;
+let feesPostedAt = null;           // Finance API: fees read up to this time (kept in the snapshot meta doc)            // when verifyMrpPushes last ran (kept in the snapshot meta doc)
 
 function plain(data) {
   const out = {};
@@ -151,6 +152,7 @@ async function writeSnapshot() {
     deliveryBackfilled: !!((prevSnapMeta && prevSnapMeta.deliveryBackfilled) || (deliveryBackfillRun && ordersSyncedOk)),
     fullSyncedAt: SYNC_MODE === 'full' ? Date.now() : ((prevSnapMeta && prevSnapMeta.fullSyncedAt) || null),
     mrpCheckedAt: mrpCheckedAt || (prevSnapMeta && prevSnapMeta.mrpCheckedAt) || null,
+    feesPostedAt: feesPostedAt || (prevSnapMeta && prevSnapMeta.feesPostedAt) || null,
   });
   // Remove the previous run's chunks (a little later, so an open page can finish reading).
   if (prevSnapMeta && prevSnapMeta.run && prevSnapMeta.run !== run) {
@@ -297,7 +299,7 @@ async function syncOrders() {
       shipmentEvents.forEach((se) => {
         (se.ShipmentItemList || []).forEach((item) => {
           (item.ItemFeeList || []).forEach((fee) => {
-            const amt = parseFloat(fee.FeeAmount?.Amount);
+            const amt = parseFloat(fee.FeeAmount?.CurrencyAmount ?? fee.FeeAmount?.Amount);
             if (!isNaN(amt)) { feeTotal += amt; hasFeeData = true; }
           });
         });
@@ -338,6 +340,63 @@ async function syncOrders() {
   if (financeFailCount > 0) console.log(`Finances API still blocked (${financeFailCount}/${orders.length} orders)`);
   await fillMissingDeliveryDates().catch((e) => console.warn('Deliver-by refresh skipped:', e.message || e));
   return orders;
+}
+
+// ── Real Amazon fees per order (Finance API, owner 6 Nov 2026) ──
+// One listFinancialEvents call returns up to 100 orders' fees, so this is far cheaper than one call per order.
+// Reads the fees Amazon POSTED since the last run (2-day overlap for late postings), 15 days per run until it has
+// caught up with the 90-day order window. Saved on each order in the snapshot only (0 extra Firebase reads/writes):
+//   order.fees = { ref, close, ship, other, total, shipCharge, refunded, types: { FeeType: amount }, ev: { <event>: [...] } }
+// ref = referral fee (Commission), close = closing fee, ship = Easy Ship / weight-handling fees. Amounts are what
+// Amazon charged (positive = charged to you); refund events reverse part of them, so the totals are net.
+const FEE_KEYS = (t) => /commission|referral/i.test(t) ? 'r' : /closing/i.test(t) ? 'c' : /ship|weight|handl|pick/i.test(t) ? 's' : 'o';
+const money = (x) => { const v = parseFloat(x && (x.CurrencyAmount ?? x.Amount)); return isNaN(v) ? 0 : v; };
+const r2 = (v) => Math.round(v * 100) / 100;
+function orderFeesFrom(ev) {
+  const o = { ref: 0, close: 0, ship: 0, other: 0, shipCharge: 0, refunded: false, types: {} };
+  Object.entries(ev).forEach(([k, e]) => {
+    if (k.startsWith('R')) o.refunded = true;
+    o.ref -= e[0]; o.close -= e[1]; o.ship -= e[2]; o.other -= e[3]; o.shipCharge += e[4];
+    Object.entries(e[5] || {}).forEach(([t, v]) => { o.types[t] = r2((o.types[t] || 0) - v); });
+  });
+  ['ref', 'close', 'ship', 'other', 'shipCharge'].forEach((k) => { o[k] = r2(o[k]); });
+  o.total = r2(o.ref + o.close + o.ship + o.other);
+  return o;
+}
+async function syncOrderFees() {
+  if (apiGuard.isBlocked('finances', 'listFinancialEvents')) { console.log('Order fees: Finance API paused by the guard (no permission) - skipped.'); return; }
+  const now = Date.now(), last = prevSnapMeta && prevSnapMeta.feesPostedAt;
+  const from = last ? Math.max(last - 2 * 864e5, now - 89 * 864e5) : now - 89 * 864e5;
+  const to = Math.min(from + 15 * 864e5, now - 5 * 60e3);
+  let token = null, pages = 0, events = 0, hit = 0;
+  const touched = new Set();
+  const take = (kind, list, itemsKey, chargesKey, feesKey) => (list || []).forEach((se) => {
+    const id = se.AmazonOrderId, docId = `${ACCOUNT_LABEL}_${id}`, o = id && SNAP.orders[docId];
+    events++;
+    if (!o) return;
+    const e = [0, 0, 0, 0, 0, {}];
+    (se[itemsKey] || []).forEach((it) => {
+      (it[feesKey] || []).forEach((f) => { const v = money(f.FeeAmount), t = f.FeeType || 'Fee'; if (!v) return;
+        e['rcso'.indexOf(FEE_KEYS(t))] += v; e[5][t] = r2((e[5][t] || 0) + v); });
+      (it[chargesKey] || []).forEach((c) => { if (/shipping/i.test(c.ChargeType || '') && !/tax|discount/i.test(c.ChargeType)) e[4] += money(c.ChargeAmount); });
+    });
+    for (let i = 0; i < 5; i++) e[i] = r2(e[i]);
+    const ev = { ...((o.fees && o.fees.ev) || {}) };
+    ev[`${kind}${se.PostedDate || ''}`] = e;   // same event read twice (overlap) just overwrites itself
+    snapPatch('orders', docId, { fees: { ...orderFeesFrom(ev), ev, at: now } });
+    touched.add(docId); hit++;
+  });
+  do {
+    const res = await spClient.callAPI({ operation: 'listFinancialEvents', endpoint: 'finances',
+      query: token ? { NextToken: token } : { PostedAfter: new Date(from).toISOString(), PostedBefore: new Date(to).toISOString(), MaxResultsPerPage: 100 } });
+    const p = res.payload || res, fe = p.FinancialEvents || {};
+    take('S', fe.ShipmentEventList, 'ShipmentItemList', 'ItemChargeList', 'ItemFeeList');
+    take('R', fe.RefundEventList, 'ShipmentItemAdjustmentList', 'ItemChargeAdjustmentList', 'ItemFeeAdjustmentList');
+    token = p.NextToken || null;
+  } while (token && ++pages < 120);
+  if (token) { console.log(`Order fees: stopped after ${pages} pages - continues from the same date next run.`); return; }
+  feesPostedAt = to;
+  console.log(`Order fees: ${new Date(from).toISOString().slice(0, 10)} → ${new Date(to).toISOString().slice(0, 16)} · ${events} Amazon events · fees saved on ${touched.size} orders${to < now - 864e5 ? ' (still catching up - next window next run)' : ''}.`);
 }
 
 // Amazon often adds the "deliver by" date a little after the order arrives, without changing
@@ -2417,6 +2476,7 @@ async function runSync() {
 
   console.log('Step 1: syncing orders...');
   const orders = await syncOrders();
+  if (SYNC_MODE === 'full') await syncOrderFees().catch((e) => console.warn('Order fees skipped (sync continues):', e.message || e));
 
   console.log('Step 2: syncing inventory...');
   const asinsFromInventory = await syncInventory();
