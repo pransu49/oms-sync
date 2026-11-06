@@ -208,6 +208,14 @@ function compare(cart, bill, master) {
   // same qty + similar name = LOTS billed a different variant (e.g. Closeup -> Colgate, Natural Care -> Carton)
   const swaps = [], sc = [];
   for (const c of open) if (!matched.has(c.code)) for (const b of billList) if (!used.has(b.barcode) && Math.abs(b.qty - c.qty) < 0.001) { const s = nameScore(c.name, b.name); if (s >= 0.7) sc.push([s, c, b]); }
+  // weaker: same qty + same brand (first word) + 2 or more shared words (e.g. Del Monte Spirali 450 G -> Pasta Spirali 400 G)
+  const words = (t) => new Set(clean(t).split(' ').filter((w) => w.length > 2 && !/^\d/.test(w) && !['pack', 'and', 'the', 'with'].includes(w)));
+  for (const c of open) if (!matched.has(c.code)) for (const b of billList) if (!used.has(b.barcode) && Math.abs(b.qty - c.qty) < 0.001) {
+    const cw = clean(c.name).split(' '), bw = clean(b.name).split(' ');
+    if (cw[0] !== bw[0]) continue;
+    const A = words(c.name), B = words(b.name), shared = [...A].filter((w) => B.has(w)).length;
+    if (shared >= 2 && !sc.some((x) => x[1] === c && x[2] === b)) sc.push([0.5 + shared / 100, c, b]);
+  }
   sc.sort((x, y) => y[0] - x[0]);
   for (const [, c, b] of sc) { if (matched.has(c.code) || used.has(b.barcode)) continue; matched.add(c.code); used.add(b.barcode); swaps.push({ name: c.name, billName: b.name, qty: c.qty, cartTotal: c.total, billTotal: b.total }); }
   const notBilled = open.filter((c) => !matched.has(c.code)).sort((a, b) => b.total - a.total);
