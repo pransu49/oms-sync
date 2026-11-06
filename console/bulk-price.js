@@ -87,7 +87,9 @@
     $("bpAll").indeterminate = !$("bpAll").checked && view.some(function (p) { return sel.has(p.asin); });
     $("bpSelN").textContent = sel.size ? sel.size + " selected" : "";
     $("bpCopy").textContent = "⧉ Copy " + (sel.size || view.length); $("bpCsv").textContent = "⬇ Excel " + (sel.size || view.length);
-    c.querySelectorAll("#bpBar [data-drop], #bpClr").forEach(function (b) { sel.size ? b.removeAttribute("disabled") : b.setAttribute("disabled", ""); });
+    sel.size ? $("bpClr").removeAttribute("disabled") : $("bpClr").setAttribute("disabled", "");
+    c.querySelectorAll("#bpBar [data-drop]").forEach(function (b) { view.length || sel.size ? b.removeAttribute("disabled") : b.setAttribute("disabled", ""); });
+    $("bpSelN").textContent = sel.size ? sel.size + " selected" : view.length ? "No rows ticked — buttons apply to all " + view.length : "";
     var P = byAsin();
     c.querySelectorAll("table.sp-tbl tbody tr").forEach(function (tr) {
       if (tr.querySelector(".bpCk")) { var x = tr.querySelector(".bpCk"); x.checked = sel.has(x.dataset.asin); return; }
@@ -139,7 +141,8 @@
   /* ---- preview, checks, queue ---- */
   function plan(mode, skipCost, skipBig) {
     var P = byAsin();
-    return Array.from(sel).map(function (asin) {
+    var target = sel.size ? Array.from(sel) : viewItems().map(function (p) { return p.asin; });
+    return target.map(function (asin) {
       var p = P.get(asin); if (!p) return null; var x = info(p), r = { x: x, newP: null, why: "", cls: "ok", skip: false };
       if (!x.mine) { r.skip = true; r.cls = "warn"; r.why = "You're not selling — no live offer"; return r; }
       if (!x.sku || x.price == null) { r.skip = true; r.cls = "bad"; r.why = "No SKU / price found"; return r; }
