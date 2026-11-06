@@ -51,6 +51,8 @@ const loggedIn = (u) => /supplier\.meesho\.com\/panel/.test(u) && !/login/i.test
 
   // MODE=check
   if (!loggedIn(p.url())) { await tg('⚠️ Meesho (' + ACCT + '): not signed in on the office PC. Run "Meesho login setup".'); throw new Error('not logged in'); }
+  await p.getByText(/Pending Orders/i).first().waitFor({ timeout: 45000 }).catch(() => {});
+  await p.waitForTimeout(4000);
   const txt = await p.locator('body').innerText();
   const grab = (label) => { const m = txt.match(new RegExp(label + '\\s*\\n+\\s*(\\d+)', 'i')); return m ? +m[1] : null; };
   const r = { pending: grab('Pending Orders'), labels: grab('Download Labels'), oos: grab('Out of Stock'), low: grab('Low Stock') };
