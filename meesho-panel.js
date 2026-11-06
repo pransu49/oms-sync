@@ -1,4 +1,4 @@
-// Meesho Supplier Panel robot — runs on the office Windows PC (self-hosted runner, label "meesho").
+// Meesho Supplier Panel robot — runs on the office Windows PC (self-hosted Windows runner DESKTOP-7C3H54H, C:\aikm-runner).
 // Meesho blocks cloud servers, so this must run on a normal Indian internet connection.
 // MODE=login : opens a visible Chrome window; owner signs in once (OTP if asked). Login is kept in the profile folder.
 // MODE=check : reads the panel home (pending orders, labels to download, stock alerts) and sends it to Telegram. Changes nothing.

@@ -1,5 +1,5 @@
 name: Meesho panel robot (office PC)
-# Runs on the office Windows PC (self-hosted runner with label "meesho") because Meesho blocks cloud servers.
+# Runs on the office Windows PC (self-hosted Windows runner DESKTOP-7C3H54H) because Meesho blocks cloud servers.
 # login = open Chrome on the PC so the owner signs in once · check = read-only test, result on Telegram
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ on:
         default: 'noworry'
 jobs:
   run:
-    runs-on: [self-hosted, meesho]
+    runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
