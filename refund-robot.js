@@ -99,8 +99,8 @@ async function amazonOrder(sp, orderId, raw) {
   return { order, items, fin };
 }
 
-async function submit(sp, rows) {
-  if (RECORD_FEED) return readFeed(sp, RECORD_FEED);
+async function submit(sp, rows, tick) {
+  if (RECORD_FEED) return readFeed(sp, RECORD_FEED, tick);
   const tsv = [HEAD.join('\t')].concat(rows.map((x) => [x.o, x.i, x.r, 'INR', f2(x.ip), f2(x.it), x.sp || x.stx ? f2(x.sp) : '', x.sp || x.stx ? f2(x.stx) : '',
     '', '', '', '', '', ''].join('\t'))).join('\r\n') + '\r\n';
   const contentType = 'text/tab-separated-values; charset=UTF-8';
@@ -109,15 +109,17 @@ async function submit(sp, rows) {
   const feed = await sp.callAPI({ operation: 'createFeed', endpoint: 'feeds',
     body: { feedType: 'POST_FLAT_FILE_PAYMENT_ADJUSTMENT_DATA', marketplaceIds: [MARKETPLACE_ID], inputFeedDocumentId: doc.feedDocumentId } });
   console.log(`Feed ${feed.feedId} submitted (${rows.length} line(s)).`);
-  return readFeed(sp, feed.feedId);
+  return readFeed(sp, feed.feedId, tick);
 }
 
-async function readFeed(sp, feedId) {
+async function readFeed(sp, feedId, tick) {
   let info = null;
-  for (let i = 0; i < 60; i++) { // up to ~20 min
+  const t0 = Date.now();
+  for (let i = 0; i < 100; i++) { // up to ~45 min (big files can take Amazon 20+ min)
     await sleep(i < 6 ? 15000 : 30000);
     info = await sp.callAPI({ operation: 'getFeed', endpoint: 'feeds', path: { feedId } });
     console.log(`  feed ${feedId}: ${info.processingStatus}`);
+    if (tick) await tick(`Amazon is processing the refund file (${Math.max(1, Math.round((Date.now() - t0) / 60000))} min so far, ${String(info.processingStatus).replace(/_/g, ' ').toLowerCase()})…`).catch(() => {});
     if (['DONE', 'FATAL', 'CANCELLED'].includes(info.processingStatus)) break;
   }
   let report = '';
@@ -132,17 +134,22 @@ async function readFeed(sp, feedId) {
 // Full refund (x.full, or amounts within ₹1 of Amazon's) -> Amazon's exact item/tax/shipping/shipping-tax.
 // Partial item refund -> scaled with Amazon's own tax ratio. Shipping only if the line asked for it.
 // Cancelled (nothing shipped) / already refunded -> skipped. Promotions / part-refunded -> left for manual refund.
-async function fixAmounts(sp, rows, checks, add) {
+async function fixAmounts(sp, rows, checks, add, tick) {
   const out = [], byOrder = {};
+  let calls = 0, n = 0;
   rows.forEach((x) => (byOrder[x.o] = byOrder[x.o] || []).push(x));
   const r2 = (n) => Math.round(n * 100) / 100;
+  const total = Object.keys(byOrder).length;
   for (const [o, lines] of Object.entries(byOrder)) {
+    n++;
+    if (tick && (n === 1 || n % 10 === 0)) await tick(`reading Amazon's exact amounts — order ${n} of ${total}…`).catch(() => {});
     let items;
     try {
       items = []; let next = null;
       do {
         const r = await call(sp, { operation: 'getOrderItems', endpoint: 'orders', path: { orderId: o }, query: next ? { NextToken: next } : {} });
-        items = items.concat(r.OrderItems || []); next = r.NextToken; await sleep(2100);
+        items = items.concat(r.OrderItems || []); next = r.NextToken; calls++;
+        await sleep(calls < 25 ? 250 : 2100); // Amazon allows a burst of ~30 quick calls, then 1 every 2 sec
       } while (next);
     } catch (e) { lines.forEach((x) => add(x, 'error', `Could not read the order from Amazon: ${e.code || e.message || e}`)); continue; }
     const amz = {}; let orderTot = 0;
@@ -220,12 +227,12 @@ async function main() {
     await setLive('running', `${a}: reading Amazon's exact amounts for ${rows.length} line(s)…`);
     try {
       if (!RECORD_FEED) {
-        const fixed = await fixAmounts(client(ACCOUNTS[a].token), rows, checks, add);
+        const fixed = await fixAmounts(client(ACCOUNTS[a].token), rows, checks, add, (msg) => setLive('running', `${a}: ${msg}`));
         rows.length = 0; fixed.forEach((x) => rows.push(x));
         if (!rows.length) continue;
       }
       await setLive('running', `${a}: sending ${rows.length} refund line(s) to Amazon…`);
-      const r = await submit(client(ACCOUNTS[a].token), rows);
+      const r = await submit(client(ACCOUNTS[a].token), rows, (msg) => setLive('running', `${a}: ${rows.length} line(s) sent — ${msg}`));
       const { summary, errors } = parseReport(r.report);
       console.log(`  ${a} report: ${summary || '(no report text)'}`);
       if (r.report) console.log(r.report.split(/\r?\n/).slice(0, 25).join('\n'));
