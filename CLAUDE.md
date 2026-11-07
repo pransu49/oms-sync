@@ -17,6 +17,8 @@
 - The Meesho Listing tab on the Amazon page (`console/meesho-listing.js`) is loaded by the block at the end of
   `console/amazon-name-search.js` (`aikmMeeshoListingJs`). (Different from `console/meesho-tab.js`, the Meesho + Snapdeal packing page.) Keep that block when replacing `amazon-name-search.js`.
   Its Amazon details come from `meesho-robot.js` (workflow `meesho-robot.yml`, on command only) -> spapiSnapshots/meesho_<ASIN>.
+  Saved templates (owner 7 Nov 2026): every fresh template dropped is kept in main Firebase, one per category — index `aikm_admin/meeshoTplIndex`
+  + file parts `aikm_admin/meeshoTpl_<key>_<n>` (base64). 1 read when the tab opens, 1-2 per template opened. Do not delete them.
 - Auto sale bills (`console/sale-autobill.js`) is loaded on the Purchase & Sales page (`page.purchase-bills.liquid`)
   by the block `AIKM AUTO SALE BILLS LOADER` just before `</body>`. Keep that block when replacing that template.
   It saves records of kind `autobill_done` and `autobill_map` in Supabase — do not delete them.

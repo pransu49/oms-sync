@@ -86,6 +86,8 @@
       ".ms-drop i{font-size:26px;color:var(--gold)}.ms-drop b{font-size:13.5px}.ms-drop small{font-size:12px;color:var(--muted)}",
       ".ms-tpl{margin-top:10px;padding:10px 12px;border-radius:10px;background:#F3F7F2;color:#2E5E3E;font-size:12.5px;line-height:1.6}",
       ".ms-tpl.bad{background:#FBEDEB;color:#9B2C22}",
+      ".ms-lib{margin-top:10px;display:flex;align-items:center;gap:8px}.ms-lib:empty{display:none}",
+      ".ms-lib .ms-sel{flex:1;min-width:0}.ms-lib small{font-size:12px;color:var(--muted);white-space:nowrap}",
       ".ms-set{margin-top:16px;border:1px solid var(--line-2);border-radius:12px}",
       ".ms-set summary{cursor:pointer;padding:11px 14px;font-weight:600;font-size:13px;list-style:none}",
       ".ms-set summary::-webkit-details-marker{display:none}",
@@ -155,8 +157,9 @@
           '<div class="ms-list" id="msList"></div>' +
         '</div><div class="ms-col">' +
           '<div class="ms-lbl">2 · Meesho template</div>' +
-          '<label class="ms-drop" id="msDrop"><i class="ti ti-file-spreadsheet"></i><b>Drop the Meesho template here</b><small>Meesho panel → Catalog Upload → Bulk upload → pick category → Download template (.xlsx)</small>' +
-          '<input type="file" id="msFile" accept=".xlsx,.xlsm" style="display:none"></label>' +
+          '<label class="ms-drop" id="msDrop"><i class="ti ti-file-spreadsheet"></i><b>Drop Meesho templates here</b><small>Meesho panel → Catalog Upload → Bulk upload → pick category → Download template (.xlsx)</small>' +
+          '<input type="file" id="msFile" accept=".xlsx,.xlsm" multiple style="display:none"></label>' +
+          '<div class="ms-lib" id="msLib"></div>' +
           '<div id="msTpl"></div>' +
           '<details class="ms-set" id="msSet"><summary>Your details &amp; price <small>saved on this computer</small></summary><div class="ms-sg">' +
             '<label class="w">Meesho seller account<span style="display:flex;gap:8px"><select id="msProf" class="ms-sel"></select><button type="button" class="ms-lnk" id="msProfAdd">+ Add account</button></span></label>' +
@@ -197,8 +200,10 @@
     var drop = $("msDrop");
     ["dragenter", "dragover"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("over"); }); });
     ["dragleave", "drop"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("over"); }); });
-    drop.addEventListener("drop", function (e) { var f = e.dataTransfer.files && e.dataTransfer.files[0]; if (f) readTemplate(f); });
-    $("msFile").addEventListener("change", function (e) { var f = e.target.files && e.target.files[0]; if (f) readTemplate(f); e.target.value = ""; });
+    drop.addEventListener("drop", function (e) { readMany(e.dataTransfer.files); });
+    $("msFile").addEventListener("change", function (e) { readMany(e.target.files); e.target.value = ""; });
+    $("msLib").addEventListener("change", function (e) { if (e.target.id === "msLibSel" && e.target.value) libOpen(e.target.value); });
+    libLoad();
     var DEF = { pct: 0, stock: 10, minPct: 15, tgtPct: 20, shelfDays: 365 };
     var map = { msPct: "pct", msStock: "stock", msBrand: "brand", msCountry: "country", msTgt: "tgtPct", msMin: "minPct", msShelf: "shelfDays" };
     Object.keys(map).forEach(function (id) {
@@ -266,7 +271,7 @@
     $("msS2") && $("msS2").classList.toggle("ok", s2);
     $("msS3") && $("msS3").classList.toggle("ok", !!grid);
     var go = $("msGo"); if (go) { go.classList.toggle("dim", !(s1 && s2) || busy); go.innerHTML = '<i class="ti ti-wand"></i>Fill Meesho file' + (s1 ? " · " + pick.size + " product" + (pick.size > 1 ? "s" : "") : ""); }
-    if (!busy && $("msNote")) $("msNote").textContent = !s1 ? "Tick the products to list" : !s2 ? "Now drop in the Meesho template" : "";
+    if (!busy && $("msNote")) $("msNote").textContent = !s1 ? "Tick the products to list" : !s2 ? "Now drop in the Meesho template or pick a saved one" : "";
   }
 
   /* ---------- 2. read the template (any category) ---------- */
@@ -290,12 +295,15 @@
     return { c1: a[1] ? colNum(a[1]) : 0, r1: a[2] ? +a[2] : 1, c2: b[1] ? colNum(b[1]) : 16383, r2: b[2] ? +b[2] : 1048576 };
   }
 
-  async function readTemplate(file) {
+  async function readMany(files) {   // several templates at once: each is saved to the library, the last one stays open
+    files = Array.prototype.slice.call(files || []); for (var i = 0; i < files.length; i++) await readTemplate(files[i]);
+  }
+  async function readTemplate(file, fromLib) {
     var box = $("msTpl");
     if (/\.xls$/i.test(file.name)) { box.innerHTML = '<div class="ms-tpl bad">This is an old .xls file. Open it in Excel → Save As → .xlsx, then drop it here.</div>'; return; }
     box.innerHTML = '<div class="ms-tpl" style="background:#F6F4EE;color:var(--muted)">Reading template…</div>';
     try {
-      var JSZip = await loadZip(), zip = await JSZip.loadAsync(await file.arrayBuffer());
+      var buf = await file.arrayBuffer(), JSZip = await loadZip(), zip = await JSZip.loadAsync(buf.slice(0));
       var rd = async function (p) { var f = zip.file(p); return f ? f.async("string") : null; };
       var wb = X(await rd("xl/workbook.xml")), relsDoc = X(await rd("xl/_rels/workbook.xml.rels")), rels = {};
       all(relsDoc, "Relationship").forEach(function (r) { var t = r.getAttribute("Target"); rels[r.getAttribute("Id")] = t.charAt(0) === "/" ? t.slice(1) : "xl/" + t.replace(/^\.\//, ""); });
@@ -389,7 +397,9 @@
       tpl = { name: file.name, zip: zip, path: best.sh.path, sheet: best.sh.name, doc: main.doc, hr: hr, start: start, cols: cols, fcols: fcols, cat: cat };
       grid = null; $("msRes").style.display = "none";
       var dd = cols.filter(function (c) { return c.options; }).length, rq = cols.filter(function (c) { return c.req; }).length;
-      box.innerHTML = '<div class="ms-tpl"><b>✓ ' + esc(file.name) + "</b><br>Sheet “" + esc(best.sh.name) + "” · " + cols.length + " columns to fill" + (rq ? " · " + rq + " required" : "") + (sysCols + autoCols ? " · " + (sysCols + autoCols) + " filled by Meesho itself, skipped" : "") + (dd ? " · " + dd + " with Meesho choices" : "") + " · products start at row " + start + "</div>";
+      box.innerHTML = '<div class="ms-tpl"><b>✓ ' + esc(file.name) + "</b><br>Sheet “" + esc(best.sh.name) + "” · " + cols.length + " columns to fill" + (rq ? " · " + rq + " required" : "") + (sysCols + autoCols ? " · " + (sysCols + autoCols) + " filled by Meesho itself, skipped" : "") + (dd ? " · " + dd + " with Meesho choices" : "") + " · products start at row " + start +
+        '<br><span id="msSaved">' + (fromLib ? "From your saved templates" : "Saving to your templates…") + "</span></div>";
+      if (!fromLib) libSave(buf, file.name, cat || best.sh.name, cols.length);
     } catch (e) {
       tpl = null; box.innerHTML = '<div class="ms-tpl bad">' + esc(e.message || e) + "</div>";
     }
@@ -407,6 +417,54 @@
     var cs = await cells(sh ? sh.path : mainPath), out = [];
     for (var r = rg.r1; r <= Math.min(rg.r2, rg.r1 + 2000); r++) { var row = cs.rows[r]; if (!row) continue; for (var c = rg.c1; c <= Math.min(rg.c2, rg.c1 + 5); c++) if (row[c] && row[c].v) out.push(row[c].v); }
     return out.length ? Array.from(new Set(out)).slice(0, 800) : null;
+  }
+
+  /* ---------- saved templates (main Firebase, aikm_admin) ----------
+     Every fresh template dropped here is kept, one per Meesho category (a newer one replaces the older).
+     aikm_admin/meeshoTplIndex = { list: { <key>: { name, cat, cols, size, parts, at } } }   (1 read when the tab opens)
+     aikm_admin/meeshoTpl_<key>_<n> = { d: base64 part }                                     (1-2 reads when one is opened) */
+  var LIB = null, LIBQ = Promise.resolve(), PART = 900000;
+  var libKey = function (cat) { return String(cat || "template").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 80) || "template"; };
+  function b64(buf) { var u = new Uint8Array(buf), s = ""; for (var i = 0; i < u.length; i += 32768) s += String.fromCharCode.apply(null, u.subarray(i, i + 32768)); return btoa(s); }
+  function unb64(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+  async function libLoad() {
+    var db = mainDb(); if (!db) return;
+    try { var d = await db.collection("aikm_admin").doc("meeshoTplIndex").get(); LIB = (d.exists && d.data().list) || {}; } catch (e) { LIB = null; }
+    libUi();
+  }
+  function libUi(sel) {
+    var box = $("msLib"); if (!box) return;
+    var keys = Object.keys(LIB || {}).sort(function (a, b) { return String(LIB[a].cat).localeCompare(String(LIB[b].cat)); });
+    if (!keys.length) { box.innerHTML = ""; return; }
+    box.innerHTML = '<select class="ms-sel" id="msLibSel"><option value="">Use a saved template…</option>' +
+      keys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === sel ? " selected" : "") + ">" + esc(LIB[k].cat) + " · " + LIB[k].cols + " columns</option>"; }).join("") +
+      "</select><small>" + keys.length + " saved</small>";
+  }
+  function libSave(buf, name, cat, cols) {   // queued, so dropping many files at once saves them one by one
+    LIBQ = LIBQ.then(async function () {
+      var db = mainDb(), msg = function (t) { var el = $("msSaved"); if (el && tpl && tpl.name === name) el.textContent = t; };
+      if (!db) return msg("Not saved — console not connected to Firebase");
+      try {
+        var key = libKey(cat), data = b64(buf), parts = Math.ceil(data.length / PART) || 1, col = db.collection("aikm_admin");
+        for (var i = 0; i < parts; i++) await col.doc("meeshoTpl_" + key + "_" + i).set({ d: data.slice(i * PART, (i + 1) * PART) });
+        var row = { name: name, cat: cat, cols: cols, size: buf.byteLength, parts: parts, at: Date.now() }, upd = {};
+        upd["list." + key] = row;
+        await col.doc("meeshoTplIndex").set({ list: {} }, { merge: true });
+        await col.doc("meeshoTplIndex").update(upd);
+        LIB = LIB || {}; var had = !!LIB[key]; LIB[key] = row; libUi(key);
+        msg(had ? "✓ Saved — replaced the older " + cat + " template" : "✓ Saved to your templates");
+      } catch (e) { msg("Not saved: " + (e.message || e)); }
+    });
+    return LIBQ;
+  }
+  async function libOpen(key) {
+    var db = mainDb(), row = LIB && LIB[key], box = $("msTpl"); if (!db || !row) return;
+    box.innerHTML = '<div class="ms-tpl" style="background:#F6F4EE;color:var(--muted)">Opening ' + esc(row.cat) + "…</div>";
+    try {
+      var docs = await Promise.all(Array.from({ length: row.parts || 1 }, function (_, i) { return db.collection("aikm_admin").doc("meeshoTpl_" + key + "_" + i).get(); }));
+      var data = docs.map(function (d) { if (!d.exists) throw new Error("Saved file is missing — drop the template again"); return d.data().d || ""; }).join("");
+      await readTemplate(new File([unb64(data)], row.name), true);
+    } catch (e) { tpl = null; box.innerHTML = '<div class="ms-tpl bad">' + esc(e.message || e) + "</div>"; drawSteps(); }
   }
 
   /* ---------- 3. Amazon details (robot) ---------- */
