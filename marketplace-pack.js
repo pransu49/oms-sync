@@ -16,7 +16,7 @@
 const cheerio = require('cheerio');
 const { PDFDocument } = require('pdf-lib');
 const admin = require('firebase-admin');
-const { notify } = require('./telegram');
+const { notify, sendDocument } = require('./telegram');
 const { picklistPdf } = require('./picklist-pdf');
 
 const EMAIL = process.env.OMS_EMAIL, PASSWORD = process.env.OMS_PASSWORD;
@@ -286,19 +286,7 @@ async function downloadLabel(labelId) {
   }
   throw new Error('label download failed');
 }
-async function sendPdf(fileName, bytes, caption) {
-  const token = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chat) { console.log('Telegram not set up — PDF not sent'); return false; }
-  try {
-    const fd = new FormData();
-    fd.append('chat_id', chat); fd.append('caption', caption.slice(0, 1000));
-    fd.append('document', new Blob([bytes], { type: 'application/pdf' }), fileName);
-    const r = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: 'POST', body: fd });
-    const j = await r.json().catch(() => ({}));
-    if (!j.ok) console.log('Telegram PDF not sent:', j.description || r.status);
-    return !!j.ok;
-  } catch (e) { console.log('Telegram PDF not sent:', e.message); return false; }
-}
+async function sendPdf(fileName, bytes, caption) { return sendDocument(fileName, bytes, caption, 'meesho'); }
 
 // ---------- main ----------
 async function main() {
@@ -459,7 +447,7 @@ async function main() {
       await sendPdf(`Picklist_Meesho_Snapdeal_${today}.pdf`, pl, `🧾 Picklist — Meesho + Snapdeal — ${today}\n${packed.length} orders · ${units} units · ${picklist.length} products`);
     } catch (e) { console.log('Picklist PDF failed:', e.message); lines.push('', 'Picklist:'); picklist.slice(0, 60).forEach(([s2, q]) => lines.push(`${q} × ${s2}`)); }
   }
-  if (toPack.length || check.length) await notify(lines.join('\n'));
+  if (toPack.length || check.length) await notify(lines.join('\n'), { cat: 'meesho' });
 
   const summary = {
     runId: RUN_ID, date: today, trigger: TRIGGER, startedAt: new Date(t0).toISOString(), finishedAt: new Date().toISOString(),

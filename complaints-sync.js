@@ -144,7 +144,7 @@ async function main() {
     const msg = `⭐ <b>${fresh.length} new negative feedback${fresh.length > 1 ? 's' : ''}</b>\n${LINE}\n` +
       fresh.slice(0, 8).map((x) => `${'★'.repeat(x.rt)}${'☆'.repeat(5 - x.rt)} ${esc(short(x.acc))} · ${esc(x.o)}\n<i>${esc((x.c || '').slice(0, 140))}</i>\n${esc(x.p || '')}${x.next ? '\n👉 ' + esc(x.next) : ''}`).join('\n\n') +
       (fresh.length > 8 ? `\n\n…and ${fresh.length - 8} more` : '') + `\n\nAdmin Console → <b>Complaints</b>`;
-    if (DRY) console.log('DRY — Telegram:\n' + msg); else sent = await notify(msg, { html: true });
+    if (DRY) console.log('DRY — Telegram:\n' + msg); else sent = await notify(msg, { html: true, cat: 'refunds' });
     if (sent) fresh.forEach((x) => { seen[x.acc + '|' + x.o] = now.date; });
   }
   const cut = new Date(Date.now() - 120 * 864e5).toISOString().slice(0, 10);

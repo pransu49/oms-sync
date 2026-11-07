@@ -158,20 +158,8 @@ async function picklistPdf({ title, date, orders, rows, note }) {
   return Buffer.from(await pdf.save());
 }
 
-async function sendTelegramPdf(fileName, bytes, caption) {
-  const token = process.env.TELEGRAM_BOT_TOKEN, chat = process.env.TELEGRAM_CHAT_ID;
-  if (!token || !chat) { console.log('Telegram not set up — picklist PDF not sent'); return false; }
-  try {
-    const fd = new FormData();
-    fd.append('chat_id', chat);
-    if (caption) fd.append('caption', String(caption).slice(0, 1000));
-    fd.append('document', new Blob([bytes], { type: 'application/pdf' }), fileName);
-    const r = await fetch(`https://api.telegram.org/bot${token}/sendDocument`, { method: 'POST', body: fd });
-    const j = await r.json().catch(() => ({}));
-    if (!j.ok) console.log('Telegram picklist not sent:', j.description || r.status);
-    return !!j.ok;
-  } catch (e) { console.log('Telegram picklist not sent:', e.message); return false; }
-}
+// sends to the category's Telegram group (see telegram.js / telegram-routes.json)
+async function sendTelegramPdf(fileName, bytes, caption, cat) { return require('./telegram').sendDocument(fileName, bytes, caption, cat); }
 
 // LOTS low-stock report: same premium design. rows = [{ name, code, stock, sold, listings:[{acct, sku, q}] }]
 // (already sorted: best sellers first)
@@ -257,7 +245,7 @@ if (require.main === module) {
     const j = JSON.parse(require('fs').readFileSync(process.argv[2], 'utf8'));
     const bytes = await picklistPdf(j);
     if (process.argv[3]) { require('fs').writeFileSync(process.argv[3], bytes); console.log('Picklist saved:', process.argv[3]); return; }
-    const ok = await sendTelegramPdf(j.fileName || 'Picklist.pdf', bytes, j.caption || '');
+    const ok = await sendTelegramPdf(j.fileName || 'Picklist.pdf', bytes, j.caption || '', j.cat || 'orders');
     console.log(ok ? 'Picklist PDF sent to Telegram.' : 'Picklist PDF not sent.');
   })().catch((e) => { console.log('Picklist skipped:', e.message); });
 }

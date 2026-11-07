@@ -1,0 +1,25 @@
+name: Telegram groups (find ids)
+
+# Lists the Telegram groups the alert bot was added to (last 24 h) with their ids.
+# test = true: sends a "Connected" message into every group listed in telegram-routes.json.
+on:
+  workflow_dispatch:
+    inputs:
+      test:
+        description: 'true = send a test message to every connected group'
+        default: 'false'
+
+jobs:
+  groups:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: node telegram-groups.js
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TEST: ${{ inputs.test || 'false' }}

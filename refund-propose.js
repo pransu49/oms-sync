@@ -117,7 +117,7 @@ async function main() {
       `\nWaiting in total: ${new Set(items.map((o) => o.o)).size} order(s) · ${inr(total)}` +
       `\n\n👉 Admin Console → <b>Bulk Refund</b> → 🤖 Ready to refund → Approve`;
     if (DRY) console.log('DRY — Telegram message would be:\n' + msg);
-    else sent = await notify(msg, { html: true });
+    else sent = await notify(msg, { html: true, cat: 'refunds' });
   } else if (fresh.length) console.log(`${fresh.length} new order(s) — Telegram alert waits for daytime (8 AM–10 PM).`);
   if (sent) fresh.forEach((id) => { notified[id] = now.date; });
   const cut = new Date(Date.now() - 90 * 864e5).toISOString().slice(0, 10);

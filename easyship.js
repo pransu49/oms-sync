@@ -523,7 +523,7 @@ async function finish(summary, packed, failed, batchNotes, t0) {
     try {
       const pl = await picklistPdf({ title: 'Amazon Easy Ship', date: TARGET, orders: packed.length, rows: summary.picklist.map((x) => ({ name: x.sku, qty: x.qty, accounts: byAccSku[x.sku] })), note: `SLA date ${TARGET} - 2:00 PM pickup` });
       const units = summary.picklist.reduce((a, x) => a + x.qty, 0);
-      const ok = await sendTelegramPdf(`Picklist_Amazon_EasyShip_SLA-${TARGET}.pdf`, pl, `🧾 Picklist — Amazon Easy Ship — SLA ${TARGET}\n${packed.length} orders · ${units} units · ${summary.picklist.length} products`);
+      const ok = await sendTelegramPdf(`Picklist_Amazon_EasyShip_SLA-${TARGET}.pdf`, pl, `🧾 Picklist — Amazon Easy Ship — SLA ${TARGET}\n${packed.length} orders · ${units} units · ${summary.picklist.length} products`, 'orders');
       console.log(`Picklist PDF ${ok ? 'sent to Telegram' : 'not sent'}.`);
     } catch (e) { console.log('Picklist PDF failed:', e.message); }
   }

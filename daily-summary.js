@@ -77,7 +77,7 @@ const { notify, istNow, esc, LINE } = require('./telegram');
     const hrs = Object.entries(t.hours || {}).filter(([, v]) => v != null).sort((p, q) => q[1] - p[1]);
     if (hrs.length) out.push(`⏱ Hours  <i>${hrs.map(([n, v]) => `${esc(n)} ${Math.floor(v)}h${String(Math.round((v % 1) * 60)).padStart(2, '0')}`).join(' · ')}</i>`);
   }
-  if (!(await notify(out.join('\n'), { html: true }))) throw new Error('Telegram message was not delivered (see the line above).');
+  if (!(await notify(out.join('\n'), { html: true, cat: 'system' }))) throw new Error('Telegram message was not delivered (see the line above).');
 
   // keep only the last 30 days of counts
   const days = Object.keys((a.data() || {}).day || {}).sort();

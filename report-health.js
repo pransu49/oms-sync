@@ -103,29 +103,30 @@ const chName = (c) => String(c || '').replace(/\s*-\s*Ama[a-z]*$/i, ' · Amazon'
           `<b>What to do</b>\n${esc(fix || 'Share the log with Claude.')}`,
           entry.error ? `\n<blockquote>${esc(entry.error.slice(0, 180))}</blockquote>` : '',
           `\n<a href="${run}">Open run details →</a>`,
-        ].filter((x) => x !== '').join('\n'), { html: true });
+        ].filter((x) => x !== '').join('\n'), { html: true, cat: 'system' });
         entry.alertedAt = admin.firestore.FieldValue.serverTimestamp();
       } else entry.alertedAt = prev.alertedAt;
     } else if (status === 'success' && prev && prev.ok === false && prev.alertedAt) {
-      await notify(`🟢 <b>Back online</b>\n${esc(label)} is working again.`, { html: true });
+      await notify(`🟢 <b>Back online</b>\n${esc(label)} is working again.`, { html: true, cat: 'system' });
     }
 
     if (status === 'success') {
       const a = actionLines();
       const acc = /sasta/i.test(key) ? 'Sasta Store' : /praso/i.test(key) ? 'Praso' : '';
-      const parts = [];
+      const parts = [], refundParts = [];
       if (a.price.length) parts.push(`💰 <b>Price updates · ${a.price.length}</b>${acc ? `  <i>${acc}</i>` : ''}\n` + a.price.slice(0, 8).map(priceLine).join('\n') + more(a.price.length - 8));
       if (a.relist.length) parts.push(`🔁 <b>Relisted · ${a.relist.length}</b>${acc ? `  <i>${acc}</i>` : ''}\n` + a.relist.slice(0, 6).map(relistLine).join('\n') + more(a.relist.length - 6));
       if (a.refund.length) {
         const m = a.refund[0].match(/(\d+) refunded, (\d+) failed(?:, (\d+) skipped)?/);
-        parts.push(m ? `💸 <b>Bulk refund done</b>\n✅ ${m[1]} refunded   ❌ ${m[2]} failed${m[3] ? `   ⏭ ${m[3]} skipped` : ''}` : `💸 <b>Bulk refund</b>\n${esc(a.refund[0])}`);
+        refundParts.push(m ? `💸 <b>Bulk refund done</b>\n✅ ${m[1]} refunded   ❌ ${m[2]} failed${m[3] ? `   ⏭ ${m[3]} skipped` : ''}` : `💸 <b>Bulk refund</b>\n${esc(a.refund[0])}`);
       }
       const inc = admin.firestore.FieldValue.increment;
       const counts = {};
       if (a.price.length) counts.price = inc(a.price.length);
       if (a.relist.length) counts.relist = inc(a.relist.length);
       if (a.refund.length) { const m = a.refund[0].match(/(\d+) refunded, (\d+) failed/); if (m) { counts.refundOk = inc(+m[1]); counts.refundFail = inc(+m[2]); } }
-      if (parts.length) await notify(parts.join(`\n${LINE}\n`), { html: true });
+      if (parts.length) await notify(parts.join(`\n${LINE}\n`), { html: true, cat: 'pricing' });
+      if (refundParts.length) await notify(refundParts.join(`\n${LINE}\n`), { html: true, cat: 'refunds' });
       if (Object.keys(counts).length) await alertRef.set({ day: { [today.date]: counts } }, { merge: true });
 
       // SLA due: at most twice a day (morning + afternoon), only 9 am - 8 pm
@@ -147,7 +148,7 @@ const chName = (c) => String(c || '').replace(/\s*-\s*Ama[a-z]*$/i, ' · Amazon'
             '\n<b>By account</b>',
             ...top.slice(0, 6).map(([c, n]) => `• ${esc(c)} — <b>${n}</b>`),
             top.length > 6 ? `<i>+ ${top.length - 6} more accounts</i>` : '',
-          ].filter((x) => x !== '').join('\n'), { html: true });
+          ].filter((x) => x !== '').join('\n'), { html: true, cat: 'orders' });
           await alertRef.set({ slaSlot: slot }, { merge: true });
         }
       }

@@ -387,7 +387,7 @@ def main():
         with open('picklist.json', 'w') as f:
             json.dump({'title': 'Amazon Self-Ship (NimbusPost)' + (f' - {acct}' if acct else ''), 'date': sla, 'orders': len(final),
                        'rows': list(rows.values()), 'note': f'SLA date {sla}' + (f' - account {acct}' if acct else ' - all accounts'),
-                       'fileName': f'Picklist_Amazon_SelfShip_SLA-{sla}.pdf',
+                       'fileName': f'Picklist_Amazon_SelfShip_SLA-{sla}.pdf', 'cat': 'orders',
                        'caption': f'🧾 Picklist — Amazon Self-Ship — SLA {sla}\n{len(final)} orders · {units} units · {len(rows)} products'}, f)
         print('picklist.json written:', len(rows), 'products')
     except Exception as e:

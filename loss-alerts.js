@@ -98,7 +98,7 @@ const timeLbl = (ms) => new Date(ms + IST).toISOString().slice(11, 16).replace(/
       `📊 <b>Today so far</b>   ${loss.length} orders  ·  ${inr(allLost)} lost`,
       '🔧 <i>Fix prices → Console › Loss Orders</i>',
     ].filter((x) => x !== '').join('\n');
-    await notify(msg, { html: true });
+    await notify(msg, { html: true, cat: 'pricing' });
   }
   fresh.forEach((x) => { st.sent[x.key] = 1; });
   st.lastAt = now;

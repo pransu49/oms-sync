@@ -32,7 +32,7 @@ const ACCOUNT_LABEL = process.env.ACCOUNT_LABEL || 'account1';
 // said do not exist, and counts every call. See sp-guard.js. State: spapiSnapshots/<account>_guard.
 const apiGuard = require('./sp-guard').createGuard({
   db, docId: `${ACCOUNT_LABEL}_guard`, account: ACCOUNT_LABEL,
-  notify: (t) => require('./telegram').notify(t, { html: true }),
+  notify: (t) => require('./telegram').notify(t, { html: true, cat: 'system' }),
   isLive: (sku) => inventoryFresh && reportSkus.has(sku),
   tokenTag: require('crypto').createHash('sha256').update(String(process.env.SPAPI_REFRESH_TOKEN || '')).digest('hex').slice(0, 12),
 });
@@ -1290,7 +1290,7 @@ async function finishSuggestions() {
   const { notify, esc } = require('./telegram');
   await notify(`💡 <b>${label} · ${list.length} new price suggestion${list.length > 1 ? 's' : ''}</b> (robot did not change anything)\n` +
     list.slice(0, 12).map((x) => `${K[x.kind] || '•'} ${esc(String(x.name || x.sku).slice(0, 36))} — ₹${x.oldPrice} → <b>₹${x.newPrice}</b> · sold ${u30[x.asin] || 0}/30d\n   <i>${esc(String(x.why).slice(0, 110))}</i>`).join('\n') +
-    (list.length > 12 ? `\n+${list.length - 12} more` : '') + `\nApply on the Amazon page → 💡 Price suggestions.`, { html: true });
+    (list.length > 12 ? `\n+${list.length - 12} more` : '') + `\nApply on the Amazon page → 💡 Price suggestions.`, { html: true, cat: 'pricing' });
   await ref.set({ told: openS.map((x) => x.sku + '@' + x.newPrice).join('\n'), toldAt: Date.now() }, { merge: true });
 }
 async function setOfferPrice(sellerId, i, old, productType, price) {

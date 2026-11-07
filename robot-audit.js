@@ -200,5 +200,5 @@ function lotsFor(asin, L) {
   findings.forEach((f) => console.log('  -', f.text.replace(/<[^>]+>/g, '').split('\n')[0]));
   if (process.env.DRY_RUN === 'true') { console.log('TEST - not sent, state not saved. Would send:\n' + report.map((f) => f.text.replace(/<[^>]+>/g, '')).join('\n---\n')); return; }
   await stateRef.set({ at: now, seen, counts: summary, reported, findings: findings.map((f) => ({ key: f.key, n: f.n || 0, text: f.text.replace(/<[^>]+>/g, '') })) });
-  if (report.length) await notify(`🛡 <b>ROBOT WATCHDOG</b>\n${LINE}\n${report.map((f) => f.text).join(`\n${LINE}\n`)}\n${LINE}\nOpen the Amazon page → 🤖 Robot changes to see what the robot did.`, { html: true });
+  if (report.length) await notify(`🛡 <b>ROBOT WATCHDOG</b>\n${LINE}\n${report.map((f) => f.text).join(`\n${LINE}\n`)}\n${LINE}\nOpen the Amazon page → 🤖 Robot changes to see what the robot did.`, { html: true, cat: 'pricing' });
 })().catch((e) => { console.error('Watchdog failed:', e.message || e); process.exitCode = 1; });

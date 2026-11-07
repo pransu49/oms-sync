@@ -110,7 +110,7 @@ const addDays = (date, n) => new Date(Date.parse(`${date}T00:00:00Z`) + n * 864e
   const names = (a) => a.map((e) => e.name);
   st.day = { [today]: { total: emps.length, present: names(present), late: names(late), stillIn: names(stillIn), absent: names(absent), leave: names(leave), off: names(off), hours, holiday, at: new Date(now + IST).toISOString().slice(11, 16) + ' IST' } };
 
-  for (const m of msgs) await notify(m, { html: true });
+  for (const m of msgs) await notify(m, { html: true, cat: 'attendance' });
   await main.collection('aikm_admin').doc('attendanceAlerts').set(st);
   console.log(`Attendance ${today}: ${present.length}/${emps.length} in, ${events.length} new punch(es), ${notIn.length} not-in alert(s)${firstRun ? ' (first run ever - learned only, nothing sent)' : ''}.`);
 })().catch((e) => { console.error('ATTENDANCE ALERTS FAILED:', e.message); process.exit(1); });

@@ -105,12 +105,12 @@ function ymd(x) {
       BAR,
       `📄 <i>Full list of ${all.length} products in the PDF below (best sellers first)</i>`,
     ].filter((x) => x !== '').join('\n');
-    await notify(msg, { html: true });
+    await notify(msg, { html: true, cat: 'inventory' });
     try {
       const today = new Date(Date.now() + IST).toISOString().slice(0, 10);
       const rows = all.map((c) => { const L = []; used[c].asins.forEach((a) => (byAsin[a] || []).forEach((x) => L.push(x))); return { name: used[c].p.name || c, code: c, stock: low[c], sold: soldOf(c), listings: L }; });
       const pdf = await lowStockPdf({ date: today, rows, limit: LOW_QTY, days: SALES_DAYS });
-      await sendTelegramPdf(`LOTS_Low_Stock_${today}.pdf`, pdf, `📦 LOTS low stock — ${all.length} products below ${LOW_QTY} · ${oos} out of stock\nBest sellers (last ${SALES_DAYS} days) first`);
+      await sendTelegramPdf(`LOTS_Low_Stock_${today}.pdf`, pdf, `📦 LOTS low stock — ${all.length} products below ${LOW_QTY} · ${oos} out of stock\nBest sellers (last ${SALES_DAYS} days) first`, 'inventory');
     } catch (e) { console.log('Low stock PDF failed:', e.message); }
   }
   await A.doc('oosAlerts').set({ stamp, low, checkedAt: Date.now(), mapped: Object.keys(used).length, slot: slot || st.slot || null });
