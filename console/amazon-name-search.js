@@ -760,3 +760,70 @@
     fix();
   })(0);
 } catch (e) {} })();
+
+/* ===== OMS inventory: "Mapped to vendor" list (owner, 7 Nov 2026: "already mapped but still showing under not mapped").
+   The robot (oms-inventory-push.js) now keeps vendor-mapped products (PAWAN, NAV DURGA...) out of "Not linked" and saves them
+   as `mapped` in spapiSnapshots/omsInventory_rows_*. This adds a button + list for them. 2 reads, only when opened. ===== */
+(function () { try {
+  if (window.__aikmOmiVend) return; window.__aikmOmiVend = true;
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
+  var data = null, at = 0, loading = null, open = false, q = "";
+  function load() {
+    if (loading) return loading;
+    if (data && Date.now() - at < 5 * 60e3) return Promise.resolve(data);
+    var C = fbDbSpapi.collection("spapiSnapshots");
+    loading = C.doc("omsInventory").get().then(function (m) {
+      var n = (m.exists && m.data().chunks) || 0, jobs = [];
+      for (var i = 0; i < n; i++) jobs.push(C.doc("omsInventory_rows_" + i).get());
+      return Promise.all(jobs);
+    }).then(function (ps) {
+      var j = {}; try { j = JSON.parse(ps.map(function (p) { return p.exists ? p.data().data : ""; }).join("") || "{}"); } catch (e) {}
+      data = (j.mapped || []).map(function (r) { return { sku: r[0], name: r[1], asins: String(r[2] || "").split(" ").filter(Boolean), oms: r[3], vendor: r[6] || "", item: r[7] || "" }; });
+      at = Date.now(); loading = null; return data;
+    }).catch(function (e) { loading = null; console.warn("vendor list", e); return data || []; });
+    return loading;
+  }
+  function units(asins) { var u = 0; try { var now = Date.now(); (spapiOrdersRaw || []).forEach(function (o) { if (o.isCanceled || !o.purchaseDate || (now - Date.parse(o.purchaseDate)) / 864e5 > 30) return; (o.items || []).forEach(function (it) { if (asins.indexOf(it.asin) >= 0) u += +it.qty || 1; }); }); } catch (e) {} return u; }
+  function draw() {
+    var body = document.getElementById("omiBody"); if (!body) return;
+    var bar = body.querySelector(".ap-tools"); if (!bar) return;
+    var btn = body.querySelector("#omiVendBtn");
+    if (!btn) {
+      bar.insertAdjacentHTML("beforeend", '<button class="tbl-push" id="omiVendBtn" title="Products mapped to a vendor (PAWAN, NAV DURGA…) — stock not from LOTS">Mapped to vendor · <span id="omiVendN">…</span></button>');
+      btn = body.querySelector("#omiVendBtn");
+      btn.onclick = function () { open = !open; render(); };
+      load().then(function (d) { var n = document.getElementById("omiVendN"); n && (n.textContent = d.length.toLocaleString("en-IN")); });
+    }
+    if (open) render();
+  }
+  function render() {
+    var body = document.getElementById("omiBody"); if (!body) return;
+    var btn = document.getElementById("omiVendBtn"); btn && (btn.style.background = open ? "var(--gold-soft)" : "");
+    var mine = document.getElementById("omiVendList"), scroll = [].slice.call(body.children).filter(function (x) { return x.classList && x.classList.contains("ap-scroll"); })[0];
+    var tools = body.querySelectorAll(".ap-tools")[1];
+    if (!open) { mine && mine.remove(); scroll && (scroll.style.display = ""); tools && (tools.style.display = ""); return; }
+    scroll && (scroll.style.display = "none"); tools && (tools.style.display = "none");
+    if (!mine) { body.insertAdjacentHTML("beforeend", '<div id="omiVendList"><div class="ap-empty"><h4>Loading…</h4></div></div>'); mine = document.getElementById("omiVendList"); }
+    load().then(function (d) {
+      var l = d.map(function (r) { return Object.assign({ u: units(r.asins) }, r); }).filter(function (r) { return !q || (r.sku + " " + r.name + " " + r.vendor + " " + r.item + " " + r.asins.join(" ")).toLowerCase().indexOf(q) >= 0; })
+        .sort(function (a, b) { return b.u - a.u || (b.oms || 0) - (a.oms || 0); });
+      mine.innerHTML = '<div class="ap-tools"><div class="ap-search"><i class="ti ti-search"></i><input type="text" id="omiVendQ" placeholder="Search product, vendor or ASIN…" value="' + esc(q) + '"></div><span class="t-muted" style="font-size:12px">Mapped to a vendor — OMS stock for these is managed by you, not the LOTS robot. Click Change to link one to LOTS.</span><span class="ap-count">' + l.length.toLocaleString("en-IN") + ' products</span><button class="tbl-push" id="omiVendClose">✕ Back to list</button></div>' +
+        '<div class="ap-scroll"><table class="sp-tbl"><thead><tr><th>Product (OMS master SKU)</th><th class="t-r">Sold 30d</th><th class="t-r">OMS stock</th><th>Mapped to</th><th></th></tr></thead><tbody>' +
+        l.slice(0, 500).map(function (r) {
+          var lots = String(r.vendor).toUpperCase() === "LOTS";
+          return '<tr><td><div class="pcell">' + (r.asins[0] && typeof thumb === "function" ? thumb(r.asins[0], 40) : "") + '<div class="pinfo"><div class="t-name">' + esc(r.name || "—") + '</div><div class="t-sub"><span class="t-mono">' + esc(r.sku) + "</span> · " + r.asins.map(function (a) { return '<a href="https://www.amazon.in/dp/' + esc(a) + '" target="_blank" rel="noopener">' + esc(a) + "</a>"; }).join(", ") + "</div></div></div></td>" +
+            '<td class="t-r"><span class="omi-u">' + r.u + '</span></td><td class="t-r num">' + esc(r.oms) + "</td>" +
+            '<td><span class="pill ' + (lots ? "warn" : "navy") + '" style="margin-right:6px">' + esc(lots ? "LOTS · no stock data" : r.vendor) + '</span><span title="' + esc(r.item) + '" style="display:inline-block;max-width:340px;vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px">' + esc(r.item) + "</span></td>" +
+            '<td>' + (r.asins[0] ? '<button class="tbl-push" data-omi-map="' + esc(r.asins[0]) + '"><i class="ti ti-pencil"></i> Change</button>' : "") + "</td></tr>";
+        }).join("") + "</tbody></table>" + (l.length ? "" : '<div class="ap-empty"><h4>Nothing here</h4></div>') + "</div>";
+      var qi = document.getElementById("omiVendQ"); qi.oninput = function (e) { q = e.target.value.toLowerCase(); render(); var x = document.getElementById("omiVendQ"); x.focus(); x.setSelectionRange(x.value.length, x.value.length); };
+      document.getElementById("omiVendClose").onclick = function () { open = false; render(); };
+    });
+  }
+  (function watch(n) {
+    var body = document.getElementById("omiBody");
+    if (!body) return void (n < 90 && setTimeout(function () { watch(n + 1); }, 1000));
+    new MutationObserver(function () { if (!document.getElementById("omiVendBtn")) { open = false; draw(); } }).observe(body, { childList: true });
+    draw();
+  })(0);
+} catch (e) {} })();
