@@ -319,7 +319,7 @@ async function main() {
     if (r['Is Combo Product'] === 'Yes') { combo.add(sku); continue; }
     (bySku[sku] = bySku[sku] || { sku, name: r['Product Name'], list: [] }).list.push({ asin: (r['Extra Data'] || '').toUpperCase(), title: r['Channel Listing Title'], channel: r['Channel Name'], lsku: r['Channel Listing SKU Code'] });
   }
-  const rows = [], unlinked = []; let notLinked = 0, conflicts = 0;
+  const rows = [], unlinked = [], mappedElse = []; let notLinked = 0, conflicts = 0;
   for (const g of Object.values(bySku)) {
     if (!(g.sku in omsQty)) continue;                               // not a stock product in this warehouse
     const seen = new Map();
@@ -329,7 +329,11 @@ async function main() {
       const asins = [...new Set(g.list.map((l) => l.asin).filter(Boolean))];
       const why = asins.some((a) => L.asinMap[a] && L.asinMap[a].vendorName && String(L.asinMap[a].vendorName).toUpperCase() !== 'LOTS') ? 'Mapped to another vendor (not LOTS)'
         : asins.some((a) => L.asinMap[a]) ? 'Mapped LOTS product has no stock data' : 'ASIN not mapped to LOTS';
-      unlinked.push([g.sku, String(g.name || '').slice(0, 90), asins.slice(0, 4).join(' '), omsQty[g.sku], g.list.length, why]);
+      // Owner 7 Nov 2026: a product mapped to a vendor (PAWAN, NAV DURGA...) is NOT "not linked" - it goes to its own list.
+      const mr = asins.map((a) => L.asinMap[a]).find((r) => r && (r.code || r.vendorName || (r.parts || []).length));
+      const row = [g.sku, String(g.name || '').slice(0, 90), asins.slice(0, 4).join(' '), omsQty[g.sku], g.list.length, why];
+      if (mr) mappedElse.push([...row, String(mr.vendorName || 'LOTS'), String((mr.vendor && mr.vendor.item) || mr.name || '').slice(0, 90)]);
+      else unlinked.push(row);
       continue;
     }
     const bl = blocked[g.sku] || 0, cur0 = omsQty[g.sku];
@@ -390,7 +394,7 @@ async function main() {
       err[r.sku] ? 'OMS Guru: ' + String(err[r.sku]).slice(0, 120) : r.note, ...last, r.blocked, r.oos ? 1 : 0];
   });
   const doc = { at: runAt, finishedAt: Date.now(), status, dry: DRY, note: result.note || '', stats: { ...stats, failed: Object.keys(err).length }, rule: `LOTS stock (or LOTS minus blocked) below ${OOS_BELOW} -> Amazon 0, otherwise LOTS stock`, warehouse: 'DEFAULT 310803' };
-  const json = JSON.stringify({ rows: pack, unlinked: unlinked.slice(0, 4000) });
+  const json = JSON.stringify({ rows: pack, unlinked: unlinked.slice(0, 4000), mapped: mappedElse.slice(0, 3000) });
   const parts = []; for (let i = 0; i < json.length; i += 900000) parts.push(json.slice(i, i + 900000));
   await Promise.all(parts.map((p, i) => C.doc(`${base}_rows_${i}`).set({ data: p, at: runAt })));
   await C.doc(base).set({ ...doc, chunks: parts.length, v: 2, autoMap: { at: runAt, note: autoMap.note || '', mappedJson: JSON.stringify(autoMap.mapped.slice(0, 300)), skippedJson: JSON.stringify(autoMap.skipped.slice(0, 300)) } });
@@ -400,7 +404,7 @@ async function main() {
     runs.push({ at: runAt, status, ...stats, failed: Object.keys(err).length });
     await hist.set({ runs });
   }
-  console.log(`Saved ${DRY ? 'test results (tab not changed)' : 'for the OMS inventory tab'}: ${rows.length} linked + ${unlinked.length} not linked, ${parts.length} part(s). Status: ${status}.`);
+  console.log(`Saved ${DRY ? 'test results (tab not changed)' : 'for the OMS inventory tab'}: ${rows.length} linked + ${mappedElse.length} mapped to a vendor + ${unlinked.length} not mapped, ${parts.length} part(s). Status: ${status}.`);
   if (status === 'failed') process.exitCode = 1;
 }
 main().catch((e) => {
