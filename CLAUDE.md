@@ -20,6 +20,8 @@
   Saved templates (owner 7 Nov 2026): every fresh template dropped is kept in main Firebase, one per category — index `aikm_admin/meeshoTplIndex`
   + file parts `aikm_admin/meeshoTpl_<key>_<n>` (base64). 1 read when the tab opens, 1-2 per template opened. Do not delete them.
   Same index doc also holds learned blocked words (`badWords`) and MRPs typed in the review table (`mrp.<ASIN>`, used before Amazon's MRP).
+  Products can come from Amazon listings OR the LOTS price list (`lotsVendor.products`, switch at the top of the list): LOTS items are
+  `LOTS-<code>` (cost = best LOTS slab, MRP/GST/HSN/photo/stock from LOTS); if mapped 1:1 to an ASIN in spapiAsinLotsMap, the robot also reads that ASIN's details.
   Meesho rules checked before download (`issues()`): MRP >= price x 1.10, no learned blocked word in Brand, required boxes filled. Only rows that pass are written to the file.
 - Auto sale bills (`console/sale-autobill.js`) is loaded on the Purchase & Sales page (`page.purchase-bills.liquid`)
   by the block `AIKM AUTO SALE BILLS LOADER` just before `</body>`. Keep that block when replacing that template.

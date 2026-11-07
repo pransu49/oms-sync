@@ -21,7 +21,7 @@
 
   /* ---------- state ---------- */
   var pick = new Map();          // asin -> inventory item
-  var q = "", tpl = null, grid = null, onlyNeed = true, busy = false;
+  var q = "", tpl = null, grid = null, onlyNeed = true, busy = false, SRC = "amazon";   // SRC: products from "amazon" or "lots"
   var S = loadSet();
   function loadSet() {
     var d = { pct: 0, stock: 10, brand: "", country: "India", minPct: 15, tgtPct: 20, shelfDays: 365,
@@ -87,6 +87,10 @@
       ".ms-tpl{margin-top:10px;padding:10px 12px;border-radius:10px;background:#F3F7F2;color:#2E5E3E;font-size:12.5px;line-height:1.6}",
       ".ms-tpl.bad{background:#FBEDEB;color:#9B2C22}",
       ".ms-ck{margin-top:4px;font-size:11.5px;line-height:1.35;font-weight:600}.ms-ck.ok{color:#2E5E3E}.ms-ck.bad{color:#9B2C22;font-weight:500;white-space:normal}",
+      ".ms-src{display:inline-flex;gap:2px;background:#EBE6DA;border-radius:10px;padding:3px;margin:0 0 10px}",
+      ".ms-src button{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:500;color:var(--ink-2)}",
+      ".ms-src button.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(15,30,53,.1)}",
+      ".ms-tag{display:inline-block;font:700 9.5px 'Inter',sans-serif;letter-spacing:.04em;border-radius:4px;padding:1px 5px;margin-right:5px;background:var(--gold-soft);color:var(--gold-2);border:1px solid #E6D3A3;vertical-align:1px}",
       ".ms-lib{margin-top:10px;display:flex;align-items:center;gap:8px}.ms-lib:empty{display:none}",
       ".ms-lib .ms-sel{flex:1;min-width:0}.ms-lib small{font-size:12px;color:var(--muted);white-space:nowrap}",
       ".ms-set{margin-top:16px;border:1px solid var(--line-2);border-radius:12px}",
@@ -153,7 +157,8 @@
         '<div class="ms-hd"><div><h3>Meesho Listing Robot</h3><p>Pick products, drop in any Meesho template, download it filled in.</p></div>' +
         '<div class="ms-steps"><span class="ms-st" id="msS1"><b>1</b>Pick products</span><span class="ms-st" id="msS2"><b>2</b>Add template</span><span class="ms-st" id="msS3"><b>3</b>Fill &amp; download</span></div></div>' +
         '<div class="ms-grid"><div class="ms-col">' +
-          '<div class="ms-lbl">1 · Products on Amazon <span id="msCnt"></span></div>' +
+          '<div class="ms-lbl">1 · Products <span id="msCnt"></span></div>' +
+          '<div class="ms-src" id="msSrc"><button type="button" data-src="amazon" class="on"><i class="ti ti-brand-amazon"></i>Amazon listings</button><button type="button" data-src="lots"><i class="ti ti-building-warehouse"></i>LOTS products</button></div>' +
           '<input class="ms-in" id="msQ" placeholder="Search product name, SKU or ASIN…" autocomplete="off" spellcheck="false">' +
           '<div class="ms-list" id="msList"></div>' +
         '</div><div class="ms-col">' +
@@ -195,8 +200,14 @@
       if (e.target.closest("[data-ms-clr]")) { pick.clear(); drawList(); drawSteps(); return; }
       var r = e.target.closest("[data-asin]"); if (!r) return;
       var k = r.dataset.asin;
-      if (pick.has(k)) pick.delete(k); else { if (pick.size >= MAX) return toast("Up to " + MAX + " products per file", true); pick.set(k, byAsin()[k]); }
+      if (pick.has(k)) pick.delete(k); else { if (pick.size >= MAX) return toast("Up to " + MAX + " products per file", true); pick.set(k, itemFor(k)); }
       drawList(); drawSteps();
+    });
+    $("msSrc").addEventListener("click", function (e) {
+      var b = e.target.closest("[data-src]"); if (!b || b.dataset.src === SRC) return;
+      SRC = b.dataset.src; Array.prototype.forEach.call($("msSrc").children, function (x) { x.classList.toggle("on", x === b); });
+      $("msQ").placeholder = SRC === "lots" ? "Search LOTS product name, code, brand or barcode…" : "Search product name, SKU or ASIN…";
+      if (SRC === "lots") lotsReady().then(drawList); drawList(); $("msQ").focus();
     });
     var drop = $("msDrop");
     ["dragenter", "dragover"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("over"); }); });
@@ -240,25 +251,50 @@
     });
     return m;
   }
+  /* LOTS products (the LOTS price list on this page): listed on Meesho with LOTS cost, MRP, GST, HSN, photo and stock.
+     When a LOTS product is mapped 1:1 to an Amazon ASIN, the robot also reads that ASIN's Amazon details (photos, maker). */
+  var LOTSP = null, LOTSFOR = null, lotsLoading = null;
+  function lotsReady() {
+    try { if (typeof lotsVendor !== "undefined" && lotsVendor && lotsVendor.products) return Promise.resolve(); } catch (e) { return Promise.resolve(); }
+    if (!lotsLoading && typeof loadLotsCatalog === "function") lotsLoading = loadLotsCatalog().catch(function () {}).then(function () { lotsLoading = null; });
+    return lotsLoading || Promise.resolve();
+  }
+  function lotsItems() {
+    var prods = null; try { prods = lotsVendor && lotsVendor.products; } catch (e) {}
+    if (!prods) return null;
+    if (LOTSFOR === prods) return LOTSP;
+    var amz = {};   // LOTS code -> Amazon ASIN mapped to exactly one unit of it
+    try { Object.keys(STORE.asinLotsMap || {}).forEach(function (a) { var m = STORE.asinLotsMap[a], pt = m && m.parts; if (m && m.code && (!pt || (pt.length === 1 && (+pt[0].qty || 1) === 1 && !(+pt[0].lotsPack > 1))) && !amz[m.code]) amz[m.code] = a; }); } catch (e) {}
+    LOTSP = {}; LOTSFOR = prods;
+    prods.forEach(function (x) {
+      if (!x || !x.code || !x.name) return;
+      var sl = null; try { sl = bestSlabFor(x.slabs); } catch (e) {}
+      var key = "LOTS-" + x.code, a = String(x.asin || amz[x.code] || "").toUpperCase();
+      LOTSP[key] = { asin: key, sku: key, lots: true, lotsCode: x.code, name: x.name, img: x.img || "", brand: x.brand || "", barcode: x.barcode || "",
+        mrp: parseFloat(x.mrp) || 0, quantity: Math.max(0, parseInt(x.qty, 10) || 0), cost: sl ? +sl.price : null, taxPercent: x.gst, hsnCode: x.hsn || "", dAsin: /^[A-Z0-9]{10}$/.test(a) ? a : "" };
+    });
+    return LOTSP;
+  }
+  function itemFor(k) { return /^LOTS-/.test(k) ? (lotsItems() || {})[k] : byAsin()[k]; }
   var shown = [];
   function drawList() {
     var list = $("msList"); if (!list) return;
-    var all = byAsin(), keys = Object.keys(all);
-    if (!keys.length) { list.innerHTML = '<div style="padding:22px;text-align:center;color:var(--muted);font-size:13px">Loading Amazon products… (open Inventory once if this stays empty)</div>'; $("msCnt").textContent = ""; return; }
+    var all = SRC === "lots" ? (lotsItems() || {}) : byAsin(), keys = Object.keys(all);
+    if (!keys.length) { list.innerHTML = '<div style="padding:22px;text-align:center;color:var(--muted);font-size:13px">' + (SRC === "lots" ? "Loading the LOTS price list…" : "Loading Amazon products… (open Inventory once if this stays empty)") + "</div>"; $("msCnt").textContent = ""; return; }
     var words = q.split(/\s+/).filter(Boolean);
     shown = keys.map(function (k) { return all[k]; }).filter(function (i) {
       if (!words.length) return true;
-      var t = ((i.name || "") + " " + (i.sku || "") + " " + i.asin).toLowerCase();
+      var t = ((i.name || "") + " " + (i.sku || "") + " " + i.asin + " " + (i.brand || "") + " " + (i.barcode || "") + " " + (i.lotsCode || "")).toLowerCase();
       return words.every(function (w) { return t.indexOf(w) >= 0; });
     }).sort(function (a, b) { return (pick.has(b.asin) - pick.has(a.asin)) || ((b.quantity > 0) - (a.quantity > 0)) || String(a.name).localeCompare(String(b.name)); }).slice(0, 60);
-    $("msCnt").innerHTML = (pick.size ? "<b>" + pick.size + "</b> selected · " : "") + keys.length + " products";
+    $("msCnt").innerHTML = (pick.size ? "<b>" + pick.size + "</b> selected · " : "") + keys.length.toLocaleString("en-IN") + (SRC === "lots" ? " LOTS products" : " Amazon products");
     var head = '<div class="ms-it" style="cursor:default;background:#FCFBF8;padding:7px 12px"><span style="font-size:12px;color:var(--muted)">' + (q ? shown.length + (shown.length >= 60 ? "+" : "") + " found" : "Showing 60 — search to find more") + '</span><span style="flex:1"></span>' +
       '<button type="button" class="ms-lnk" data-ms-all>Select shown</button>' + (pick.size ? '<span style="width:12px"></span><button type="button" class="ms-lnk" data-ms-clr>Clear</button>' : "") + "</div>";
     list.innerHTML = head + (shown.length ? shown.map(function (i) {
       var on = pick.has(i.asin);
       return '<div class="ms-it' + (on ? " on" : "") + '" data-asin="' + esc(i.asin) + '"><span class="ms-ck">' + (on ? "✓" : "") + '</span><span class="ms-im">' + (i.img ? '<img src="' + esc(i.img) + '" loading="lazy" alt="" onerror="this.remove()">' : "") + "</span>" +
-        '<div class="ms-nm"><b title="' + esc(i.name) + '">' + esc(i.name || i.asin) + "</b><small>" + esc(i.asin) + " · " + (i.quantity > 0 ? i.quantity + " in stock" : "0 stock") + "</small></div>" +
-        '<span class="ms-pr">' + (i.price ? "₹" + Math.round(i.price) : "—") + "</span></div>";
+        '<div class="ms-nm"><b title="' + esc(i.name) + '">' + (i.lots ? '<span class="ms-tag">LOTS</span>' : "") + esc(i.name || i.asin) + "</b><small>" + (i.lots ? "Code " + esc(i.lotsCode) + (i.cost != null ? " · cost ₹" + i.cost : "") + (i.mrp ? " · MRP ₹" + i.mrp : "") : esc(i.asin)) + " · " + (i.quantity > 0 ? i.quantity + " in stock" : "0 stock") + "</small></div>" +
+        '<span class="ms-pr">' + (i.lots ? (i.cost != null ? "₹" + Math.round(i.cost) : "—") : i.price ? "₹" + Math.round(i.price) : "—") + "</span></div>";
     }).join("") : '<div style="padding:18px;text-align:center;color:var(--muted);font-size:13px">No product matches.</div>');
   }
   function selectShown() {
@@ -535,6 +571,7 @@
     return m;
   }
   function costOf(p) {
+    if (p.lots) return p.cost > 0 ? Number(p.cost) : null;   // LOTS product: its own best slab price
     try { var c = getEffectiveSpapiUnitCost(p.name, p.sku); if (c && c.value > 0) return Number(c.value); } catch (e) {}
     return null;
   }
@@ -681,7 +718,7 @@
     [/sku|style id|style code|product id/, function (x) { return x.p.sku || x.p.asin; }, "text"],
     [/product name|title|catalog name|^name$/, function (x) { return safe(tidy((x.d && x.d.title) || x.p.name || "")); }, "text"],
     [/image|photo|picture/, function (x) { var im = (x.d && x.d.images && x.d.images.length ? x.d.images : (x.p.img ? [x.p.img] : [])); im = im.filter(function (u, i) { return im.indexOf(u) === i; }); return im[x.slot] || ""; }, "text"],
-    [/brand/, function (x) { return S.brand || (x.d && x.d.brand) || ""; }, "text"],
+    [/brand/, function (x) { return S.brand || (x.d && x.d.brand) || x.p.brand || ""; }, "text"],
     [/country/, function (x) { return (x.d && x.d.countryOfOrigin) || S.country || "India"; }],
     [/importer/, function (x) { var c = x.d && x.d.contacts && x.d.contacts.importer, imp = PF().importer || "";
       if (c) return /pin|zip|postal/.test(x.h) ? c.pin : /address/.test(x.h) ? c.address : /name/.test(x.h) ? c.name : c.text;
@@ -743,11 +780,12 @@
     busy = true; drawSteps();
     try {
       try { if (typeof lotsVendor !== "undefined" && lotsVendor && !lotsVendor.products && typeof loadLotsCatalog === "function") { note("Loading your costs…", 3); await loadLotsCatalog(); } } catch (e) {}
-      var items = Array.from(pick.values()).filter(Boolean).map(function (p) { delete p._pi; return p; }), r = await details(items.map(function (i) { return String(i.asin).toUpperCase(); }));
+      var dA = function (p) { return p.lots ? p.dAsin || "" : String(p.asin).toUpperCase(); };   // LOTS product: the Amazon ASIN it is mapped to, if any
+      var items = Array.from(pick.values()).filter(Boolean).map(function (p) { delete p._pi; return p; }), r = await details(Array.from(new Set(items.map(dA).filter(Boolean))));
       var mem = memGet();
-      buildBrandContacts(items.map(function (p) { return { d: r.d[String(p.asin).toUpperCase()] || null }; }));
+      buildBrandContacts(items.map(function (p) { return { d: r.d[dA(p)] || null }; }));
       grid = { rows: items.map(function (p) {
-        var d = r.d[String(p.asin).toUpperCase()] || null, slot = 0, vals = {};
+        var d = r.d[dA(p)] || null, slot = 0, vals = {};
         tpl.cols.forEach(function (c) {
           var h = c.head.toLowerCase(), rule = RULES.filter(function (x) { return x[0].test(h); })[0], v, kind = rule ? rule[2] : "";
           var x = { p: p, d: d, h: h, slot: 0, c: c };
@@ -815,7 +853,7 @@
         '<div class="ms-all"><input data-all="' + c.idx + '"' + (c.options ? ' list="' + id + '"' : "") + ' placeholder="Same for all"><button type="button" data-allgo="' + c.idx + '">Apply</button></div></th>';
     }).join("");
     var body = grid.rows.map(function (r, ri) {
-      return '<tr><td class="p"><div class="ms-pn" title="' + esc(r.p.name) + '">' + esc(r.p.name) + "</div><small>" + esc(r.p.asin) + (r.d ? "" : " · basic data") + "</small>" +
+      return '<tr><td class="p"><div class="ms-pn" title="' + esc(r.p.name) + '">' + esc(r.p.name) + "</div><small>" + esc(r.p.asin) + (r.p.lots ? " · LOTS" + (r.d ? " + Amazon details" : "") : r.d ? "" : " · basic data") + "</small>" +
         (iss[ri].length ? '<div class="ms-ck bad">✕ Left out: ' + esc(iss[ri].join(" · ")) + "</div>" : '<div class="ms-ck ok">✓ Ready for Meesho</div>') + "</td>" + cols.map(function (c) {
         var v = r.vals[c.idx], need = !v.v && (c.req || (onlyNeed && nc.length));
         var why = invalid(c, v.v), bad = (v.v && c.options && c.options.indexOf(v.v) < 0) || v.low || !!why;
