@@ -1325,20 +1325,33 @@ function fitPriceLimits(po, price, mrp) {
 // Prices you set yourself (Loss Orders / Self-Ship / Amazon page) in the last 7 days - the robot never lowers these.
 const MANUAL_HOLD_MS = 7 * 864e5;
 async function loadManualPrices() {
-  const out = new Map();
-  // Read saver (27 Oct 2026): robot records (id "robot_...", ~400) are skipped below anyway, so they are
-  // not read at all: only ids before "robot_" or after "robot`" (= every other id). No extra index needed.
+  // Read saver (7 Nov 2026): a bulk price drop queues 1,000+ requests, and reading every one on every sync cost
+  // ~1,400 reads per run. Now a small saved list (spapiSnapshots/manualHold_<account>) keeps the prices you set
+  // in the last 7 days, and each sync reads only the requests made since the previous sync.
   const col = (d) => d.collection('spapiPriceUpdates'), FP = admin.firestore.FieldPath.documentId();
-  const snaps = await Promise.all([db, dbMain].map((d) => Promise.all([
-    col(d).where('account', '==', ACCOUNT_LABEL).where(FP, '<', 'robot_').get(),
-    col(d).where('account', '==', ACCOUNT_LABEL).where(FP, '>=', 'robot`').get(),
-  ]).catch((e) => {   // safety net: if the short query ever fails, read the whole list as before
-    console.warn('Manual prices: short read failed, reading all:', e.message || e);
-    return col(d).where('account', '==', ACCOUNT_LABEL).get().then((q) => [q]).catch(() => []);
-  }))).then((x) => x.flat());
-  snaps.forEach((sn) => sn && sn.docs.forEach((d) => { const x = d.data(); if (x.source === 'robot' || !x.sku) return;
-    const t = ['appliedAt', 'requestedAt'].map((k) => (x[k] && x[k].toMillis ? x[k].toMillis() : 0)).reduce((a, b) => Math.max(a, b), 0);
-    if ((x.status === 'applied' || x.status === 'pending') && Date.now() - t < MANUAL_HOLD_MS) out.set(x.sku, { price: x.newPrice, at: t }); }));
+  const holdRef = db.collection('spapiSnapshots').doc(`manualHold_${ACCOUNT_LABEL}`);
+  const tOf = (x) => ['appliedAt', 'requestedAt'].map((k) => (x[k] && x[k].toMillis ? x[k].toMillis() : 0)).reduce((a, b) => Math.max(a, b), 0);
+  const now = Date.now(), hd = await holdRef.get();
+  let map = {}, snaps;
+  if (hd.exists && hd.get('last')) {
+    map = hd.get('map') || {};
+    const since = admin.firestore.Timestamp.fromMillis(hd.get('last') - 30 * 60e3);   // 30 min overlap
+    snaps = await Promise.all([db, dbMain].map((d) => col(d).where('requestedAt', '>=', since).get().catch((e) => { console.warn('Manual prices: new requests not read:', e.message || e); return null; })));
+  } else {   // first run: read the full list once (same short read as before)
+    snaps = (await Promise.all([db, dbMain].map((d) => Promise.all([
+      col(d).where('account', '==', ACCOUNT_LABEL).where(FP, '<', 'robot_').get(),
+      col(d).where('account', '==', ACCOUNT_LABEL).where(FP, '>=', 'robot`').get(),
+    ]).catch(() => col(d).where('account', '==', ACCOUNT_LABEL).get().then((q) => [q]).catch(() => []))))).flat();
+  }
+  snaps.forEach((sn) => sn && sn.docs.forEach((d) => {
+    const x = d.data(); if (x.account !== ACCOUNT_LABEL || x.source === 'robot' || !x.sku) return;
+    const t = tOf(x), cur = map[x.sku];
+    if (x.status === 'applied' || x.status === 'pending') { if (!cur || t >= cur.at) map[x.sku] = { price: x.newPrice, at: t, id: d.id }; }
+    else if (cur && cur.id === d.id) delete map[x.sku];   // that request failed - no hold
+  }));
+  Object.keys(map).forEach((k) => { if (now - map[k].at >= MANUAL_HOLD_MS) delete map[k]; });
+  await holdRef.set({ map, last: now, account: ACCOUNT_LABEL }).catch((e) => console.warn('Manual price list not saved:', e.message || e));
+  const out = new Map(); Object.entries(map).forEach(([sku, v]) => out.set(sku, { price: v.price, at: v.at }));
   return out;
 }
 async function runBuyBoxPricer(sellerId, eligible, st, log) {
@@ -1697,6 +1710,10 @@ async function verifyPricePushes(sellerId) {
   const cut = Date.now() - 3 * 864e5;
   const docs = snaps.flatMap((s) => s.docs).filter((d) => { const x = d.data(); const t = x.appliedAt && x.appliedAt.toMillis ? x.appliedAt.toMillis() : 0;
     return x.verified === false && t > cut && Date.now() - t > 4 * 60000; });
+  // Prices sent 3+ days ago are no longer checked: mark them so they stop being read on every sync (read saver).
+  const stale = snaps.flatMap((s) => s.docs).filter((d) => { const x = d.data(); const t = x.appliedAt && x.appliedAt.toMillis ? x.appliedAt.toMillis() : 0; return t && t <= cut; });
+  for (let k = 0; k < stale.length; k += 50) await Promise.all(stale.slice(k, k + 50).map((d) => d.ref.update({ verified: 'expired' }).catch(() => {})));
+  if (stale.length) console.log(`${stale.length} old unchecked price(s) retired from the check.`);
   if (!docs.length) { console.log('No sent prices waiting for Amazon.'); return; }
   console.log(`Checking ${docs.length} sent price(s) on Amazon...`);
   for (const doc of docs) {
