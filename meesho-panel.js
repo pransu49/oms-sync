@@ -64,14 +64,36 @@ async function processOrders(p, ctx) {
     const prod = t.split('\n').map(x => x.trim()).filter(Boolean)[0];
     console.log('LABEL', oid, prod);
     try {
-      const dl = p.waitForEvent('download', { timeout: 60000 });
+      // Meesho may (a) download a file, (b) open the PDF in a new tab, or (c) return a PDF/link from its server. Catch all three.
+      const f = path.join(process.cwd(), 'meesho-label-' + oid + '.pdf');
+      let got = null; const seen = [];
+      const onResp = async (res) => {
+        try {
+          const u = res.url(), ct = (res.headers()['content-type'] || '');
+          if (/label|pdf|manifest|invoice|download/i.test(u) || /pdf/i.test(ct)) seen.push(res.status() + ' ' + ct.split(';')[0] + ' ' + u.slice(0, 160));
+          if (!got && /pdf/i.test(ct)) { const b = await res.body(); if (b.length > 500) { fs.writeFileSync(f, b); got = 'pdf-response'; } }
+          else if (!got && /json/i.test(ct) && /label/i.test(u)) { const j = await res.text(); const m = j.match(/https?:[^"\\]+?\.pdf[^"\\]*/i) || j.match(/"(?:url|label_url|labelUrl|link|file_url)"\s*:\s*"(https?:[^"]+)"/i); if (m) { seen.push('LINK ' + (m[1] || m[0]).slice(0, 160)); got = got || ('link:' + (m[1] || m[0]).replace(/\\u0026/g, '&')); } }
+        } catch (_) {}
+      };
+      ctx.on('response', onResp);
+      const dl = p.waitForEvent('download', { timeout: 45000 }).then(async d => { await d.saveAs(f); got = got || 'download'; }).catch(() => {});
+      const pop = ctx.waitForEvent('page', { timeout: 45000 }).then(async np => { await np.waitForLoadState('domcontentloaded').catch(() => {}); seen.push('NEW TAB ' + np.url().slice(0, 160)); if (!got && /^https?:/.test(np.url())) got = 'link:' + np.url(); }).catch(() => {});
       const btn = r.locator('button').filter({ hasText: /^\s*Label\s*$/i }).first();
       await btn.scrollIntoViewIfNeeded().catch(() => {});
       await btn.click({ timeout: 8000 }).catch(async () => { console.log('normal click blocked (popup on top?) - clicking directly'); await btn.evaluate(b => b.click()); });
       await p.waitForTimeout(2500);
       const modalBtn = p.locator('[role=dialog], .MuiDialog-root, .modal').getByRole('button', { name: /download/i });
       if (await modalBtn.count()) { console.log('LABEL DIALOG:', (await p.locator('[role=dialog], .MuiDialog-root, .modal').first().innerText()).slice(0, 300)); await modalBtn.first().click(); }
-      const d = await dl; const f = path.join(process.cwd(), 'meesho-label-' + oid + '.pdf'); await d.saveAs(f);
+      for (let w = 0; w < 45 && !got; w++) await p.waitForTimeout(1000);
+      ctx.off('response', onResp);
+      console.log('LABEL NETWORK:\n  ' + seen.join('\n  '));
+      if (got && got.startsWith('link:')) {
+        const r2 = await ctx.request.get(got.slice(5)); const b = await r2.body();
+        if (b.length > 500) fs.writeFileSync(f, b); else throw new Error('label link returned ' + r2.status());
+        got = 'link';
+      }
+      if (!got || !fs.existsSync(f)) throw new Error('no label file seen in 45s');
+      console.log('LABEL OK via', got, fs.statSync(f).size, 'bytes');
       done.labels.push({ oid, prod, f });
     } catch (e) { console.log('LABEL FAILED', oid, e.message.split('\n')[0]); done.failed.push(oid); await snap(p, 'label-fail-' + oid); await closePopups(p); }
   }
