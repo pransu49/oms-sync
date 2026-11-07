@@ -13,6 +13,7 @@
   if (window.__aikmRefundFailed) return; window.__aikmRefundFailed = true;
 
   (function () { var st = document.createElement("style"); st.textContent = [
+    "html#aikm body #subtab-rffail #ffRetry{background:var(--x-primary,#1f2a44) !important;color:var(--x-primary-ink,#fff) !important;border-color:var(--x-primary,#1f2a44) !important}",
     "html#aikm body #tab-rffail .ff-chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}",
     "html#aikm body #tab-rffail .ff-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;border:1px solid var(--x-line);background:var(--x-surface-2);font-size:12.5px;font-weight:600;color:var(--x-text-2);cursor:pointer}",
     "html#aikm body #tab-rffail .ff-chip b{font-variant-numeric:tabular-nums}",
@@ -67,6 +68,12 @@
     send: { label: "Robot couldn't reach Amazon", tag: "amber",
       why: "The refund never reached Amazon (connection or access problem). No money moved.",
       fix: "Send it again from the <b>Bulk Refund</b> tab (<b>Refund now</b>), or refund it by hand: <b>Refund order</b> → <b>Refund full amount</b> → <b>Submit</b>." },
+    promo: { label: "Has promotion", tag: "amber",
+      why: "This order had a discount/promotion, so the robot leaves it to you.",
+      fix: "Open the order → <b>Refund order</b> → tick <b>Refund full amount</b> → <b>Submit</b>. Amazon handles the promotion lines itself." },
+    part: { label: "Partly refunded", tag: "amber",
+      why: "Some money was already refunded on this order.",
+      fix: "Open the order → <b>Refund order</b> → check <b>Prior refund</b> and refund only what is still due → <b>Submit</b>. If nothing is due, click <b>Mark refunded</b>." },
     other: { label: "Other", tag: "amber",
       why: "Amazon rejected this refund.",
       fix: "Open the order → <b>Refund order</b> → tick <b>Refund full amount</b> → <b>Submit</b>. Amazon's own message is shown below." },
@@ -75,8 +82,10 @@
     var m = String(e.msg || "");
     if (/tax or shipping tax/i.test(m)) return "tax";
     if (/item price is not eligible/i.test(m)) return "price";
-    if (/incomplete or invalid|Bad order/i.test(m)) return "data";
-    if (/Could not send|feed (FATAL|CANCELLED|UNKNOWN)/i.test(m)) return "send";
+    if (/promotion/i.test(m)) return "promo";
+    if (/Partly refunded/i.test(m)) return "part";
+    if (/incomplete or invalid|Bad order|not found on Amazon/i.test(m)) return "data";
+    if (/Could not send|Could not read the order|feed (FATAL|CANCELLED|UNKNOWN)/i.test(m)) return "send";
     return "other";
   }
   function amazonMsg(m) { return String(m || "").replace(/\s*For help.*$/i, "").trim(); }
@@ -123,18 +132,49 @@
   /* ---------- build the list ---------- */
   function rows() {
     var log = (S.log || []).filter(function (e) { return e && !e.probe && e.i; });
-    var okItem = {}; log.forEach(function (e) { if (e.status === "done") okItem[e.i] = e.at || 1; });
-    var seen = {}, out = [];
-    log.forEach(function (e) { // newest first in the log -> keep the latest failure per item
-      if (e.status !== "error" || seen[e.i]) return; seen[e.i] = 1;
-      var r = Object.assign({}, e); r.k = kindOf(e);
-      if (okItem[e.i]) r.fixed = "Refunded by the robot later";
+    var latest = {}, failed = {};
+    log.forEach(function (e) { // log is newest first
+      if (!latest[e.i]) latest[e.i] = e;
+      if (e.status === "error" && !failed[e.i]) failed[e.i] = e;
+    });
+    var out = [];
+    Object.keys(failed).forEach(function (i) {
+      var e = failed[i], last = latest[i];
+      var r = Object.assign({}, last.status === "error" ? last : e); r.k = kindOf(r);
+      if (last.status === "done") r.fixed = "Refunded by the robot " + when(last.at);
+      else if (last.status === "skipped") r.fixed = last.msg.replace(/ - .*$/, "");
       else if (S.checks[e.o]) r.fixed = "Amazon shows ₹" + S.checks[e.o].r + " refunded" + (S.checks[e.o].at ? " on " + S.checks[e.o].at : "");
       else if (S.upload[e.o]) r.fixed = "In Amazon refund file" + (S.upload[e.o][0] ? " (" + S.upload[e.o][0] + ")" : "");
       else if (S.done[e.i]) r.fixed = "Marked refunded " + when(S.done[e.i].at);
       out.push(r);
     });
-    return out;
+    return out.sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); });
+  }
+  var RETRY = { tax: 1, price: 1, data: 1, send: 1, other: 1 }, ROBOT = { "SASTA STORE": 1, "PRASO ENTERPRISES": 1 };
+  function retryable() { return rows().filter(function (r) { return !r.fixed && RETRY[r.k] && ROBOT[r.a]; }); }
+  async function getToken() {
+    var t = "";
+    try { if (mainDb()) { var d = await mainDb().collection("aikm_admin").doc("ghSync").get(); t = (d.exists && d.data().token) || ""; } } catch (e) {}
+    if (!t) try { t = localStorage.getItem("aikm_gh_sync_token") || ""; } catch (e) {}
+    return String(t).replace(/^\s*bearer\s+/i, "").trim();
+  }
+  async function retry() {
+    var list = retryable(); if (!list.length) { toast("Nothing the robot can send again.", true); return; }
+    var amt = list.reduce(function (s, r) { return s + Number(r.amt || 0); }, 0), orders = {}; list.forEach(function (r) { orders[r.o] = 1; });
+    if (!confirm("SEND AGAIN WITH AMAZON'S AMOUNTS\n\n" + Object.keys(orders).length + " order(s) · " + list.length + " line(s) · up to " + inr(amt) +
+      "\n\nThe robot first reads each order's exact item / tax / shipping / shipping-tax from Amazon, skips cancelled and already-refunded orders, then refunds the rest in FULL.\nMoney goes back to customers and cannot be undone.\n\nGo ahead?")) return;
+    var payload = list.map(function (r) { return { a: r.a, o: r.o, i: r.i, r: r.r || "CustomerReturn", ip: r.ip || 0, it: r.it || 0, sp: r.sp || 0, stx: r.stx || 0, full: 1 }; });
+    var tok = await getToken();
+    if (!tok) { toast("GitHub token missing — click any 'Sync OMS now' button once to set it up, then try again.", true); return; }
+    $("ffRetry").disabled = true;
+    try {
+      var res = await fetch("https://api.github.com/repos/pransu49/oms-sync/actions/workflows/refund-robot.yml/dispatches", {
+        method: "POST", headers: { Accept: "application/vnd.github+json", Authorization: "Bearer " + tok, "Content-Type": "application/json" },
+        body: JSON.stringify({ ref: "main", inputs: { lines: JSON.stringify(payload), requested_by: "failed-tab" } }) });
+      if (res.status !== 204) throw new Error("GitHub said " + res.status);
+      toast("Robot started — about 2–4 min per 50 orders. Click Refresh later to see results.");
+    } catch (err) { toast("Could not start the robot: " + err.message, true); }
+    setTimeout(function () { if ($("ffRetry")) $("ffRetry").disabled = false; }, 60000);
   }
   function filtered(all) {
     var q = S.q.trim().toLowerCase();
@@ -163,6 +203,7 @@
     var sub = document.createElement("div");
     sub.className = "subtabbar no-print"; sub.id = "subtab-rffail"; sub.style.display = "none";
     sub.innerHTML = '<span class="subtab-label">Failed Refunds</span><span class="ff-muted" id="ffAt" style="margin:0">Refunds Amazon rejected — do these by hand in Seller Central</span><span style="flex:1"></span>' +
+      '<button type="button" class="subbtn rf-btn-main" id="ffRetry" title="Robot re-sends these with Amazon\'s exact amounts"><i class="ti ti-send"></i> Send again <b id="ffRetryN"></b></button>' +
       '<button type="button" class="subbtn" id="ffCsv" title="Download this list (Excel / CSV)"><i class="ti ti-download"></i> Download list</button>' +
       '<button type="button" class="subbtn" id="ffRefresh"><i class="ti ti-refresh"></i> Refresh</button>';
     content.insertBefore(sub, content.firstChild);
@@ -188,6 +229,7 @@
     });
     $("ffRefresh").addEventListener("click", function () { $("ffList").innerHTML = '<div class="ff-empty">Loading…</div>'; load(true); });
     $("ffCsv").addEventListener("click", csv);
+    $("ffRetry").addEventListener("click", retry);
     p.addEventListener("input", function (e) { if (e.target.id === "ffQ") { S.q = e.target.value; S.shown = 40; renderList(); } });
     p.addEventListener("click", function (e) {
       var c = e.target.closest("[data-ff-f]");
@@ -229,6 +271,7 @@
     $("ffKFixed").textContent = S.loaded ? fixed : "–";
     $("ffKFixedSub").textContent = S.loaded ? "refunded later / marked" : "";
     if ($("ffAt") && S.at) $("ffAt").textContent = "Refunds Amazon rejected — do these by hand in Seller Central · updated " + when(S.at);
+    var rn = retryable().length; if ($("ffRetryN")) { $("ffRetryN").textContent = rn ? "(" + rn + ")" : ""; $("ffRetry").style.display = rn ? "" : "none"; }
     var bd = $("ffBadge"); if (bd) { bd.textContent = open.length; bd.style.display = open.length ? "inline-block" : "none"; }
 
     var base = all.filter(function (r) { return S.show === "open" ? !r.fixed : !!r.fixed; });
