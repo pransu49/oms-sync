@@ -496,15 +496,36 @@
     try { var d = await db.collection("aikm_admin").doc("meeshoTplIndex").get(), x = d.exists ? d.data() : {}; LIB = x.list || {};
       MRPFIX = x.mrp || {};
       var bw = Object.keys(x.badWords || {}).map(function (k) { return x.badWords[k]; }); if (bw.length) learnWords(bw, true);
+      if (!x.rebuilt2) libRebuild(db, x);
     } catch (e) { LIB = null; }
     libUi();
+  }
+  // One-time repair: templates saved before 8 Nov were dropped from the list by a bug, but their files are still stored.
+  // Reads only the template files (document ids meeshoTpl_...), adds any missing one back to the list.
+  async function libRebuild(db, x) {
+    try {
+      var FP = firebase.firestore.FieldPath.documentId(), col = db.collection("aikm_admin");
+      var snap = await col.where(FP, ">=", "meeshoTpl_").where(FP, "<", "meeshoTpl`").get(), found = {};
+      snap.forEach(function (d) {
+        var m = /^meeshoTpl_(.+)_(\d+)$/.exec(d.id); if (!m) return;
+        var f = found[m[1]] || (found[m[1]] = { parts: 0, size: 0 }); f.parts = Math.max(f.parts, +m[2] + 1); f.size += Math.round(String((d.data() || {}).d || "").length * 0.75);
+        if (+m[2] === 0 && d.data().meta) f.meta = d.data().meta;
+      });
+      var upd = { rebuilt2: Date.now() }, n = 0;
+      Object.keys(found).forEach(function (k) {
+        if (LIB[k]) return; var f = found[k], nice = k.replace(/_/g, " ").replace(/\b[a-z]/g, function (c) { return c.toUpperCase(); });
+        LIB[k] = f.meta || { name: nice + ".xlsx", cat: nice, cols: 0, size: f.size, parts: f.parts, at: 0 }; upd["list." + k] = LIB[k]; n++;
+      });
+      await col.doc("meeshoTplIndex").update(upd);
+      if (n) { libUi(); toast(n + " saved template" + (n > 1 ? "s" : "") + " brought back to your list"); }
+    } catch (e) { console.warn("Meesho template list repair", e); }
   }
   function libUi(sel) {
     var box = $("msLib"); if (!box) return;
     var keys = Object.keys(LIB || {}).sort(function (a, b) { return String(LIB[a].cat).localeCompare(String(LIB[b].cat)); });
     if (!keys.length) { box.innerHTML = ""; return; }
     box.innerHTML = '<select class="ms-sel" id="msLibSel"><option value="">Use a saved template…</option>' +
-      keys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === sel ? " selected" : "") + ">" + esc(LIB[k].cat) + " · " + LIB[k].cols + " columns</option>"; }).join("") +
+      keys.map(function (k) { return '<option value="' + esc(k) + '"' + (k === sel ? " selected" : "") + ">" + esc(LIB[k].cat) + (LIB[k].cols ? " · " + LIB[k].cols + " columns" : "") + "</option>"; }).join("") +
       "</select><small>" + keys.length + " saved</small>";
   }
   function libSave(buf, name, cat, cols) {   // queued, so dropping many files at once saves them one by one
@@ -513,10 +534,10 @@
       if (!db) return msg("Not saved — console not connected to Firebase");
       try {
         var key = libKey(cat), data = b64(buf), parts = Math.ceil(data.length / PART) || 1, col = db.collection("aikm_admin");
-        for (var i = 0; i < parts; i++) await col.doc("meeshoTpl_" + key + "_" + i).set({ d: data.slice(i * PART, (i + 1) * PART) });
+        for (var i = 0; i < parts; i++) await col.doc("meeshoTpl_" + key + "_" + i).set(i ? { d: data.slice(i * PART, (i + 1) * PART) } : { d: data.slice(0, PART), meta: { key: key, name: name, cat: cat, cols: cols, size: buf.byteLength, parts: parts, at: Date.now() } });
         var row = { name: name, cat: cat, cols: cols, size: buf.byteLength, parts: parts, at: Date.now() }, upd = {};
         upd["list." + key] = row;
-        await col.doc("meeshoTplIndex").set({ list: {} }, { merge: true });
+        await col.doc("meeshoTplIndex").set({ touched: Date.now() }, { merge: true });
         await col.doc("meeshoTplIndex").update(upd);
         LIB = LIB || {}; var had = !!LIB[key]; LIB[key] = row; libUi(key);
         msg(had ? "✓ Saved — replaced the older " + cat + " template" : "✓ Saved to your templates");
@@ -628,7 +649,7 @@
     if (local || !list.length || !mainDb()) return;   // also kept online, so every computer replaces them
     var upd = {}; list.forEach(function (w) { upd["badWords." + String(w).toLowerCase().replace(/[^a-z0-9]+/g, "_")] = String(w).toLowerCase(); });
     var d = mainDb().collection("aikm_admin").doc("meeshoTplIndex");
-    d.set({ list: {} }, { merge: true }).then(function () { return d.update(upd); }).catch(function () {});
+    d.set({ touched: Date.now() }, { merge: true }).then(function () { return d.update(upd); }).catch(function () {});
   }
   function safe(x) {
     var m = badWords(), keys = Object.keys(m).sort(function (a, b) { return b.length - a.length; });
@@ -848,7 +869,7 @@
   function onMrp(ri, v) {   // MRP typed -> saved for this ASIN (online) and the price worked out again
     var r = grid.rows[ri], cp = cPriceC(), m = parseFloat(v); if (!(m > 0)) return;
     var a = String(r.p.asin).toUpperCase(); MRPFIX[a] = m; delete r.p._pi;
-    try { var upd = {}; upd["mrp." + a] = m; var d = mainDb().collection("aikm_admin").doc("meeshoTplIndex"); d.set({ list: {} }, { merge: true }).then(function () { return d.update(upd); }).catch(function () {}); } catch (e) {}
+    try { var upd = {}; upd["mrp." + a] = m; var d = mainDb().collection("aikm_admin").doc("meeshoTplIndex"); d.set({ touched: Date.now() }, { merge: true }).then(function () { return d.update(upd); }).catch(function () {}); } catch (e) {}
     if (cp && r.vals[cp.idx].auto !== false) { var i = priceInfo(r.p, r.d); r.vals[cp.idx] = { v: i.v === "" ? "" : String(i.v), was: i.was, low: !!i.low, auto: true, text: false }; }
   }
 
