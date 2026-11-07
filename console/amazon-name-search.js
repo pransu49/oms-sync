@@ -702,3 +702,27 @@
     .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
     .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
 } catch (e) {} })();
+
+/* ===== OMS inventory tab: show "Saved" on the row right after mapping (owner, 7 Nov 2026: "mapping not getting saved").
+   The save always worked; the row only changes after the hourly OMS robot run, so it looked unsaved. ===== */
+(function () { try {
+  if (window.__aikmOmiSaved) return; window.__aikmOmiSaved = true;
+  var last = null;
+  document.addEventListener("click", function (e) { var b = e.target.closest && e.target.closest("[data-omi-map]"); if (b) last = b.dataset.omiMap; }, true);
+  function mark() {
+    if (!last) return; var a = last; last = null;
+    var rec = null; try { rec = STORE.asinLotsMap[a]; } catch (x) {}
+    if (!rec || !rec.savedAt || Date.now() - Date.parse(rec.savedAt) > 120000) return;    // closed without saving
+    var lots = !rec.vendorName || String(rec.vendorName).toUpperCase() === "LOTS";
+    document.querySelectorAll('#omiBody [data-omi-map="' + a + '"]').forEach(function (b) {
+      var td = b.parentNode; if (!td) return;
+      td.innerHTML = '<span class="pill ' + (lots ? "ok" : "warn") + '">✓ Saved' + (lots ? " to LOTS" : " · " + String(rec.vendorName)) + '</span>' +
+        '<div class="omi-note">' + (lots ? "OMS stock updates at the next hourly robot run" : "Still a vendor item — pick a LOTS product for OMS stock") + '</div>';
+    });
+  }
+  (function watch(n) {
+    var ov = document.getElementById("spapiMatchModal");
+    if (!ov) return void (n < 60 && setTimeout(function () { watch(n + 1); }, 1000));
+    new MutationObserver(function () { if (ov.style.display === "none") setTimeout(mark, 300); }).observe(ov, { attributes: true, attributeFilter: ["style"] });
+  })(0);
+} catch (e) {} })();
