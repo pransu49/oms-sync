@@ -89,9 +89,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
           '<label class="rf-meta" for="rfReason" style="display:block;margin-bottom:6px;">Reason for refund</label>' +
           '<select id="rfReason" style="width:100%;min-height:36px;margin-bottom:12px;">' + REASONS.map(function (r) { return '<option value="' + r[0] + '">' + r[1] + "</option>"; }).join("") + "</select>" +
           '<div id="rfFiles"><div class="rf-empty">Select orders first.</div></div></div>' +
-        '<div class="panel"><h2>Amazon refund files <span class="rf-meta">until Finance access</span></h2>' +
-          '<div class="rf-meta" style="margin-bottom:8px">Seller Central → Payments → <b>Transaction View</b> → type <b>Refund</b> → Download CSV. Upload per account; each file stays until that account\'s next upload. Orders in it count as <b>already refunded</b>.</div>' +
-          '<div id="rfAmzList"></div><input type="file" id="rfAmzFile" accept=".csv,.txt" style="display:none"></div>' +
+        /* Amazon refund-file upload removed (owner 7 Nov 2026): Finance API access now marks refunded orders. Older uploads are still read. */
         '<div class="panel"><h2>Refund robot <span class="rf-meta" id="rfRobotState"></span></h2><div id="rfRobot"><div class="rf-empty">No robot refunds yet.</div></div></div>' +
         '<div class="panel"><h2>How to upload</h2><div class="rf-rule">' +
           "<b>SASTA STORE &amp; Praso:</b> tick orders → check amounts → <b>Refund now</b>. The robot sends it to Amazon and shows Refunded / Failed below.<br><br><b>Other accounts:</b><br>" +
@@ -123,7 +121,6 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     $("rfReason").addEventListener("change", render);
     $("rfSyncBtn").addEventListener("click", syncNow);
     $("rfFile").addEventListener("change", uploadExport);
-    $("rfAmzFile").addEventListener("change", uploadAmzRefunds);
     ["rfDbFrom", "rfDbTo"].forEach(function (id) { $(id).addEventListener("change", function () { setDbf("range", $("rfDbFrom").value, $("rfDbTo").value); }); });
     p.addEventListener("click", function (e) {
       var c = e.target.closest("[data-rf-show]"); if (c) { showStatus(c.dataset.rfShow); return; }
@@ -134,7 +131,6 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
       var rv = e.target.closest("[data-rf-review]"); if (rv) { reviewReady(rv.dataset.rfReview, false); return; }
       var ap = e.target.closest("[data-rf-approve]"); if (ap) { reviewReady(ap.dataset.rfApprove, true); return; }
       var sk = e.target.closest("[data-rf-skip]"); if (sk) { skipOrder(sk.dataset.rfSkip); return; }
-      var au = e.target.closest("[data-rf-amzup]"); if (au) { amzAcc = au.dataset.rfAmzup; $("rfAmzFile").click(); return; }
     });
     p.addEventListener("change", function (e) {
       if (e.target.id === "rfAll") { var on = e.target.checked; sel.forEach(function (o) { o.off = !on || !dbOk(o) || !!refunded(o.i); }); render(); }

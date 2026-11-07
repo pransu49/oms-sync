@@ -1,5 +1,6 @@
-/* AIKM Admin Console — Failed Refunds tab.
-   Loaded by the block at the end of refund-tab.js (no Shopify edit needed).
+/* AIKM Admin Console — Failed Refunds (inside Bulk Refund).
+   Loaded by the block at the end of refund-tab.js (no Shopify edit needed). Shown INSIDE the Bulk Refund page
+   (button "Failed refunds" in its top bar, owner 7 Nov 2026) — not in the side menu.
    Shows every refund line the Refund robot sent that Amazon REJECTED, with the reason in plain words
    and what to do, so it can be refunded by hand in Seller Central.
    Data (read ONCE per tab open / Refresh — about 4 reads):
@@ -13,7 +14,7 @@
   if (window.__aikmRefundFailed) return; window.__aikmRefundFailed = true;
 
   (function () { var st = document.createElement("style"); st.textContent = [
-    "html#aikm body #subtab-rffail #ffRetry{background:var(--x-primary,#1f2a44) !important;color:var(--x-primary-ink,#fff) !important;border-color:var(--x-primary,#1f2a44) !important}",
+    "html#aikm body #tab-rffail #ffRetry{background:var(--x-primary,#1f2a44) !important;color:var(--x-primary-ink,#fff) !important;border-color:var(--x-primary,#1f2a44) !important}",
     "html#aikm body #tab-rffail .ff-chips{display:flex;gap:8px;flex-wrap:wrap;align-items:center}",
     "html#aikm body #tab-rffail .ff-chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;border:1px solid var(--x-line);background:var(--x-surface-2);font-size:12.5px;font-weight:600;color:var(--x-text-2);cursor:pointer}",
     "html#aikm body #tab-rffail .ff-chip b{font-variant-numeric:tabular-nums}",
@@ -40,6 +41,12 @@
     "html#aikm body #tab-rffail .ff-empty{padding:26px;text-align:center;color:var(--x-muted);font-size:13.5px;border:1px dashed var(--x-line-2);border-radius:12px}",
     "html#aikm body #tab-rffail .ff-badge{display:inline-block;min-width:18px;padding:0 6px;margin-left:6px;border-radius:10px;background:var(--x-red);color:#fff;font-size:10.5px;font-weight:700;line-height:18px;text-align:center}",
     "@media (max-width:760px){html#aikm body #tab-rffail .ff-card{grid-template-columns:1fr}html#aikm body #tab-rffail .ff-act{flex-direction:row;flex-wrap:wrap}}",
+    // shown INSIDE the Bulk Refund page (not in the side menu): toggled by the "Failed refunds" button in its top bar
+    "html#aikm body #tab-refund.rf-show-failed > :not(#tab-rffail){display:none !important}",
+    "html#aikm body #tab-refund:not(.rf-show-failed) > #tab-rffail{display:none !important}",
+    "html#aikm body #tab-rffail .ff-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px}",
+    "html#aikm body #tab-rffail .ff-head h2{margin:0;font-size:17px;font-weight:600;color:var(--x-text)}",
+    "html#aikm body #subtab-refund #ffOpen.on{background:var(--x-gold-soft) !important;color:var(--x-gold) !important;border-color:var(--x-gold-line) !important}",
   ].join(""); document.head.appendChild(st); })();
 
   var S = { log: [], checks: {}, upload: {}, done: {}, loaded: false, loading: null, k: "", acc: "", q: "", show: "open", shown: 40, at: null };
@@ -192,41 +199,43 @@
     return '<div class="cx-kpi"><div class="cx-kpi-label">' + label + '</div><div class="cx-kpi-num" id="' + id + '">–</div><div class="cx-kpi-sub" id="' + subId + '">&nbsp;</div></div>';
   }
   function mount() {
-    var bar = $("mainTabbar"), content = document.querySelector(".app-content");
-    if (!bar || !content || $("tab-rffail")) return;
-    var b = document.createElement("button");
-    b.className = "tabbtn"; b.dataset.tab = "rffail";
-    b.innerHTML = '<i class="ti ti-receipt-off tab-ic"></i>Failed Refunds<span class="ff-badge" id="ffBadge" style="display:none"></span>';
-    var after = bar.querySelector('[data-tab="refund"]') || bar.querySelector('[data-tab="easyship"]');
-    after ? after.insertAdjacentElement("afterend", b) : bar.appendChild(b);
+    var host = $("tab-refund"), subbar = $("subtab-refund");
+    if (!host || !subbar || $("tab-rffail")) return;
+    // old side-menu entry (earlier version) — remove if a cached copy added it
+    var old = document.querySelector('.tabbtn[data-tab="rffail"]'); if (old) old.remove();
 
-    var sub = document.createElement("div");
-    sub.className = "subtabbar no-print"; sub.id = "subtab-rffail"; sub.style.display = "none";
-    sub.innerHTML = '<span class="subtab-label">Failed Refunds</span><span class="ff-muted" id="ffAt" style="margin:0">Refunds Amazon rejected — do these by hand in Seller Central</span><span style="flex:1"></span>' +
-      '<button type="button" class="subbtn rf-btn-main" id="ffRetry" title="Robot re-sends these with Amazon\'s exact amounts"><i class="ti ti-send"></i> Send again <b id="ffRetryN"></b></button>' +
-      '<button type="button" class="subbtn" id="ffCsv" title="Download this list (Excel / CSV)"><i class="ti ti-download"></i> Download list</button>' +
-      '<button type="button" class="subbtn" id="ffRefresh"><i class="ti ti-refresh"></i> Refresh</button>';
-    content.insertBefore(sub, content.firstChild);
+    // button in the Bulk Refund top bar
+    var ob = document.createElement("button");
+    ob.type = "button"; ob.className = "subbtn"; ob.id = "ffOpen"; ob.title = "Refunds Amazon rejected — fix them here";
+    ob.innerHTML = '<i class="ti ti-receipt-off"></i> Failed refunds<span class="ff-badge" id="ffBadge" style="display:none"></span>';
+    var anchor = subbar.querySelector("label.subbtn") || null;
+    anchor ? subbar.insertBefore(ob, anchor) : subbar.appendChild(ob);
 
     var p = document.createElement("div");
-    p.id = "tab-rffail"; p.className = "tabpanel";
+    p.id = "tab-rffail";
     p.innerHTML =
+      '<div class="ff-head"><button type="button" class="secondary" id="ffBack"><i class="ti ti-arrow-left"></i> Back to Bulk Refund</button>' +
+        '<h2>Failed refunds</h2><span class="ff-muted" id="ffAt" style="margin:0">Refunds Amazon rejected — do these by hand in Seller Central</span><span style="flex:1"></span>' +
+        '<button type="button" class="subbtn" id="ffRetry" title="Robot re-sends these with Amazon\'s exact amounts"><i class="ti ti-send"></i> Send again <b id="ffRetryN"></b></button>' +
+        '<button type="button" class="subbtn" id="ffCsv" title="Download this list (Excel / CSV)"><i class="ti ti-download"></i> Download list</button>' +
+        '<button type="button" class="subbtn" id="ffRefresh"><i class="ti ti-refresh"></i> Refresh</button></div>' +
       '<div class="cx-kpis" style="grid-template-columns:repeat(4,minmax(0,1fr)) !important;">' +
         kpi("ffKOpen", "To refund by hand", "ffKOpenSub") + kpi("ffKAmt", "Amount pending", "ffKAmtSub") +
         kpi("ffKTop", "Main reason", "ffKTopSub") + kpi("ffKFixed", "Already sorted", "ffKFixedSub") +
       "</div>" +
       '<div class="panel"><div class="ff-chips" id="ffChips"></div></div>' +
       '<div id="ffList"><div class="ff-empty">Loading…</div></div>';
-    content.appendChild(p);
+    host.appendChild(p);
 
-    b.addEventListener("click", function () {
-      document.querySelectorAll(".tabbtn").forEach(function (x) { x.classList.remove("active"); });
-      document.querySelectorAll(".tabpanel").forEach(function (x) { x.classList.remove("active"); });
-      document.querySelectorAll(".subtabbar").forEach(function (x) { x.style.display = "none"; });
-      b.classList.add("active"); p.classList.add("active"); sub.style.display = "flex";
-      try { document.body.classList.remove("sidebar-open"); $("appSidebarBackdrop").classList.remove("show"); } catch (e) {}
-      load(false);
-    });
+    function show(on) {
+      host.classList.toggle("rf-show-failed", !!on); ob.classList.toggle("on", !!on);
+      if (on) { load(false); try { window.scrollTo(0, 0); } catch (e) {} }
+    }
+    ob.addEventListener("click", function () { show(!host.classList.contains("rf-show-failed")); });
+    $("ffBack").addEventListener("click", function () { show(false); });
+    // opening Bulk Refund from the side menu always starts on the main refund view
+    document.addEventListener("click", function (e) { var t = e.target.closest('.tabbtn[data-tab="refund"]'); if (t) show(false); });
+
     $("ffRefresh").addEventListener("click", function () { $("ffList").innerHTML = '<div class="ff-empty">Loading…</div>'; load(true); });
     $("ffCsv").addEventListener("click", csv);
     $("ffRetry").addEventListener("click", retry);
@@ -238,7 +247,7 @@
       var mk = e.target.closest("[data-ff-done]"); if (mk) { mark(mk.dataset.ffDone, mk.dataset.ffO, mk.dataset.how !== "undo"); return; }
       if (e.target.closest("#ffMore")) { S.shown += 40; renderList(); }
     });
-    // badge: count failures quietly once the console is ready (same 4 reads as opening the tab, once per page load)
+    // badge count: same ~4 reads as opening the list, once per page load
     setTimeout(function () { load(false); }, 6000);
   }
 
