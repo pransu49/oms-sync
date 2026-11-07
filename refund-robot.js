@@ -128,6 +128,52 @@ async function readFeed(sp, feedId) {
   return { feedId, status: info ? info.processingStatus : 'UNKNOWN', report };
 }
 
+// Replace the console's calculated split with Amazon's exact numbers (Orders API getOrderItems, 1 call per order).
+// Full refund (x.full, or amounts within ₹1 of Amazon's) -> Amazon's exact item/tax/shipping/shipping-tax.
+// Partial item refund -> scaled with Amazon's own tax ratio. Shipping only if the line asked for it.
+// Cancelled (nothing shipped) / already refunded -> skipped. Promotions / part-refunded -> left for manual refund.
+async function fixAmounts(sp, rows, checks, add) {
+  const out = [], byOrder = {};
+  rows.forEach((x) => (byOrder[x.o] = byOrder[x.o] || []).push(x));
+  const r2 = (n) => Math.round(n * 100) / 100;
+  for (const [o, lines] of Object.entries(byOrder)) {
+    let items;
+    try {
+      items = []; let next = null;
+      do {
+        const r = await call(sp, { operation: 'getOrderItems', endpoint: 'orders', path: { orderId: o }, query: next ? { NextToken: next } : {} });
+        items = items.concat(r.OrderItems || []); next = r.NextToken; await sleep(2100);
+      } while (next);
+    } catch (e) { lines.forEach((x) => add(x, 'error', `Could not read the order from Amazon: ${e.code || e.message || e}`)); continue; }
+    const amz = {}; let orderTot = 0;
+    items.forEach((it) => {
+      const a = { ip: money(it.ItemPrice), it: money(it.ItemTax), sp: money(it.ShippingPrice), stx: money(it.ShippingTax),
+        promo: money(it.PromotionDiscount) + money(it.ShippingDiscount), qo: Number(it.QuantityOrdered || 0), qs: Number(it.QuantityShipped || 0) };
+      a.tot = r2(a.ip + a.it + a.sp + a.stx); orderTot += a.tot; amz[String(it.OrderItemId)] = a;
+    });
+    const prior = checks[o] ? Number(checks[o].r || 0) : 0;
+    for (const x of lines) {
+      const a = amz[String(x.i)];
+      if (!a) { add(x, 'error', 'Order item not found on Amazon (item ID changed?) - refund by hand'); continue; }
+      if (!a.qo && !a.qs) { add(x, 'skipped', 'Order cancelled on Amazon - buyer was never charged, no refund needed'); continue; }
+      if (prior >= orderTot - 1) { add(x, 'skipped', `Already refunded on Amazon (₹${prior})`); continue; }
+      if (prior > 0) { add(x, 'error', `Partly refunded before (₹${prior} of ₹${r2(orderTot)}) - finish by hand`); continue; }
+      if (a.promo > 0) { add(x, 'error', `Has a promotion discount (₹${a.promo}) - refund by hand with Refund full amount`); continue; }
+      const sent = { ip: Number(x.ip || 0), it: Number(x.it || 0), sp: Number(x.sp || 0), stx: Number(x.stx || 0) };
+      const wantShip = x.full || sent.sp + sent.stx > 0;
+      const itemWant = r2(sent.ip + sent.it), itemFull = r2(a.ip + a.it);
+      let ip = a.ip, it = a.it;
+      if (!x.full && itemWant < itemFull - 1) { const k = itemWant / itemFull; ip = r2(a.ip * k); it = r2(itemWant - ip); } // partial item refund
+      const fixed = Object.assign({}, x, { ip, it, sp: wantShip ? a.sp : 0, stx: wantShip ? a.stx : 0 });
+      const before = r2(sent.ip + sent.it + sent.sp + sent.stx), after = r2(fixed.ip + fixed.it + fixed.sp + fixed.stx);
+      if (!x.full && after > before + 1) { add(x, 'error', `Amazon amount ₹${after} is more than the console amount ₹${before} - check by hand`); continue; }
+      console.log(`  ${o} ${x.i}: console ${f2(sent.ip)}/${f2(sent.it)}/${f2(sent.sp)}/${f2(sent.stx)} -> Amazon ${f2(fixed.ip)}/${f2(fixed.it)}/${f2(fixed.sp)}/${f2(fixed.stx)}`);
+      out.push(fixed);
+    }
+  }
+  return out;
+}
+
 async function main() {
   let lines;
   if (PROBE) {
@@ -137,12 +183,16 @@ async function main() {
     try { lines = JSON.parse(process.env.LINES || '[]'); } catch (e) { throw new Error('Refund list from the console could not be read.'); }
   }
   if (!Array.isArray(lines) || !lines.length) throw new Error('No refund lines received.');
+  const checksSnap = await admin.firestore().collection('aikm_admin').doc('refundChecks').get();
+  const checks = (checksSnap.exists && checksSnap.data().orders) || {};
   if (DRY) {
-    const seen = {};
-    for (const x of lines) {
-      const acc = ACCOUNTS[x.a]; if (!acc || !acc.token || seen[x.o]) continue; seen[x.o] = 1;
-      try { await amazonOrder(client(acc.token), x.o, true); } catch (e) { console.log(`RAW ERR ${x.o}:`, e.code || '', e.message || e); }
+    const res = []; const addD = (x, st, msg) => res.push(`${st.padEnd(7)} ${x.o} ${x.i} ${msg}`);
+    for (const a of Object.keys(ACCOUNTS)) {
+      const rows = lines.filter((x) => x.a === a); if (!rows.length || !ACCOUNTS[a].token) continue;
+      const ok = await fixAmounts(client(ACCOUNTS[a].token), rows, checks, addD);
+      ok.forEach((x) => res.push(`send    ${x.o} ${x.i} ${f2(x.ip)}/${f2(x.it)}/${f2(x.sp)}/${f2(x.stx)}`));
     }
+    res.forEach((l) => console.log('DRYRES ' + l));
     console.log('DRY run: nothing sent, nothing saved.');
     return;
   }
@@ -167,8 +217,14 @@ async function main() {
   });
 
   for (const [a, rows] of Object.entries(byAcc)) {
-    await setLive('running', `${a}: sending ${rows.length} refund line(s) to Amazon…`);
+    await setLive('running', `${a}: reading Amazon's exact amounts for ${rows.length} line(s)…`);
     try {
+      if (!RECORD_FEED) {
+        const fixed = await fixAmounts(client(ACCOUNTS[a].token), rows, checks, add);
+        rows.length = 0; fixed.forEach((x) => rows.push(x));
+        if (!rows.length) continue;
+      }
+      await setLive('running', `${a}: sending ${rows.length} refund line(s) to Amazon…`);
       const r = await submit(client(ACCOUNTS[a].token), rows);
       const { summary, errors } = parseReport(r.report);
       console.log(`  ${a} report: ${summary || '(no report text)'}`);
