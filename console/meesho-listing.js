@@ -429,7 +429,9 @@
   function unb64(s) { var b = atob(s), u = new Uint8Array(b.length); for (var i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
   async function libLoad() {
     var db = mainDb(); if (!db) return;
-    try { var d = await db.collection("aikm_admin").doc("meeshoTplIndex").get(); LIB = (d.exists && d.data().list) || {}; } catch (e) { LIB = null; }
+    try { var d = await db.collection("aikm_admin").doc("meeshoTplIndex").get(), x = d.exists ? d.data() : {}; LIB = x.list || {};
+      var bw = Object.keys(x.badWords || {}).map(function (k) { return x.badWords[k]; }); if (bw.length) learnWords(bw, true);
+    } catch (e) { LIB = null; }
     libUi();
   }
   function libUi(sel) {
@@ -526,6 +528,9 @@
   }
   // Meesho price for the wanted profit. Meesho charges no commission and no shipping,
   // so profit = price - cost - GST on the margin.
+  // Meesho (error file 7 Nov 2026): MRP must be above the Meesho price by at least 10% of the price
+  // (price 130 -> MRP 143+, 230 -> 253+, 60 -> 66+), so the highest allowed price is MRP / 1.1.
+  var maxFor = function (mrp) { return Math.floor(mrp / 1.1); };
   function profitAt(P, cost, r) { return P - cost - (r > 0 ? (P - cost) * r / (1 + r) : 0); }
   function priceInfo(p, d) {
     if (p._pi) return p._pi;
@@ -533,12 +538,12 @@
     if (!cost) {
       var v = Number(p.price) || 0; if (!v) return (p._pi = { v: "", was: "no cost & no Amazon price" });
       v = Math.round(v * (1 + (Number(S.pct) || 0) / 100));
-      return (p._pi = { v: mrp && v > mrp ? Math.floor(mrp) : v, was: "No cost known — Amazon price used. Add cost (LOTS mapping / manual cost) for profit pricing." });
+      return (p._pi = { v: mrp && v > maxFor(mrp) ? maxFor(mrp) : v, was: "No cost known — Amazon price used. Add cost (LOTS mapping / manual cost) for profit pricing." });
     }
     var want = function (pct) { for (var P = Math.ceil(cost); P < cost * 5 + 1000; P++) if (profitAt(P, cost, r) >= P * pct / 100) return P; return null; };
     var tgt = want(Number(S.tgtPct) || 20), min = want(Number(S.minPct) || 15), P = tgt, note = "";
-    if (!P) P = mrp ? Math.floor(mrp) : Math.ceil(cost * 1.6);
-    if (mrp && P > mrp - 10) P = Math.floor(mrp - 10);   // Meesho: MRP must be at least Rs 10 above the price
+    if (!P) P = mrp ? maxFor(mrp) : Math.ceil(cost * 1.6);
+    if (mrp && P > maxFor(mrp)) P = maxFor(mrp);
     var pf = profitAt(P, cost, r), pc = Math.round(pf / P * 100);
     note = "Cost ₹" + Math.round(cost) + " · GST on margin ₹" + Math.round(P - cost - pf) + " · profit ₹" + Math.round(pf) + " (" + pc + "%)" + (pc < (Number(S.minPct) || 15) ? " — BELOW " + S.minPct + "%: MRP too low" : "");
     if (pc < (Number(S.minPct) || 15)) return (p._pi = { v: "", was: note + " — left empty (below your minimum profit). Type a price to list anyway.", low: true });
@@ -550,7 +555,13 @@
   var SWAP = { chocolate: "choco", chocolates: "choco", chocolaty: "choco", honey: "", desi: "traditional", enjoy: "savour", enjoyable: "tasty",
     real: "genuine", friends: "family", friend: "family", moments: "times", moment: "time", an: "a", delight: "treat", magic: "special", happy: "joyful", fun: "tasty", everyday: "daily", trace: "bit" };
   function badWords() { var m = {}; Object.keys(SWAP).forEach(function (k) { m[k] = SWAP[k]; }); try { var l = JSON.parse(localStorage.getItem(BW) || "{}"); Object.keys(l).forEach(function (k) { if (!(k in m)) m[k] = ""; }); } catch (e) {} return m; }
-  function learnWords(list) { try { var l = JSON.parse(localStorage.getItem(BW) || "{}"); list.forEach(function (w) { l[w.toLowerCase()] = 1; }); localStorage.setItem(BW, JSON.stringify(l)); } catch (e) {} }
+  function learnWords(list, local) {
+    try { var l = JSON.parse(localStorage.getItem(BW) || "{}"); list.forEach(function (w) { l[String(w).toLowerCase()] = 1; }); localStorage.setItem(BW, JSON.stringify(l)); } catch (e) {}
+    if (local || !list.length || !mainDb()) return;   // also kept online, so every computer replaces them
+    var upd = {}; list.forEach(function (w) { upd["badWords." + String(w).toLowerCase().replace(/[^a-z0-9]+/g, "_")] = String(w).toLowerCase(); });
+    var d = mainDb().collection("aikm_admin").doc("meeshoTplIndex");
+    d.set({ list: {} }, { merge: true }).then(function () { return d.update(upd); }).catch(function () {});
+  }
   function safe(x) {
     var m = badWords(), keys = Object.keys(m).sort(function (a, b) { return b.length - a.length; });
     var out = String(x || "").replace(new RegExp("\\b(" + keys.map(function (k) { return k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }).join("|") + ")\\b", "gi"), function (w) {
