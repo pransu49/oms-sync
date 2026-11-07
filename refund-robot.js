@@ -66,6 +66,38 @@ function parseReport(text) {
 }
 
 const RECORD_FEED = String(process.env.RECORD_FEED_ID || '').trim(); // record-only: read this feed's result, send nothing
+const DRY = String(process.env.DRY || '').toLowerCase() === 'true'; // check-only: read Amazon's amounts, send nothing, save nothing
+
+// ---- Amazon's own numbers for an order (Orders API) + what was already refunded (Finances API) ----
+async function call(sp, args) {
+  for (let t = 0; t < 6; t++) {
+    try { return await sp.callAPI(args); }
+    catch (e) { if (/throttl|QuotaExceeded|429/i.test(String(e.code || e.message))) { await sleep(2500 * (t + 1)); continue; } throw e; }
+  }
+  throw new Error('Amazon kept saying too many requests');
+}
+const money = (m) => Number((m && m.Amount) || 0);
+async function amazonOrder(sp, orderId, raw) {
+  const order = await call(sp, { operation: 'getOrder', endpoint: 'orders', path: { orderId } });
+  await sleep(2100);
+  let items = [], next = null;
+  do {
+    const r = await call(sp, { operation: 'getOrderItems', endpoint: 'orders', path: { orderId }, query: next ? { NextToken: next } : {} });
+    items = items.concat(r.OrderItems || []); next = r.NextToken; await sleep(2100);
+  } while (next);
+  let fin = null;
+  try {
+    fin = await call(sp, { operation: 'listFinancialEventsByOrderId', endpoint: 'finances', path: { orderId }, query: { MaxResultsPerPage: 100 } });
+    fin = fin.FinancialEvents || fin;
+  } catch (e) { fin = { error: String(e.code || e.message || e).slice(0, 80) }; }
+  await sleep(2100);
+  if (raw) {
+    console.log(`RAW ORDER ${orderId}:`, JSON.stringify({ s: order.OrderStatus, t: order.OrderTotal, pay: order.PaymentMethod }));
+    items.forEach((it) => console.log(`RAW ITEM ${orderId}:`, JSON.stringify(it).slice(0, 900)));
+    console.log(`RAW FIN ${orderId}:`, JSON.stringify(fin).slice(0, 1500));
+  }
+  return { order, items, fin };
+}
 
 async function submit(sp, rows) {
   if (RECORD_FEED) return readFeed(sp, RECORD_FEED);
@@ -105,6 +137,15 @@ async function main() {
     try { lines = JSON.parse(process.env.LINES || '[]'); } catch (e) { throw new Error('Refund list from the console could not be read.'); }
   }
   if (!Array.isArray(lines) || !lines.length) throw new Error('No refund lines received.');
+  if (DRY) {
+    const seen = {};
+    for (const x of lines) {
+      const acc = ACCOUNTS[x.a]; if (!acc || !acc.token || seen[x.o]) continue; seen[x.o] = 1;
+      try { await amazonOrder(client(acc.token), x.o, true); } catch (e) { console.log(`RAW ERR ${x.o}:`, e.code || '', e.message || e); }
+    }
+    console.log('DRY run: nothing sent, nothing saved.');
+    return;
+  }
 
   const snap = await logRef.get();
   const log = (snap.exists && snap.data().entries) || [];
