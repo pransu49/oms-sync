@@ -60,7 +60,7 @@
       ".ms-hd{display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid var(--line-2)}",
       ".ms-hd h3{margin:0;font:600 17px 'Inter',sans-serif;color:var(--ink)}",
       ".ms-hd p{margin:3px 0 0;font-size:12.5px;color:var(--muted)}",
-      ".ms-steps{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}",
+      ".ms-steps{display:flex;gap:6px;flex-wrap:wrap}",
       ".ms-st{display:inline-flex;align-items:center;gap:7px;padding:6px 11px;border-radius:20px;border:1px solid var(--line-2);font-size:12px;color:var(--muted);background:#fff}",
       ".ms-st b{width:18px;height:18px;border-radius:50%;background:#EEEBE3;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;font-size:11px}",
       ".ms-st.ok{color:var(--ink);border-color:rgba(201,162,75,.5);background:var(--gold-soft,#F7F1E3)}.ms-st.ok b{background:var(--navy);color:#fff}",
@@ -86,7 +86,10 @@
       ".ms-drop i{font-size:26px;color:var(--gold)}.ms-drop b{font-size:13.5px}.ms-drop small{font-size:12px;color:var(--muted)}",
       ".ms-tpl{margin-top:10px;padding:10px 12px;border-radius:10px;background:#F3F7F2;color:#2E5E3E;font-size:12.5px;line-height:1.6}",
       ".ms-tpl.bad{background:#FBEDEB;color:#9B2C22}",
-      ".ms-ck{margin-top:4px;font-size:11.5px;line-height:1.35;font-weight:600}.ms-ck.ok{color:#2E5E3E}.ms-ck.bad{color:#9B2C22;font-weight:500;white-space:normal}",
+      ".ms-stat{margin-top:6px;padding:5px 8px;border-radius:7px;font-size:11.5px;line-height:1.4;font-weight:600;white-space:normal}",
+      ".ms-stat.ok{background:#E6F3EC;color:#1E7A4B}.ms-stat.bad{background:#FCECEA;color:#9B2C22;font-weight:500}.ms-stat.bad b{font-weight:700;display:block;margin-bottom:2px}",
+      ".ms-reset{all:unset;cursor:pointer;margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;border:1px solid var(--line);font-size:12px;font-weight:600;color:var(--ink-2);background:#fff;white-space:nowrap}",
+      ".ms-reset:hover{border-color:#B42318;color:#B42318;background:#FCECEA}",
       ".ms-src{display:inline-flex;gap:2px;background:#EBE6DA;border-radius:10px;padding:3px;margin:0 0 10px}",
       ".ms-src button{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:500;color:var(--ink-2)}",
       ".ms-src button.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(15,30,53,.1)}",
@@ -114,7 +117,7 @@
       ".ms-t{border-collapse:separate;border-spacing:0;font-size:12.5px;min-width:100%}",
       ".ms-t th,.ms-t td{border-bottom:1px solid var(--line-2);border-right:1px solid var(--line-2);padding:6px 8px;vertical-align:top;background:#fff}",
       ".ms-t thead th{position:sticky;top:0;z-index:2;background:#FAF8F3;text-align:left;font-weight:600;min-width:150px;max-width:240px}",
-      ".ms-t th.p,.ms-t td.p{position:sticky;left:0;z-index:1;min-width:190px;max-width:220px;background:#FCFBF8}",
+      ".ms-t th.p,.ms-t td.p{position:sticky;left:0;z-index:1;min-width:250px;max-width:270px;width:260px;background:#FCFBF8}",
       ".ms-t thead th.p{z-index:3}",
       ".ms-t th small{display:block;font-weight:400;color:var(--muted);font-size:11px;margin-top:2px}",
       ".ms-req{color:#B4382F;margin-left:3px}",
@@ -155,6 +158,7 @@
     if (!$("msQ")) {
       body.innerHTML =
         '<div class="ms-hd"><div><h3>Meesho Listing Robot</h3><p>Pick products, drop in any Meesho template, download it filled in.</p></div>' +
+        '<button type="button" class="ms-reset" id="msReset" title="Clear the selected products and the template, start a new file"><i class="ti ti-refresh"></i>Start over</button>' +
         '<div class="ms-steps"><span class="ms-st" id="msS1"><b>1</b>Pick products</span><span class="ms-st" id="msS2"><b>2</b>Add template</span><span class="ms-st" id="msS3"><b>3</b>Fill &amp; download</span></div></div>' +
         '<div class="ms-grid"><div class="ms-col">' +
           '<div class="ms-lbl">1 · Products <span id="msCnt"></span></div>' +
@@ -210,6 +214,13 @@
       SRC = b.dataset.src; Array.prototype.forEach.call($("msSrc").children, function (x) { x.classList.toggle("on", x === b); });
       $("msQ").placeholder = SRC === "lots" ? "Search LOTS product name, code, brand or barcode…" : "Search product name, SKU or ASIN…";
       if (SRC === "lots") lotsReady().then(drawList); drawList(); $("msQ").focus();
+    });
+    $("msReset").addEventListener("click", function () {
+      if (busy) return;
+      pick.clear(); tpl = null; grid = null; q = ""; onlyNeed = true;
+      $("msQ").value = ""; $("msTpl").innerHTML = ""; $("msRes").innerHTML = ""; $("msRes").style.display = "none";
+      var ls = $("msLibSel"); if (ls) ls.value = "";
+      drawList(); drawSteps(); toast("Cleared — pick products and a template for the next file");
     });
     var drop = $("msDrop");
     ["dragenter", "dragover"].forEach(function (ev) { drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("over"); }); });
@@ -828,8 +839,8 @@
       var v = String(r.vals[c.idx].v || "").toLowerCase(), hit = lw.filter(function (w) { return w.length > 2 && new RegExp("\\b" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b").test(v); })[0];
       if (hit && out.join().indexOf("approval") < 0) out.push("Brand “" + hit + "” blocked — needs Meesho brand approval");
     });
-    var miss = tpl.cols.filter(function (c) { return c.req && !r.vals[c.idx].v; }).length;
-    if (miss) out.push(miss + " required box" + (miss > 1 ? "es" : "") + " empty");
+    var miss = tpl.cols.filter(function (c) { return c.req && !r.vals[c.idx].v; }).map(function (c) { return c.head; });
+    if (miss.length) out.push("Empty: " + miss.slice(0, 4).join(", ") + (miss.length > 4 ? " +" + (miss.length - 4) + " more" : ""));
     var bad = tpl.cols.filter(function (c) { var v = r.vals[c.idx].v; return v && ((c.options && c.options.indexOf(v) < 0) || invalid(c, v)); }).length;
     if (bad) out.push(bad + " box" + (bad > 1 ? "es" : "") + " not a Meesho choice / wrong format");
     return out;
@@ -862,7 +873,7 @@
     }).join("");
     var body = grid.rows.map(function (r, ri) {
       return '<tr><td class="p"><div class="ms-pn" title="' + esc(r.p.name) + '">' + esc(r.p.name) + "</div><small>" + esc(r.p.asin) + (r.p.lots ? " · LOTS" + (r.d ? " + Amazon details" : "") : r.d ? "" : " · basic data") + "</small>" +
-        (iss[ri].length ? '<div class="ms-ck bad">✕ Left out: ' + esc(iss[ri].join(" · ")) + "</div>" : '<div class="ms-ck ok">✓ Ready for Meesho</div>') + "</td>" + cols.map(function (c) {
+        (iss[ri].length ? '<div class="ms-stat bad"><b>✕ Left out — fix:</b>' + iss[ri].map(esc).join("<br>") + "</div>" : '<div class="ms-stat ok">✓ Ready for Meesho</div>') + "</td>" + cols.map(function (c) {
         var v = r.vals[c.idx], need = !v.v && (c.req || (onlyNeed && nc.length));
         var why = invalid(c, v.v), bad = (v.v && c.options && c.options.indexOf(v.v) < 0) || v.low || !!why;
         if (why) v.was = why;
