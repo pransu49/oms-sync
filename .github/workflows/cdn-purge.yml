@@ -1,0 +1,27 @@
+name: Refresh console files on CDN
+
+# After any change to console/*.js, clear jsDelivr's cached "@main" copy so every computer gets the new version,
+# even when the console's GitHub version lookup is over its hourly limit and falls back to @main. No Firebase use.
+on:
+  push:
+    branches: [main]
+    paths: ['console/**']
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - shell: bash
+        run: |
+          files=$(git diff --name-only HEAD~1 HEAD -- console | grep -E '\.(js|html|css)$' || true)
+          [ -z "$files" ] && { echo "nothing to refresh"; exit 0; }
+          for f in $files; do
+            for i in 1 2 3; do
+              curl -sS -m 20 "https://purge.jsdelivr.net/gh/pransu49/oms-sync@main/$f" -o /dev/null && break; sleep 5
+            done
+            echo "refreshed $f"
+          done
