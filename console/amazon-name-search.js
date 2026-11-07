@@ -726,3 +726,37 @@
     new MutationObserver(function () { if (ov.style.display === "none") setTimeout(mark, 300); }).observe(ov, { attributes: true, attributeFilter: ["style"] });
   })(0);
 } catch (e) {} })();
+
+/* ===== OMS inventory → "Not linked" list: show WHAT a product is mapped to (owner, 7 Nov 2026)
+   "Mapped · PAWAN — KRACK CREAM 1*25GM" instead of the reason; unmapped rows just say "Not mapped". ===== */
+(function () { try {
+  if (window.__aikmOmiMapped) return; window.__aikmOmiMapped = true;
+  var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
+  function recFor(asins) { var M = {}; try { M = STORE.asinLotsMap || {}; } catch (e) {} for (var i = 0; i < asins.length; i++) { var r = M[asins[i]]; if (r && (r.code || r.vendorName || (r.parts || []).length)) return r; } return null; }
+  function label(r) {
+    var v = String(r.vendorName || "LOTS"), lots = v.toUpperCase() === "LOTS";
+    var item = r.vendor && r.vendor.item ? r.vendor.item : r.name || (r.parts && r.parts[0] && r.parts[0].name) || r.code || "";
+    return '<span class="pill ' + (lots ? "ok" : "navy") + '" style="margin-right:6px">' + esc(lots ? "LOTS" : v) + '</span><span title="' + esc(item) + '" style="display:inline-block;max-width:340px;vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:var(--ink)">' + esc(item) + "</span>";
+  }
+  function fix() {
+    var body = document.getElementById("omiBody"); if (!body) return;
+    var tbl = body.querySelector("table.sp-tbl"); if (!tbl) return;
+    var ths = tbl.querySelectorAll("thead th"), col = -1;
+    ths.forEach(function (th, i) { if (/why not linked/i.test(th.textContent)) { th.textContent = "Mapped to"; col = i; } else if (/^mapped to$/i.test(th.textContent.trim())) col = i; });
+    if (col < 0) return;
+    tbl.querySelectorAll("tbody tr").forEach(function (tr) {
+      if (tr.dataset.mt) return; tr.dataset.mt = "1";
+      var asins = [].map.call(tr.querySelectorAll('a[href*="/dp/"]'), function (a) { return (a.href.split("/dp/")[1] || "").slice(0, 10).toUpperCase(); });
+      var td = tr.children[col]; if (!td) return;
+      var r = recFor(asins);
+      td.innerHTML = r ? label(r) : '<span class="pill na">Not mapped</span>';
+      var b = tr.querySelector("[data-omi-map]"); if (b && r) b.innerHTML = '<i class="ti ti-pencil"></i> Change';
+    });
+  }
+  (function watch(n) {
+    var body = document.getElementById("omiBody");
+    if (!body) return void (n < 90 && setTimeout(function () { watch(n + 1); }, 1000));
+    new MutationObserver(function () { fix(); }).observe(body, { childList: true, subtree: true });
+    fix();
+  })(0);
+} catch (e) {} })();
