@@ -798,7 +798,7 @@
   }
   function render() {
     var body = document.getElementById("omiBody"); if (!body) return;
-    var btn = document.getElementById("omiVendBtn"); btn && (btn.style.background = open ? "var(--gold-soft)" : "");
+    var btn = document.getElementById("omiVendBtn"); btn && (btn.style.background = open ? "var(--navy)" : "", btn.style.color = open ? "#fff" : "", btn.style.borderColor = open ? "var(--navy)" : "");
     var mine = document.getElementById("omiVendList"), scroll = [].slice.call(body.children).filter(function (x) { return x.classList && x.classList.contains("ap-scroll"); })[0];
     var tools = body.querySelectorAll(".ap-tools")[1];
     if (!open) { mine && mine.remove(); scroll && (scroll.style.display = ""); tools && (tools.style.display = ""); return; }
