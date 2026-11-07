@@ -86,6 +86,7 @@
       ".ms-drop i{font-size:26px;color:var(--gold)}.ms-drop b{font-size:13.5px}.ms-drop small{font-size:12px;color:var(--muted)}",
       ".ms-tpl{margin-top:10px;padding:10px 12px;border-radius:10px;background:#F3F7F2;color:#2E5E3E;font-size:12.5px;line-height:1.6}",
       ".ms-tpl.bad{background:#FBEDEB;color:#9B2C22}",
+      ".ms-ck{margin-top:4px;font-size:11.5px;line-height:1.35;font-weight:600}.ms-ck.ok{color:#2E5E3E}.ms-ck.bad{color:#9B2C22;font-weight:500;white-space:normal}",
       ".ms-lib{margin-top:10px;display:flex;align-items:center;gap:8px}.ms-lib:empty{display:none}",
       ".ms-lib .ms-sel{flex:1;min-width:0}.ms-lib small{font-size:12px;color:var(--muted);white-space:nowrap}",
       ".ms-set{margin-top:16px;border:1px solid var(--line-2);border-radius:12px}",
@@ -371,13 +372,22 @@
       // columns never filled: Meesho's own (system use, error status/message) and row-label columns
       var errCol = cols.filter(function (c) { return /^error message$/i.test(c.head); })[0];
       if (errCol) {
-        var words = {}, bad = 0;
-        Object.keys(main.rows).forEach(function (rn) { if (+rn <= hr) return; var x = main.rows[rn][errCol.idx]; if (!x || !x.v) return; bad++;
+        var words = {}, bad = 0, okN = 0, fails = [], nameCol = cols.filter(function (c) { return /product ?name/i.test(c.head); })[0];
+        var short = function (m) { return String(m).split(/;\s*/).map(function (t) {   // Meesho's long message -> one short line each
+          var g = /greater than listing price by ([\d.]+)/i.exec(t); if (g) return "MRP needs ₹" + g[1] + " more than price";
+          var w = t.match(/([A-Za-z][A-Za-z'-]*)\s*\((?:Warning|Error)\)\s*detected in ([A-Z ]+)/); if (w) return "“" + w[1] + "” not allowed in " + w[2].trim().toLowerCase();
+          return t.replace(/\s*Please.*$/, "").slice(0, 90); }).filter(Boolean).join(" · "); };
+        Object.keys(main.rows).forEach(function (rn) { if (+rn <= hr) return; var x = main.rows[rn][errCol.idx], nm = nameCol && main.rows[rn][nameCol.idx];
+          if (nm && nm.v && !(x && x.v)) okN++;
+          if (x && x.v && nm) fails.push({ n: nm.v, m: short(x.v) });
+          if (!x || !x.v) return; bad++;
           (x.v.match(/([A-Za-z][A-Za-z'-]*)\s*\((?:Warning|Error)\)/g) || []).forEach(function (m) { words[m.replace(/\s*\(.*$/, "").toLowerCase()] = 1; }); });
         if (bad) {
           learnWords(Object.keys(words)); tpl = null; grid = null; $("msRes").style.display = "none";
           box.innerHTML = '<div class="ms-tpl"><b>This is Meesho\'s error file</b> (' + bad + " rows with messages). " + (Object.keys(words).length ? "Learned " + Object.keys(words).length + " blocked words — they'll be replaced next time: <b>" + esc(Object.keys(words).join(", ")) + "</b>. " : "") +
-            "Now drop a <b>fresh</b> Meesho template and click Fill again.</div>";
+            "Now drop a <b>fresh</b> Meesho template and click Fill again.</div>" +
+            '<div class="ms-tpl" style="background:#fff;border:1px solid var(--line-2);color:var(--ink)"><b>' + okN + " accepted · " + fails.length + " rejected</b>" +
+            fails.map(function (f) { return '<div style="margin-top:6px"><b style="font-weight:600">' + esc(String(f.n).slice(0, 70)) + '</b><br><span style="color:#9B2C22">' + esc(f.m) + "</span></div>"; }).join("") + "</div>";
           drawSteps(); return;
         }
       }
@@ -430,6 +440,7 @@
   async function libLoad() {
     var db = mainDb(); if (!db) return;
     try { var d = await db.collection("aikm_admin").doc("meeshoTplIndex").get(), x = d.exists ? d.data() : {}; LIB = x.list || {};
+      MRPFIX = x.mrp || {};
       var bw = Object.keys(x.badWords || {}).map(function (k) { return x.badWords[k]; }); if (bw.length) learnWords(bw, true);
     } catch (e) { LIB = null; }
     libUi();
@@ -517,8 +528,9 @@
     n = parseFloat(p.taxPercent); return isNaN(n) ? "" : n;
   }
   function toCm(x) { if (!x || x.v == null) return ""; var f = { mm: 0.1, m: 100, in: 2.54, inches: 2.54 }[String(x.u).toLowerCase()] || 1; return Math.round(x.v * f * 10) / 10; }
+  var MRPFIX = {};   // MRP typed in the review table (Amazon's was wrong), per ASIN, kept online in aikm_admin/meeshoTplIndex.mrp
   function mrpOf(p, d) {
-    var m = Number(p.mrp) || Number(d && d.mrp) || 0; if (m) return m;
+    var m = Number(MRPFIX[String(p.asin).toUpperCase()]) || Number(p.mrp) || Number(d && d.mrp) || 0; if (m) return m;
     try { var lm = resolveSpapiLotsMatch(p.name, p.asin), pr = lm && lotsPriceByCode[lm.code]; m = Number(pr && pr.mrp) || 0; } catch (e) {}
     return m;
   }
@@ -555,6 +567,7 @@
   var SWAP = { chocolate: "choco", chocolates: "choco", chocolaty: "choco", honey: "", desi: "traditional", enjoy: "savour", enjoyable: "tasty",
     real: "genuine", friends: "family", friend: "family", moments: "times", moment: "time", an: "a", delight: "treat", magic: "special", happy: "joyful", fun: "tasty", everyday: "daily", trace: "bit" };
   function badWords() { var m = {}; Object.keys(SWAP).forEach(function (k) { m[k] = SWAP[k]; }); try { var l = JSON.parse(localStorage.getItem(BW) || "{}"); Object.keys(l).forEach(function (k) { if (!(k in m)) m[k] = ""; }); } catch (e) {} return m; }
+  function learnedWords() { try { return Object.keys(JSON.parse(localStorage.getItem(BW) || "{}")); } catch (e) { return []; } }
   function learnWords(list, local) {
     try { var l = JSON.parse(localStorage.getItem(BW) || "{}"); list.forEach(function (w) { l[String(w).toLowerCase()] = 1; }); localStorage.setItem(BW, JSON.stringify(l)); } catch (e) {}
     if (local || !list.length || !mainDb()) return;   // also kept online, so every computer replaces them
@@ -756,6 +769,32 @@
     busy = false; drawSteps();
   }
 
+  /* ---------- 5. Meesho check (before upload) ----------
+     The same checks Meesho runs, so a row that would come back in the error file is caught here and left out of the download. */
+  var colOf = function (re, not) { return tpl.cols.filter(function (c) { return re.test(c.head) && !(not && not.test(c.head)); })[0]; };
+  var cPriceC = function () { return colOf(/price/i, /wrong|defective/i); }, cMrpC = function () { return colOf(/\bmrp\b|maximum retail/i); };
+  function issues(r) {
+    var out = [], cp = cPriceC(), cm = cMrpC(), P = cp ? parseFloat(r.vals[cp.idx].v) : NaN, M = cm ? parseFloat(r.vals[cm.idx].v) : NaN;
+    if (!(P > 0) && cp) out.push("No price");
+    if (P > 0 && M > 0 && M < P * 1.1 - 0.001) out.push("MRP must be 10% above price — price max ₹" + Math.floor(M / 1.1) + " for MRP ₹" + M);
+    var lw = learnedWords();
+    if (lw.length) tpl.cols.filter(function (c) { return /brand/i.test(c.head); }).forEach(function (c) {
+      var v = String(r.vals[c.idx].v || "").toLowerCase(), hit = lw.filter(function (w) { return w.length > 2 && new RegExp("\\b" + w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b").test(v); })[0];
+      if (hit && out.join().indexOf("approval") < 0) out.push("Brand “" + hit + "” blocked — needs Meesho brand approval");
+    });
+    var miss = tpl.cols.filter(function (c) { return c.req && !r.vals[c.idx].v; }).length;
+    if (miss) out.push(miss + " required box" + (miss > 1 ? "es" : "") + " empty");
+    var bad = tpl.cols.filter(function (c) { var v = r.vals[c.idx].v; return v && ((c.options && c.options.indexOf(v) < 0) || invalid(c, v)); }).length;
+    if (bad) out.push(bad + " box" + (bad > 1 ? "es" : "") + " not a Meesho choice / wrong format");
+    return out;
+  }
+  function onMrp(ri, v) {   // MRP typed -> saved for this ASIN (online) and the price worked out again
+    var r = grid.rows[ri], cp = cPriceC(), m = parseFloat(v); if (!(m > 0)) return;
+    var a = String(r.p.asin).toUpperCase(); MRPFIX[a] = m; delete r.p._pi;
+    try { var upd = {}; upd["mrp." + a] = m; var d = mainDb().collection("aikm_admin").doc("meeshoTplIndex"); d.set({ list: {} }, { merge: true }).then(function () { return d.update(upd); }).catch(function () {}); } catch (e) {}
+    if (cp && r.vals[cp.idx].auto !== false) { var i = priceInfo(r.p, r.d); r.vals[cp.idx] = { v: i.v === "" ? "" : String(i.v), was: i.was, low: !!i.low, auto: true, text: false }; }
+  }
+
   /* ---------- 5. review grid ---------- */
   function needCols() {
     var anyReq = tpl.cols.some(function (c) { return c.req; });
@@ -768,14 +807,16 @@
   }
   function drawGrid() {
     var res = $("msRes"); res.style.display = "";
-    var n = counts(), nc = needCols(), cols = onlyNeed && nc.length ? nc : tpl.cols, dl = "";
+    var n = counts(), nc = needCols(), keep = [cPriceC(), cMrpC()].filter(Boolean), cols = onlyNeed && nc.length ? tpl.cols.filter(function (c) { return nc.indexOf(c) >= 0 || keep.indexOf(c) >= 0; }) : tpl.cols, dl = "";
+    var iss = grid.rows.map(issues), ready = iss.filter(function (x) { return !x.length; }).length;
     var head = cols.map(function (c) {
       var id = "msDl" + c.idx; if (c.options) dl += '<datalist id="' + id + '">' + c.options.map(function (o) { return '<option value="' + esc(o) + '">'; }).join("") + "</datalist>";
       return '<th title="' + esc(c.hint || c.raw) + '">' + esc(c.head) + (c.req ? '<span class="ms-req">*</span>' : "") + "<small>" + (c.options ? c.options.length + " Meesho choices" : "type any value") + "</small>" +
         '<div class="ms-all"><input data-all="' + c.idx + '"' + (c.options ? ' list="' + id + '"' : "") + ' placeholder="Same for all"><button type="button" data-allgo="' + c.idx + '">Apply</button></div></th>';
     }).join("");
     var body = grid.rows.map(function (r, ri) {
-      return '<tr><td class="p"><div class="ms-pn" title="' + esc(r.p.name) + '">' + esc(r.p.name) + "</div><small>" + esc(r.p.asin) + (r.d ? "" : " · basic data") + "</small></td>" + cols.map(function (c) {
+      return '<tr><td class="p"><div class="ms-pn" title="' + esc(r.p.name) + '">' + esc(r.p.name) + "</div><small>" + esc(r.p.asin) + (r.d ? "" : " · basic data") + "</small>" +
+        (iss[ri].length ? '<div class="ms-ck bad">✕ Left out: ' + esc(iss[ri].join(" · ")) + "</div>" : '<div class="ms-ck ok">✓ Ready for Meesho</div>') + "</td>" + cols.map(function (c) {
         var v = r.vals[c.idx], need = !v.v && (c.req || (onlyNeed && nc.length));
         var why = invalid(c, v.v), bad = (v.v && c.options && c.options.indexOf(v.v) < 0) || v.low || !!why;
         if (why) v.was = why;
@@ -791,12 +832,18 @@
           (nocost ? '<span class="ms-pill n">' + nocost + " without cost — Amazon price used</span>" : "") +
           (grid.rows.length - low - nocost > 0 ? '<span class="ms-pill g">' + (grid.rows.length - low - nocost) + " priced for " + S.minPct + "–" + S.tgtPct + "% profit</span>" : ""); })() +
       (nc.length ? '<button type="button" class="ms-lnk" id="msTog">' + (onlyNeed ? "Show all " + tpl.cols.length + " columns" : "Show only columns that need you") + "</button>" : "") +
-      '<button type="button" class="ms-go gold" id="msDl"><i class="ti ti-download"></i>Download Meesho file</button></div>' +
+      '<span class="ms-pill g">✓ ' + ready + " ready for Meesho</span>" + (grid.rows.length - ready ? '<span class="ms-pill y" style="background:#FBEDEB;color:#9B2C22">' + (grid.rows.length - ready) + " would be rejected — left out</span>" : "") +
+      '<button type="button" class="ms-go gold' + (ready ? "" : " dim") + '" id="msDl"><i class="ti ti-download"></i>Download ' + ready + " ready product" + (ready === 1 ? "" : "s") + "</button></div>" +
       dl + '<div class="ms-tw"><table class="ms-t"><thead><tr><th class="p">Product</th>' + head + "</tr></thead><tbody>" + body + "</tbody></table></div>" +
-      '<div class="ms-note" style="text-align:left">Tip: yellow = Meesho needs it. Use <b>Same for all</b> to fill a whole column at once. Then upload the downloaded file in Meesho → Catalog Upload → Bulk upload.</div>';
+      '<div class="ms-note" style="text-align:left">Each product is checked with Meesho\'s rules first — only ✓ Ready ones go in the file, so Meesho should accept the whole upload. Change the MRP box if Amazon\'s MRP is wrong; the price is worked out again. Yellow = Meesho needs it. Use <b>Same for all</b> to fill a whole column at once. Then upload the downloaded file in Meesho → Catalog Upload → Bulk upload.</div>';
     res.oninput = function (e) {
       var el = e.target; if (!el.dataset || el.dataset.r == null) return;
       var v = grid.rows[+el.dataset.r].vals[+el.dataset.c]; v.v = el.value.trim(); v.auto = false; v.low = false;
+      clearTimeout(res._t); res._t = setTimeout(function () {   // re-check after typing stops (MRP also re-prices)
+        var cm = cMrpC(); if (cm && +el.dataset.c === cm.idx) onMrp(+el.dataset.r, v.v);
+        var f = document.activeElement && document.activeElement.dataset ? [document.activeElement.dataset.r, document.activeElement.dataset.c] : null;
+        drawGrid(); if (f) { var x = res.querySelector('[data-r="' + f[0] + '"][data-c="' + f[1] + '"]'); if (x) { x.focus(); var L = x.value.length; try { x.setSelectionRange(L, L); } catch (er) {} } }
+      }, 700);
       var td = el.parentNode, c = tpl.cols.filter(function (x) { return x.idx === +el.dataset.c; })[0];
       td.classList.toggle("need", !v.v && !!c.req); td.classList.toggle("bad", !!(v.v && c.options && c.options.indexOf(v.v) < 0) || !!invalid(c, v.v));
       if (MAKER.test(c.head) && v.v && !invalid(c, v.v)) memSet(mkKey(c.head, brandOf(grid.rows[+el.dataset.r])), v.v);   // remembered for this brand only
@@ -845,8 +892,8 @@
     return true;
   }
   async function download() {
-    var n = counts();
-    if (n.need && !confirm(n.need + " boxes are empty or wrong (red / yellow) — Meesho will reject those products. Download anyway?")) return;
+    var okRows = grid.rows.filter(function (r) { return !issues(r).length; });
+    if (!okRows.length) return toast("No product is ready yet — fix the red notes first", true);
     try {
       var doc = X(new XMLSerializer().serializeToString(tpl.doc)), sd = all(doc, "sheetData")[0], rows = {};
       all(sd, "row").forEach(function (r) { rows[+r.getAttribute("r")] = r; });
@@ -856,7 +903,7 @@
       // Wrong/Defective price = Meesho price - 7.
       var colBy = function (re) { return tpl.cols.filter(function (c) { return re.test(c.head); })[0]; };
       var cCountry = colBy(/country/i), cPrice = tpl.cols.filter(function (c) { return /price/i.test(c.head) && !/wrong|defective/i.test(c.head); })[0], wroteF = false;
-      grid.rows.forEach(function (r, i) {
+      okRows.forEach(function (r, i) {
         tpl.cols.forEach(function (c) { var v = r.vals[c.idx]; if (v.v === "") return; setCell(doc, sd, rows, tpl.start + i, c.idx, v.v, v.text); if (c.idx > maxC) maxC = c.idx; });
         (tpl.fcols || []).forEach(function (c) {
           var h = c.head.toLowerCase(), val = "";
@@ -871,7 +918,7 @@
         var ct = await tpl.zip.file("[Content_Types].xml").async("string"); tpl.zip.file("[Content_Types].xml", ct.replace(/<Override[^>]*calcChain[^>]*\/>/g, ""));
         var wr = await tpl.zip.file("xl/_rels/workbook.xml.rels").async("string"); tpl.zip.file("xl/_rels/workbook.xml.rels", wr.replace(/<Relationship[^>]*calcChain[^>]*\/>/g, ""));
       }
-      var dim = all(doc, "dimension")[0], lastRow = tpl.start + grid.rows.length - 1;
+      var dim = all(doc, "dimension")[0], lastRow = tpl.start + okRows.length - 1;
       if (dim) { var g = range(dim.getAttribute("ref") || "A1"); if (g) dim.setAttribute("ref", "A1:" + colLet(Math.max(g.c2 > 16000 ? 0 : g.c2, maxC)) + Math.max(g.r2 > 1e6 ? 0 : g.r2, lastRow)); }
       var out = new XMLSerializer().serializeToString(doc);
       if (!/^<\?xml/.test(out)) out = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + out;

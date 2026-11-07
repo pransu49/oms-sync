@@ -19,6 +19,8 @@
   Its Amazon details come from `meesho-robot.js` (workflow `meesho-robot.yml`, on command only) -> spapiSnapshots/meesho_<ASIN>.
   Saved templates (owner 7 Nov 2026): every fresh template dropped is kept in main Firebase, one per category — index `aikm_admin/meeshoTplIndex`
   + file parts `aikm_admin/meeshoTpl_<key>_<n>` (base64). 1 read when the tab opens, 1-2 per template opened. Do not delete them.
+  Same index doc also holds learned blocked words (`badWords`) and MRPs typed in the review table (`mrp.<ASIN>`, used before Amazon's MRP).
+  Meesho rules checked before download (`issues()`): MRP >= price x 1.10, no learned blocked word in Brand, required boxes filled. Only rows that pass are written to the file.
 - Auto sale bills (`console/sale-autobill.js`) is loaded on the Purchase & Sales page (`page.purchase-bills.liquid`)
   by the block `AIKM AUTO SALE BILLS LOADER` just before `</body>`. Keep that block when replacing that template.
   It saves records of kind `autobill_done` and `autobill_map` in Supabase — do not delete them.
