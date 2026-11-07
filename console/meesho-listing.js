@@ -198,6 +198,8 @@
     $("msList").addEventListener("click", function (e) {
       var a = e.target.closest("[data-ms-all]"); if (a) { selectShown(); return; }
       if (e.target.closest("[data-ms-clr]")) { pick.clear(); drawList(); drawSteps(); return; }
+      var x = e.target.closest("[data-ext]");
+      if (x) { var xa = x.dataset.ext; if (pick.has(xa)) pick.delete(xa); else { if (pick.size >= MAX) return toast("Up to " + MAX + " products per file", true); EXT[xa] = EXT[xa] || { asin: xa, sku: "", name: "ASIN " + xa, quantity: 0, ext: true }; pick.set(xa, EXT[xa]); } drawList(); drawSteps(); return; }
       var r = e.target.closest("[data-asin]"); if (!r) return;
       var k = r.dataset.asin;
       if (pick.has(k)) pick.delete(k); else { if (pick.size >= MAX) return toast("Up to " + MAX + " products per file", true); pick.set(k, itemFor(k)); }
@@ -275,11 +277,14 @@
     });
     return LOTSP;
   }
-  function itemFor(k) { return /^LOTS-/.test(k) ? (lotsItems() || {})[k] : byAsin()[k]; }
+  var EXT = {};   // ASINs typed or pasted (Amazon link) that are not in your listings - details come from Amazon's catalogue
+  var asinIn = function (t) { var m = /(?:\/dp\/|\/gp\/product\/|asin=)([A-Z0-9]{10})/i.exec(t) || /\b(B0[A-Z0-9]{8})\b/i.exec(t); return m ? m[1].toUpperCase() : ""; };
+  function itemFor(k) { return /^LOTS-/.test(k) ? (lotsItems() || {})[k] : byAsin()[k] || EXT[k]; }
   var shown = [];
   function drawList() {
     var list = $("msList"); if (!list) return;
-    var all = SRC === "lots" ? (lotsItems() || {}) : byAsin(), keys = Object.keys(all);
+    var all = SRC === "lots" ? (lotsItems() || {}) : byAsin(), keys = Object.keys(all), qa = SRC === "amazon" ? asinIn(q) : "";
+    if (qa) { q = all[qa] ? qa.toLowerCase() : ""; }   // a pasted Amazon link searches by its ASIN
     if (!keys.length) { list.innerHTML = '<div style="padding:22px;text-align:center;color:var(--muted);font-size:13px">' + (SRC === "lots" ? "Loading the LOTS price list…" : "Loading Amazon products… (open Inventory once if this stays empty)") + "</div>"; $("msCnt").textContent = ""; return; }
     var words = q.split(/\s+/).filter(Boolean);
     shown = keys.map(function (k) { return all[k]; }).filter(function (i) {
@@ -288,7 +293,9 @@
       return words.every(function (w) { return t.indexOf(w) >= 0; });
     }).sort(function (a, b) { return (pick.has(b.asin) - pick.has(a.asin)) || ((b.quantity > 0) - (a.quantity > 0)) || String(a.name).localeCompare(String(b.name)); }).slice(0, 60);
     $("msCnt").innerHTML = (pick.size ? "<b>" + pick.size + "</b> selected · " : "") + keys.length.toLocaleString("en-IN") + (SRC === "lots" ? " LOTS products" : " Amazon products");
-    var head = '<div class="ms-it" style="cursor:default;background:#FCFBF8;padding:7px 12px"><span style="font-size:12px;color:var(--muted)">' + (q ? shown.length + (shown.length >= 60 ? "+" : "") + " found" : "Showing 60 — search to find more") + '</span><span style="flex:1"></span>' +
+    var ext = qa && !all[qa] ? '<div class="ms-it' + (pick.has(qa) ? " on" : "") + '" data-ext="' + qa + '" style="background:var(--gold-soft)"><span class="ms-ck">' + (pick.has(qa) ? "✓" : "＋") + '</span><span class="ms-im"><i class="ti ti-brand-amazon" style="font-size:20px;color:var(--gold-2)"></i></span>' +
+      '<div class="ms-nm"><b>' + (pick.has(qa) ? "Added: " : "Add ") + "ASIN " + qa + "</b><small>Not in your Amazon listings — title, photos, MRP and maker details are read from Amazon when you click Fill. Cost: LOTS match by name, else type the price.</small></div></div>" : "";
+    var head = ext + '<div class="ms-it" style="cursor:default;background:#FCFBF8;padding:7px 12px"><span style="font-size:12px;color:var(--muted)">' + (q ? shown.length + (shown.length >= 60 ? "+" : "") + " found" : "Showing 60 — search to find more") + '</span><span style="flex:1"></span>' +
       '<button type="button" class="ms-lnk" data-ms-all>Select shown</button>' + (pick.size ? '<span style="width:12px"></span><button type="button" class="ms-lnk" data-ms-clr>Clear</button>' : "") + "</div>";
     list.innerHTML = head + (shown.length ? shown.map(function (i) {
       var on = pick.has(i.asin);
@@ -783,6 +790,7 @@
       var dA = function (p) { return p.lots ? p.dAsin || "" : String(p.asin).toUpperCase(); };   // LOTS product: the Amazon ASIN it is mapped to, if any
       var items = Array.from(pick.values()).filter(Boolean).map(function (p) { delete p._pi; return p; }), r = await details(Array.from(new Set(items.map(dA).filter(Boolean))));
       var mem = memGet();
+      items.forEach(function (p) { var d0 = r.d[dA(p)]; if (p.ext && d0) { if (d0.title) p.name = d0.title; if (d0.mrp && !p.mrp) p.mrp = d0.mrp; delete p._pi; } });
       buildBrandContacts(items.map(function (p) { return { d: r.d[dA(p)] || null }; }));
       grid = { rows: items.map(function (p) {
         var d = r.d[dA(p)] || null, slot = 0, vals = {};
