@@ -55,3 +55,26 @@
     console.log("[read-saver] active");
   })();
 })();
+
+/* Idle pause tuning (7 Nov 2026). The idle-pause snippet switched Firebase off after 10 min of no activity.
+   Waking a tab after 30+ min off makes Firebase re-read EVERYTHING the page listens to (~250 reads), while
+   staying connected costs only ~100 reads an hour - so short pauses cost more than they saved (every morning
+   all tabs woke up at once). Now the connection is only switched off after 3 hours of no activity. */
+(function () {
+  if (window.__aikmIdleTune) return; window.__aikmIdleTune = true;
+  var LONG = 3 * 3600e3, last = Date.now(), off = false, tries = 0;
+  ["mousemove", "mousedown", "keydown", "touchstart", "wheel", "scroll"].forEach(function (ev) {
+    window.addEventListener(ev, function () { last = Date.now(); if (off) { off = false; each("enableNetwork"); } }, { passive: true, capture: true });
+  });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) { last = Date.now(); if (off) { off = false; each("enableNetwork"); } } });
+  var real = null;
+  function each(fn) { try { firebase.apps.forEach(function (a) { try { var p = (real && fn === "disableNetwork" ? real : a.firestore()[fn]).call(a.firestore()); p && p.catch && p.catch(function () {}); } catch (e) {} }); } catch (e) {} }
+  (function hook() {
+    if (!(window.firebase && firebase.firestore && firebase.firestore.Firestore)) { if (++tries < 240) setTimeout(hook, 500); return; }
+    var P = firebase.firestore.Firestore.prototype; real = P.disableNetwork;
+    // the snippet's 10-minute pause is ignored; our own timer pauses after 3 hours
+    P.disableNetwork = function () { return Date.now() - last >= LONG ? real.call(this) : Promise.resolve(); };
+    var css = document.createElement("style"); css.textContent = "#aikmIdleBar{display:none!important}"; document.head.appendChild(css);
+    setInterval(function () { if (!off && Date.now() - last >= LONG) { off = true; each("disableNetwork"); } }, 60e3);
+  })();
+})();
