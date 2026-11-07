@@ -41,8 +41,12 @@
 
 - **Real order fees** (Finance API, owner 6 Nov 2026): `syncOrderFees()` in `spapi-sync.js` (full syncs only) reads `listFinancialEvents`
   (100 orders per call, 15-day windows until caught up, progress in `<acct>_meta.feesPostedAt`) and saves `order.fees`
-  {ref, close, ship, other, total, shipCharge, refunded, types, ev} on each order in the SNAPSHOT only — 0 extra Firebase reads/writes.
+  `{ ev }` (raw events only, 8 Nov 2026 — the page totals them in `feesOf()`) on each order in the SNAPSHOT only — 0 extra Firebase reads/writes.
   Shown as Referral fee / Closing fee columns on the Orders tab by `console/order-fees.js` (loader block `aikmOrderFeesJs` at the end of `amazon-name-search.js` — keep it once added).
+
+- **Speed rules** (owner 8 Nov 2026 — runs took up to 29 min on a 15-min schedule): the listings report is requested at the START of
+  the run (`requestInventoryReport`) and only collected in Step 2; no extra sleeps after listings calls (sp-guard already spaces them);
+  snapshot chunks are written 4 at a time; the Orders tab draws 200 rows at a time (`order-fees.js`). Keep these.
 
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.

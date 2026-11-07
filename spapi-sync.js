@@ -140,10 +140,11 @@ async function writeSnapshot() {
     counts[kind] = items.length;
     const parts = chunkItems(items);
     chunks[kind] = parts.length;
-    for (let i = 0; i < parts.length; i++) {
-      await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${kind}_${run}_${i}`).set({
-        account: ACCOUNT_LABEL, kind, run, index: i, items: parts[i],
-      });
+    // speed (8 Nov 2026): 4 chunk writes at a time instead of one by one
+    for (let i = 0; i < parts.length; i += 4) {
+      await Promise.all(parts.slice(i, i + 4).map((items, k) => db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${kind}_${run}_${i + k}`).set({
+        account: ACCOUNT_LABEL, kind, run, index: i + k, items,
+      })));
     }
   }
   // Switch the page over to the new chunks only after all of them are written.
@@ -388,7 +389,9 @@ async function syncOrderFees() {
     if (e[6] != null) e[6] = r2(e[6]);
     const ev = { ...((o.fees && o.fees.ev) || {}) };
     ev[`${kind}${se.PostedDate || ''}`] = e;   // same event read twice (overlap) just overwrites itself
-    snapPatch('orders', docId, { fees: { ...orderFeesFrom(ev), ev, at: now } });
+    // size (8 Nov 2026): only the raw events are saved; the page adds them up (console/order-fees.js feesOf)
+    Object.values(ev).forEach((x) => { if (x[5] && !Object.keys(x[5]).length) x.length = 5; });
+    snapPatch('orders', docId, { fees: { ev } });
     touched.add(docId); hit++;
   });
   do {
@@ -457,20 +460,26 @@ function extractWeightKg(name) {
   return null;
 }
 
+// Speed (8 Nov 2026): the listings report takes Amazon ~3-4 min to build. It is now requested at the very start
+// of the run (earlyInventoryReport), so Amazon builds it while Steps 0-1 run; Step 2 only collects it.
+let earlyReport = null;
+function requestInventoryReport() {
+  if (!earlyReport) {
+    earlyReport = spClient.callAPI({ operation: 'createReport', endpoint: 'reports',
+      body: { reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA', marketplaceIds: [MARKETPLACE_ID] } })
+      .then((r) => ({ id: r.reportId, at: Date.now() }));
+    earlyReport.catch(() => {});
+  }
+  return earlyReport;
+}
 async function syncInventory() {
-  console.log('Requesting merchant listings report...');
-  const createRes = await spClient.callAPI({
-    operation: 'createReport',
-    endpoint: 'reports',
-    body: { reportType: 'GET_MERCHANT_LISTINGS_ALL_DATA', marketplaceIds: [MARKETPLACE_ID] },
-  });
-
-  const reportId = createRes.reportId;
-  console.log('Report requested, id:', reportId);
+  console.log('Collecting merchant listings report...');
+  const { id: reportId, at: askedAt } = await requestInventoryReport();
+  console.log(`Report requested, id: ${reportId} (${Math.round((Date.now() - askedAt) / 1000)} s ago)`);
 
   let reportDocumentId;
-  for (let attempt = 0; attempt < 20; attempt++) {
-    await new Promise((r) => setTimeout(r, 20000));
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 10000));
     const status = await spClient.callAPI({ operation: 'getReport', endpoint: 'reports', path: { reportId } });
     console.log(`Poll ${attempt + 1}: status = ${status.processingStatus}`);
     if (status.processingStatus === 'DONE') { reportDocumentId = status.reportDocumentId; break; }
@@ -574,7 +583,7 @@ async function fetchProductCategories(asinList) {
       const cat = productTypes?.[0]?.productType || summaries?.[0]?.websiteDisplayGroup || null;
       if (cat) categories[asin] = cat;
     } catch (e) { failCount++; }
-    await new Promise((r) => setTimeout(r, 800));
+    // speed (8 Nov 2026): no extra pause - sp-guard.js already spaces listings calls 250 ms apart (Amazon allows 5/s)
   }
   if (failCount > 0) console.log(`Category fetch failed for ${failCount}/${asinList.length} ASINs`);
   return categories;
@@ -1886,7 +1895,7 @@ async function applyPendingHsnUpdates(sellerId) {
       await db.collection('spapiInventory').doc(invId).set(invPatch, { merge: true });
       snapPatch('inventory', invId, invPatch);
       pushedTaxSkus.set(sku, invPatch); // keep our values even if Amazon's read-back lags behind
-      changedSkus.add(sku);             // re-read from Amazon in Step 2c to confirm
+      // not re-read now (speed, 8 Nov 2026): Step 2c's verify re-reads every push once, 30+ min later
       console.log(`GST/HSN updated for SKU ${sku}:${taxCode ? ' tax ' + taxCode : ''}${hsn ? ' HSN ' + hsn : ''}`);
     } catch (e) {
       const error = e.message || String(e);
@@ -1894,7 +1903,6 @@ async function applyPendingHsnUpdates(sellerId) {
       snapPatch('inventory', invId, { lastTaxPush: { status: 'failed', at: Date.now(), error, taxCode: taxCode || null, hsnCode: hsn || null } });
       console.warn(`GST/HSN update FAILED for SKU ${sku}:`, error);
     }
-    await new Promise((r) => setTimeout(r, 800));
   }
 }
 
@@ -2470,6 +2478,7 @@ async function runSync() {
   console.log('Step 0: testing basic connectivity (getMarketplaceParticipations)...');
   const test = await spClient.callAPI({ operation: 'getMarketplaceParticipations', endpoint: 'sellers' });
   console.log('Step 0 result:', JSON.stringify(test));
+  requestInventoryReport();   // speed: Amazon starts building the listings report now; Step 2 collects it
 
   console.log('Step 0a: loading product-type cache...');
   await loadProductTypeCache();

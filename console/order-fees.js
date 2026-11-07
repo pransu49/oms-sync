@@ -29,6 +29,23 @@
     return { inv: inv, ref: ref, ship: ship, close: inv ? calcClosingFee(e.total || 0, e.isEasyShip) : 0 };
   }
 
+  /* Totals from Amazon's raw fee events (robot saves only fees.ev since 8 Nov 2026; older orders may carry totals already).
+     ev = { "<S|R><postedDate>": [referral, closing, shipFees, otherFees, shippingCharged, {feeType: amount}, refundGiven] } — Amazon signs (fees negative). */
+  var r2 = function (v) { return Math.round(v * 100) / 100; };
+  function feesOf(e) {
+    var F = e && e.fees; if (!F) return null;
+    if (!F.ev) return F;
+    if (F.__n) return F.__n;
+    var o = { ref: 0, close: 0, ship: 0, other: 0, shipCharge: 0, refundAmt: 0, refunded: false, types: {} };
+    Object.keys(F.ev).forEach(function (k) { var x = F.ev[k] || []; if (k.charAt(0) === "R") o.refunded = true;
+      o.ref -= +x[0] || 0; o.close -= +x[1] || 0; o.ship -= +x[2] || 0; o.other -= +x[3] || 0; o.shipCharge += +x[4] || 0; o.refundAmt -= +x[6] || 0;
+      var t = x[5] || {}; Object.keys(t).forEach(function (n) { o.types[n] = r2((o.types[n] || 0) - (+t[n] || 0)); }); });
+    ["ref", "close", "ship", "other", "shipCharge", "refundAmt"].forEach(function (k) { o[k] = r2(o[k]); });
+    o.total = r2(o.ref + o.close + o.ship + o.other);
+    try { Object.defineProperty(F, "__n", { value: o, enumerable: false }); } catch (x) {}
+    return o;
+  }
+
   function tip(f) {
     var lines = Object.keys(f.types || {}).map(function (t) { return t + ": ₹" + f.types[t]; });
     return "Charged by Amazon (Finance API)" + (f.refunded ? " · includes refund reversal" : "") + "\n" + lines.join("\n") + "\nTotal Amazon fees: ₹" + f.total;
@@ -47,7 +64,7 @@
     var pc = ORDER_COLS.find(function (c) { return c.key === "profit"; }); if (pc) pc.label = "Net profit";
     var orig = window.orderRow;
     window.orderRow = function (e, r) {
-      var x = orig(e, r), f = e.fees && (e.fees.total || e.fees.ref || e.fees.close || e.fees.refunded) ? e.fees : null, est = estimate(e, r);
+      var x = orig(e, r), F = feesOf(e), f = F && (F.total || F.ref || F.close || F.refunded) ? F : null, est = estimate(e, r);
       x.feeSrc = f ? "amz" : (est.inv && !e.isCanceled ? "est" : null);
       x.v.refFee = f ? f.ref : x.feeSrc ? est.ref : null;
       x.v.closeFee = f ? f.close : x.feeSrc ? est.close : null;
@@ -98,7 +115,7 @@
       body.querySelectorAll("tr").forEach(function (tr) {
         if (tr.dataset.fees) return;
         var idCell = tr.querySelector("td[data-orig]"), x = idCell && byId[idCell.dataset.orig]; if (!x) return;
-        var e = x.raw, f = e.fees, src = x.feeSrc;
+        var e = x.raw, f = feesOf(e), src = x.feeSrc;
         var cell = function (v, isRef) {
           if (v == null) return '<td class="t-r num fee-c"><span class="t-muted">—</span></td>';
           var lbl = src === "amz" ? '<span class="fee-src amz">✓ Amazon</span>' : '<span class="fee-src est">estimate</span>';
@@ -116,6 +133,30 @@
         }
         tr.dataset.fees = "1";
       });
+    };
+
+    /* 4. Speed (owner, 8 Nov 2026): draw 200 orders at a time instead of all ~11,000 (was ~4 s per redraw).
+          Counts, sorting and column filters still use every order; "Show more" adds the next 200. */
+    var PAGE = 200, shown = PAGE, total = 0, inDraw = false, lastKey = "";
+    var cm = window.cmApply;
+    window.cmApply = function (t, rows, cols, skipKey) {
+      var out = cm.apply(this, arguments);
+      if (t !== "orders" || skipKey || !inDraw) return out;
+      var key = JSON.stringify(CM.state.orders || {}) + "|" + (typeof poSearchTerm !== "undefined" ? poSearchTerm : "");
+      if (key !== lastKey) { lastKey = key; shown = PAGE; }
+      total = out.length; return out.slice(0, shown);
+    };
+    var d2 = window.drawOrders;
+    window.drawOrders = function () {
+      inDraw = true; total = 0;
+      try { d2.apply(this, arguments); } finally { inDraw = false; }
+      var all = CM.rows.orders || [], n = document.getElementById("poCount");
+      if (n && total) n.innerHTML = n.innerHTML.replace(/^[\d,]+ orders/, total.toLocaleString("en-IN") + " orders");
+      var fb = document.querySelector("#poFilterBar .n"); if (fb && total) fb.textContent = total + " of " + all.length + " orders";
+      var old = document.getElementById("poMore"); old && old.remove();
+      var rest = total - shown, t = document.getElementById("spapiOrdersTable");
+      if (rest > 0 && t) t.insertAdjacentHTML("afterend", '<div class="tbl-load-more" id="poMore"><button class="tbl-load-btn" type="button">Show ' + Math.min(PAGE, rest) + " more · " + rest.toLocaleString("en-IN") + " remaining</button></div>");
+      var b = document.querySelector("#poMore button"); b && (b.onclick = function () { shown += PAGE; spDirty.orders = true; spRender(); });
     };
 
     if (typeof spDirty !== "undefined") { spDirty.orders = true; try { spRender(); } catch (e) {} }
