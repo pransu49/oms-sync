@@ -1,13 +1,20 @@
 name: SP-API Sync (Vishal E-Commerce)
 
 on:
-  # schedule switched on once the Vishal E-Commerce key is saved and the first test run passes (owner, 12 Nov 2026)
+  schedule:                  # offset from Praso / Sasta Store so the three accounts don't run at the same minute
+    - cron: '20 */2 * * *'   # FULL sync (incl. competitor prices)
+    - cron: '5,35,50 * * * *'   # QUICK sync (stock, price, orders, pushes)
+    - cron: '20 1-23/2 * * *'   # QUICK sync
   workflow_dispatch:         # also triggered by cron-job.org (GitHub's own timer skips many runs)
     inputs:
       mode:
         description: 'fast = stock/price/orders only, full = everything incl. competitor prices'
         default: 'full'
-  # push trigger added together with the schedule, after the first test run passes
+  push:                      # run right away whenever the sync script or this file is updated
+    branches: [main]
+    paths:
+      - 'spapi-sync.js'
+      - '.github/workflows/spapi-sync-vishal.yml'
 
 # Never run two syncs for the same account at once - a new one waits for the current one.
 concurrency:
@@ -48,7 +55,7 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           # Quick sync on the 15-minute schedules, full sync otherwise (incl. manual / code updates).
-          SYNC_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode) || (github.event_name == 'schedule' && github.event.schedule != '40 */2 * * *' && 'fast') || 'full' }}
+          SYNC_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode) || (github.event_name == 'schedule' && github.event.schedule != '20 */2 * * *' && 'fast') || 'full' }}
           ACCOUNT_LABEL: vishal
           ACCOUNT_NAME: Vishal E-Commerce
         shell: bash

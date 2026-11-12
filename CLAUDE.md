@@ -62,8 +62,8 @@
   price) at most once a day per ASIN.
 
 - **Vishal E-Commerce** (3rd Amazon account, owner 12 Nov 2026; first called "Ecommerce Munda", renamed): workflow `spapi-sync-vishal.yml`,
-  ACCOUNT_LABEL `vishal`, secrets `SPAPI_REFRESH_TOKEN_VISHAL` + `SPAPI_SELLER_ID_VISHAL`. Manual runs only until the first test passes; then add
-  schedule + push trigger (offset minutes from Sasta Store) and the page account switcher entry. Firebase estimate: ~+2,700 writes/day and
+  ACCOUNT_LABEL `vishal`, secrets `SPAPI_REFRESH_TOKEN_VISHAL` + `SPAPI_SELLER_ID_VISHAL`. LIVE since 12 Nov 2026 (full :20 every 2 h,
+  quick :05/:35/:50) — same LOTS stock + purchase-bill products as the other accounts, so all robot rules apply. Firebase estimate: ~+2,700 writes/day and
   ~+2,700 deletes/day to the SP-API project.
   Page switcher entry: `EXTRA` list in the "More Amazon accounts" block at the end of `console/amazon-name-search.js` (keep it).
   Own seller IDs of every account live in `spapiSnapshots/ourSellers` {ids:{label:sellerId}} — each sync adds its own; robots + page treat them as "us".
