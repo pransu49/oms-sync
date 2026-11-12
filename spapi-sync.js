@@ -44,6 +44,9 @@ let SYNC_MODE = String(process.env.SYNC_MODE || 'full').toLowerCase() === 'fast'
 // A queued full sync is often cancelled by the next quick sync (GitHub keeps only one waiting run), so the
 // robot silently skipped hours (21 Oct 2026). Any quick sync now upgrades itself to FULL when the last
 // full sync is older than this - the robot can no longer be skipped.
+// Firestore record names cannot contain "/" (owner 12 Nov 2026: Munda SKU "MRP-120 Wala/Old-108" crashed the sync).
+// "/" -> "%2F" in record names only; SKUs without "/" keep exactly the same record names as before.
+const sidSafe = (x) => String(x == null ? '' : x).replace(/\//g, '%2F');
 const FULL_DUE_MS = { praso: 55 * 60e3, sastastore: 55 * 60e3, vishal: 55 * 60e3, munda: 55 * 60e3 };   // owner 21 Oct: robot every hour on both accounts
 const RUN_STARTED = Date.now();
 let ordersSyncedOk = false;
@@ -86,7 +89,7 @@ async function loadSnapshot() {
     const refs = [];
     for (const kind of SNAP_KINDS) {
       const n = (prevSnapMeta.chunks || {})[kind] || 0;
-      for (let i = 0; i < n; i++) refs.push(db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${kind}_${prevSnapMeta.run}_${i}`));
+      for (let i = 0; i < n; i++) refs.push(db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${sidSafe(kind)}_${prevSnapMeta.run}_${i}`));
     }
     const docs = refs.length ? await db.getAll(...refs) : [];
     docs.forEach((d) => {
@@ -142,7 +145,7 @@ async function writeSnapshot() {
     chunks[kind] = parts.length;
     // speed (8 Nov 2026): 4 chunk writes at a time instead of one by one
     for (let i = 0; i < parts.length; i += 4) {
-      await Promise.all(parts.slice(i, i + 4).map((items, k) => db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${kind}_${run}_${i + k}`).set({
+      await Promise.all(parts.slice(i, i + 4).map((items, k) => db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${sidSafe(kind)}_${run}_${i + k}`).set({
         account: ACCOUNT_LABEL, kind, run, index: i + k, items,
       })));
     }
@@ -162,7 +165,7 @@ async function writeSnapshot() {
     const batch = db.batch();
     for (const kind of SNAP_KINDS) {
       const n = (prevSnapMeta.chunks || {})[kind] || 0;
-      for (let i = 0; i < n; i++) batch.delete(db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${kind}_${prevSnapMeta.run}_${i}`));
+      for (let i = 0; i < n; i++) batch.delete(db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${sidSafe(kind)}_${prevSnapMeta.run}_${i}`));
     }
     await batch.commit();
   }
@@ -194,8 +197,8 @@ async function productTypeFor(sellerId, sku) {
     const pt = ((res.summaries || [])[0] || {}).productType || null;
     if (pt) {
       productTypeCache[sku] = pt;
-      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { amazonProductType: pt });
-      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).set({ amazonProductType: pt }, { merge: true }).catch(() => {});
+      snapPatch('inventory', `${ACCOUNT_LABEL}_${sidSafe(sku)}`, { amazonProductType: pt });
+      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sidSafe(sku)}`).set({ amazonProductType: pt }, { merge: true }).catch(() => {});
       console.log(`Product type for ${sku}: ${pt} (read from the listing)`);
     }
     return pt || known || null;
@@ -259,7 +262,7 @@ async function syncOrders() {
   let pending = 0;
   const flush = async () => { if (pending) { await batch.commit(); batch = db.batch(); pending = 0; } };
   for (const order of orders) {
-    const existing = SNAP.orders[`${ACCOUNT_LABEL}_${order.AmazonOrderId}`];
+    const existing = SNAP.orders[`${ACCOUNT_LABEL}_${sidSafe(order.AmazonOrderId)}`];
     // During the backfill, skip old orders we never tracked (and are not recently updated).
     if (deliveryBackfillRun && !existing && order.LastUpdateDate && (lastOk ? new Date(order.LastUpdateDate).getTime() < lastOk - 10 * 60 * 1000 : new Date(order.PurchaseDate).getTime() < RUN_STARTED - 864e5)) continue;
     let items = existing && Array.isArray(existing.items) && existing.items.length ? existing.items : [];
@@ -310,7 +313,7 @@ async function syncOrders() {
       await new Promise((r) => setTimeout(r, 600));
     } catch (e) { financeFailCount++; if (!e.guardSkipped) await new Promise((r) => setTimeout(r, 600)); }
 
-    const ref = db.collection('spapiOrders').doc(`${ACCOUNT_LABEL}_${order.AmazonOrderId}`);
+    const ref = db.collection('spapiOrders').doc(`${ACCOUNT_LABEL}_${sidSafe(order.AmazonOrderId)}`);
     const orderData = {
       account: ACCOUNT_LABEL,
       orderId: order.AmazonOrderId,
@@ -374,7 +377,7 @@ async function syncOrderFees() {
   let token = null, pages = 0, events = 0, hit = 0;
   const touched = new Set();
   const take = (kind, list, itemsKey, chargesKey, feesKey) => (list || []).forEach((se) => {
-    const id = se.AmazonOrderId, docId = `${ACCOUNT_LABEL}_${id}`, o = id && SNAP.orders[docId];
+    const id = se.AmazonOrderId, docId = `${ACCOUNT_LABEL}_${sidSafe(id)}`, o = id && SNAP.orders[docId];
     events++;
     if (!o) return;
     const e = [0, 0, 0, 0, 0, {}];   // referral, closing, ship fees, other fees, shipping charged, {fee types}, [refund]
@@ -429,7 +432,7 @@ async function fillMissingDeliveryDates() {
     const byId = {};
     (res.Orders || res.payload?.Orders || []).forEach((o) => { byId[o.AmazonOrderId] = o; });
     for (const id of ids) {
-      const a = byId[id], docId = `${ACCOUNT_LABEL}_${id}`;
+      const a = byId[id], docId = `${ACCOUNT_LABEL}_${sidSafe(id)}`;
       const patch = { dlvCheckedAt: now };
       if (a && a.LatestDeliveryDate) {
         patch.latestDeliveryDate = a.LatestDeliveryDate;
@@ -534,7 +537,7 @@ async function syncInventory() {
     const asin = cols[asinIdx] || null;
     if (asin) { asins.push(asin); skuToAsinMap[sku] = asin; }
 
-    const docId = `${ACCOUNT_LABEL}_${sku}`;
+    const docId = `${ACCOUNT_LABEL}_${sidSafe(sku)}`;
     const fc = fcIdx >= 0 ? (cols[fcIdx] || '').trim() : '';
     reportSkus.add(sku);
     if (SNAP.inventory[docId]) SNAP.inventory[docId].fulfillmentChannel = fc || 'DEFAULT';
@@ -595,7 +598,7 @@ async function fetchProductImages() {
   const need = new Map();
   Object.values(SNAP.inventory).forEach((i) => {
     if (i && i.account === ACCOUNT_LABEL && i.asin && !i.img && !(i.imgCheckedAt && Date.now() - i.imgCheckedAt < 7 * 864e5)) {
-      (need.get(i.asin) || need.set(i.asin, []).get(i.asin)).push(i._id || `${ACCOUNT_LABEL}_${i.sku}`);
+      (need.get(i.asin) || need.set(i.asin, []).get(i.asin)).push(i._id || `${ACCOUNT_LABEL}_${sidSafe(i.sku)}`);
     }
   });
   const asins = [...need.keys()];
@@ -747,7 +750,7 @@ async function syncCompetitivePricing(asinList) {
     const priceGapVsBuyBox = (myPrice != null && buyBoxWinner?.price != null)
       ? Math.round((myPrice - buyBoxWinner.price) * 100) / 100 : null;
 
-    const docId = `${ACCOUNT_LABEL}_${asin}`;
+    const docId = `${ACCOUNT_LABEL}_${sidSafe(asin)}`;
     const old = existingByAsin[docId];
     const changed = !old || old.lowestCompetitorPrice !== lowest || old.rawOffers !== offers.length
       || old.buyBoxStatus !== buyBoxStatus || old.myPrice !== myPrice
@@ -939,7 +942,7 @@ function relistAttributes(oa, i) {
 async function relistPreview(sku) {
   const sellerId = process.env.SPAPI_SELLER_ID;
   await loadSnapshot();
-  const i = SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`];
+  const i = SNAP.inventory[`${ACCOUNT_LABEL}_${sidSafe(sku)}`];
   if (!i) throw new Error('SKU not in the snapshot: ' + sku);
   const old = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku },
     query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['attributes', 'summaries', 'issues'] } });
@@ -1013,8 +1016,8 @@ async function runRelistRobot(sellerId) {
   console.log(`Relist robot: ${ready.length - salesReady.length} not-selling ready; sales rules: ${rule1.length} stopped selling (7 days), ${rule3.length} no sale 30+ days -> ${salesReady.length} this run.`);
   const log = (i, rec) => {
     const doc = { account: ACCOUNT_LABEL, asin: i.asin, name: i.name || '', oldSku: i.sku, price: i.price, mrp: i.mrp || null, qty: i.quantity, at: Date.now(), ...rec };
-    snapPatch('pricing', `${ACCOUNT_LABEL}_${i.asin}`, { relist: doc });
-    return dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${i.asin}_${doc.at}`).set(doc).catch((e) => console.warn('relist log', e.message || e));
+    snapPatch('pricing', `${ACCOUNT_LABEL}_${sidSafe(i.asin)}`, { relist: doc });
+    return dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${sidSafe(i.asin)}_${doc.at}`).set(doc).catch((e) => console.warn('relist log', e.message || e));
   };
   for (const job of ready) {
     const i = job.i, oldSku = i.sku, asin = i.asin, reason = job.reason;
@@ -1033,7 +1036,7 @@ async function runRelistRobot(sellerId) {
       // price from the last relist record; with no known price at all, do not relist (a priceless listing can't sell).
       if (!(Number(i.price) > 0)) {
         const offerP = Number((((((old.attributes || {}).purchasable_offer || [])[0] || {}).our_price || [])[0] || {}).schedule?.[0]?.value_with_tax) || null;
-        const prevP = Number(((SNAP.pricing[`${ACCOUNT_LABEL}_${asin}`] || {}).relist || {}).price) || null;
+        const prevP = Number(((SNAP.pricing[`${ACCOUNT_LABEL}_${sidSafe(asin)}`] || {}).relist || {}).price) || null;
         const known = offerP || prevP;
         if (!known) {
           console.log(`Relist ${oldSku}: no selling price known - not relisted (set the price on the Amazon page).`);
@@ -1130,7 +1133,7 @@ async function runRelistRobot(sellerId) {
       let delErr = null;
       try {
         await spClient.callAPI({ operation: 'deleteListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: oldSku }, query: { marketplaceIds: [MARKETPLACE_ID] } });
-        await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${oldSku}_${Date.now()}`).set({ account: ACCOUNT_LABEL, sku: oldSku, name: i.name || null, asin,
+        await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${sidSafe(oldSku)}_${Date.now()}`).set({ account: ACCOUNT_LABEL, sku: oldSku, name: i.name || null, asin,
           price: i.price, quantity: i.quantity, reason: 'relist', newSku, deletedAt: admin.firestore.FieldValue.serverTimestamp() });
       } catch (e) { delErr = e.message || String(e); console.warn(`Relist: old SKU ${oldSku} NOT deleted:`, delErr); }
       // 4) keep a hand-entered cost on the new SKU
@@ -1148,10 +1151,10 @@ async function runRelistRobot(sellerId) {
         // 12 Nov 2026: these stayed "Not selling" forever. If the SKU is still in stock in the report, hand the ASIN to the
         // Add ASIN robot (it lists it fresh under a new SKU, checks brand approval + profit) at the last known price - once a day max.
         st.gone = st.gone || {};
-        const lastP = Number(i.price) > 0 ? Number(i.price) : Number(((SNAP.pricing[`${ACCOUNT_LABEL}_${asin}`] || {}).relist || {}).price) || null;
+        const lastP = Number(i.price) > 0 ? Number(i.price) : Number(((SNAP.pricing[`${ACCOUNT_LABEL}_${sidSafe(asin)}`] || {}).relist || {}).price) || null;
         if ((i.quantity || 0) > 0 && !(st.gone[asin] && now - st.gone[asin] < 864e5)) {
           st.gone[asin] = now;
-          await db.collection('spapiAddAsin').doc(`${ACCOUNT_LABEL}_${asin}`).set({ account: ACCOUNT_LABEL, asin, barcode: null, qty: i.quantity || 10,
+          await db.collection('spapiAddAsin').doc(`${ACCOUNT_LABEL}_${sidSafe(asin)}`).set({ account: ACCOUNT_LABEL, asin, barcode: null, qty: i.quantity || 10,
             wantPrice: lastP, cost: null, mrp: Number(i.mrp) || null, gst: null, status: 'pending', source: 'relist-gone', requestedAt: Date.now(),
             error: null, price: null, profit: null }).catch((e) => console.warn('gone -> add asin', e.message || e));
           console.log(`Relist ${oldSku}: SKU no longer exists on Amazon - sent ASIN ${asin} to Add ASIN at Rs ${lastP || 'auto'} (lists it as a new SKU).`);
@@ -1351,11 +1354,11 @@ async function setOfferPrice(sellerId, i, old, productType, price) {
     body: { productType, patches: [{ op: 'replace', path: '/attributes/purchasable_offer', value: [po] }] } });
   assertListingsOk(await call('VALIDATION_PREVIEW'));
   assertListingsOk(await call(null));
-  snapPatch('inventory', `${ACCOUNT_LABEL}_${i.sku}`, { price });
+  snapPatch('inventory', `${ACCOUNT_LABEL}_${sidSafe(i.sku)}`, { price });
   // Amazon decides later - record it so verifyPricePushes confirms it went live (or shows Amazon's reason).
   // Robot records live in the SP-API Firebase (not the console's) - the console never shows them, and keeping
   // them out of the console database saves its free daily reads (they were re-read on every sync).
-  await db.collection('spapiPriceUpdates').doc(`robot_${ACCOUNT_LABEL}_${i.sku}`).set({ account: ACCOUNT_LABEL, sku: i.sku, asin: i.asin || null,
+  await db.collection('spapiPriceUpdates').doc(`robot_${ACCOUNT_LABEL}_${sidSafe(i.sku)}`).set({ account: ACCOUNT_LABEL, sku: i.sku, asin: i.asin || null,
     oldPrice: i.price ?? null, newPrice: price, status: 'applied', verified: false, checks: 0, source: 'robot',
     appliedAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
 }
@@ -1708,7 +1711,7 @@ async function applyPendingPriceUpdates(sellerId) {
       const productType = ((cur.summaries || [])[0] || {}).productType || await productTypeFor(sellerId, sku);
       if (!productType) throw new Error('No known product type for this SKU yet.');
       const po = JSON.parse(JSON.stringify((((cur.attributes || {}).purchasable_offer) || [])[0] || {}));
-      const mrpVal = Number((((po.maximum_retail_price || [])[0] || {}).schedule || [])[0]?.value_with_tax) || Number(SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`]?.mrp) || null;
+      const mrpVal = Number((((po.maximum_retail_price || [])[0] || {}).schedule || [])[0]?.value_with_tax) || Number(SNAP.inventory[`${ACCOUNT_LABEL}_${sidSafe(sku)}`]?.mrp) || null;
       if (mrpVal && newPrice > mrpVal) throw new Error(`New price ₹${newPrice} is above MRP ₹${mrpVal}.`);
       delete po.start_at; delete po.end_at;
       ['discounted_price', 'quantity_discount_plan'].forEach((k) => delete po[k]);
@@ -1722,8 +1725,8 @@ async function applyPendingPriceUpdates(sellerId) {
       assertListingsOk(await call(null));
       await doc.ref.update({ status: 'applied', verified: false, checks: 0, appliedAt: admin.firestore.FieldValue.serverTimestamp(), error: admin.firestore.FieldValue.delete() });
       // Write new price directly to inventory so UI stays in sync
-      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).set({ price: newPrice }, { merge: true });
-      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { price: newPrice });
+      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sidSafe(sku)}`).set({ price: newPrice }, { merge: true });
+      snapPatch('inventory', `${ACCOUNT_LABEL}_${sidSafe(sku)}`, { price: newPrice });
       console.log(`Price updated for SKU ${sku}: now ${newPrice}`);
     } catch (e) {
       await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -1846,8 +1849,8 @@ async function applyPendingMrpUpdates(sellerId) {
       if (!usedField) throw lastErr || new Error('MRP update failed');
       await doc.ref.update({ status: 'applied', field: usedField, appliedAt: admin.firestore.FieldValue.serverTimestamp() });
       // Write new MRP directly to inventory so UI stays in sync
-      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`).update({ mrp: newMrp });
-      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { mrp: newMrp });
+      await db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sidSafe(sku)}`).update({ mrp: newMrp });
+      snapPatch('inventory', `${ACCOUNT_LABEL}_${sidSafe(sku)}`, { mrp: newMrp });
       console.log(`MRP updated for SKU ${sku}: now ${newMrp}`);
     } catch (e) {
       await doc.ref.update({ status: 'failed', retriedFormat: true, retriedType: true, retriedOffer: true, error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -1874,7 +1877,7 @@ async function verifyMrpPushes() {
     if (x.verified) return;
     const at = x.appliedAt && x.appliedAt.toMillis ? x.appliedAt.toMillis() : 0;
     if (!at || Date.now() - at < 90 * 60 * 1000) return;           // give Amazon time to update
-    const it = SNAP.inventory[`${ACCOUNT_LABEL}_${x.sku}`];
+    const it = SNAP.inventory[`${ACCOUNT_LABEL}_${sidSafe(x.sku)}`];
     if (!it || it.mrp == null) return;
     const ok = Math.abs(Number(it.mrp) - Number(x.newMrp)) < 0.5;
     batch.update(d.ref, { verified: ok ? 'live' : 'not-live', seenMrp: it.mrp, checkedAt: admin.firestore.FieldValue.serverTimestamp() });
@@ -1903,7 +1906,7 @@ async function applyPendingHsnUpdates(sellerId) {
     const legacy = d.newHsn != null ? String(d.newHsn).trim() : '';
     const taxCode = d.newTaxCode || (/^A_GEN/i.test(legacy) ? legacy : null);
     const hsn = d.newHsnCode ? String(d.newHsnCode).trim() : (/^\d{4,8}$/.test(legacy) ? legacy : null);
-    const invId = `${ACCOUNT_LABEL}_${sku}`;
+    const invId = `${ACCOUNT_LABEL}_${sidSafe(sku)}`;
     try {
       if (!taxCode && !hsn) throw new Error('Nothing to update - no valid GST tax code or HSN code in the request.');
       if (taxCode && !(taxCode in TAX_CODE_RATE)) throw new Error(`Unknown GST tax code "${taxCode}".`);
@@ -2048,7 +2051,7 @@ async function applyAddAsinRequests(sellerId) {
       } catch (e) { console.warn(`Add ASIN restriction check failed for ${asin}:`, e.message || e); }
       if (restricted) { await done({ status: 'blocked', name, img: img ? img.link : null, error: restricted.slice(0, 300) }); continue; }
       // 3) cost (typed on the page, or the ASIN's LOTS / vendor mapping) and MRP
-      let sku = 'N-' + asin; for (let n = 2; SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`]; n++) sku = `N-${asin}-${n}`;
+      let sku = 'N-' + asin; for (let n = 2; SNAP.inventory[`${ACCOUNT_LABEL}_${sidSafe(sku)}`]; n++) sku = `N-${asin}-${n}`;
       // Relist: a time-based SKU, so it can never clash with an old SKU the listings report still shows.
       if (oldOnes.length) sku = `N-${asin}-R${Date.now().toString(36).toUpperCase()}`;
       const i = { sku, asin, name, account: ACCOUNT_LABEL, amazonProductType: productType, weightKg: 0.5, price: 0, taxCode: null };
@@ -2129,7 +2132,7 @@ async function applyAddAsinRequests(sellerId) {
         }
         replaced.push(o.sku);
         console.log(`Relist: old SKU ${o.sku} deleted (replaced by ${sku}).`);
-        await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${o.sku}_${Date.now()}`).set({ account: ACCOUNT_LABEL, sku: o.sku, name: o.name || name, asin,
+        await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${sidSafe(o.sku)}_${Date.now()}`).set({ account: ACCOUNT_LABEL, sku: o.sku, name: o.name || name, asin,
           price: o.price || null, quantity: o.quantity || null, reason: 'relist (Add ASIN)', newSku: sku, deletedAt: admin.firestore.FieldValue.serverTimestamp() }).catch(() => {});
         await new Promise((res) => setTimeout(res, 800));
       }
@@ -2139,7 +2142,7 @@ async function applyAddAsinRequests(sellerId) {
       if (stockNote) { basis = `${stockNote} · ${basis}`; console.log(`Add ASIN ${sku}: ${stockNote}.`); }
       await done({ status: 'listed', sku, name, img: img ? img.link : null, price, mrp, qty, cost: kc.cost, costSrc: kc.src, profit, basis, ship, replaced, notDeleted });
       const at = Date.now();
-      await dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${asin}_${at}`).set({ account: ACCOUNT_LABEL, asin, name, oldSku: replaced[0] || sku, newSku: sku, price, mrp, qty, at,
+      await dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${sidSafe(asin)}_${at}`).set({ account: ACCOUNT_LABEL, asin, name, oldSku: replaced[0] || sku, newSku: sku, price, mrp, qty, at,
         status: replaced.length ? 'relisted' : 'new_listing', profit, basis: `${basis} · profit ₹${profit}/order · live in ~2 h · link ${sku} in OMS Guru` }).catch(() => {});
     } catch (e) {
       const error = (e.message || String(e)).slice(0, 400);
@@ -2209,12 +2212,12 @@ async function applyPendingListingDeletions(sellerId) {
     const { sku } = doc.data();
     try {
       const asin = skuToAsinMap[sku] || null;
-      const invData = SNAP.inventory[`${ACCOUNT_LABEL}_${sku}`] || null; // from snapshot - no read
+      const invData = SNAP.inventory[`${ACCOUNT_LABEL}_${sidSafe(sku)}`] || null; // from snapshot - no read
       await spClient.callAPI({
         operation: 'deleteListingsItem', endpoint: 'listingsItems',
         path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
       });
-      await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${sku}_${Date.now()}`).set({
+      await db.collection('spapiDeletedListings').doc(`${ACCOUNT_LABEL}_${sidSafe(sku)}_${Date.now()}`).set({
         account: ACCOUNT_LABEL, sku,
         name: invData?.name || null, asin: invData?.asin || asin || null,
         price: invData?.price || null, quantity: invData?.quantity || null,
@@ -2307,7 +2310,7 @@ async function repairStockRule24(sellerId) {
   const L = await loadLotsForGuard();
   let fixed = 0, skipped = 0, failed = 0;
   for (const it of hit.slice(0, 150)) {
-    const docId = `${ACCOUNT_LABEL}_${it.sku}`, amz = parseInt(it.quantity, 10) || 0;
+    const docId = `${ACCOUNT_LABEL}_${sidSafe(it.sku)}`, amz = parseInt(it.quantity, 10) || 0;
     const lots = confirmedLotsFor(it, L), lq = lots ? Math.floor(parseFloat(lots.qty)) : NaN;
     const mark = (rec) => snapPatch('inventory', docId, { lastStockPush: { ...rec, at: Date.now() } });
     if (amz > 0) { mark({ status: 'applied', qty: amz, reason: 'Repair 24 Oct: already back in stock - left alone' }); skipped++; continue; }
@@ -2348,7 +2351,7 @@ async function runStockGuard(sellerId) {
   for (const item of Object.values(SNAP.inventory)) {
     if (!item || !item.sku || item.account !== ACCOUNT_LABEL || !reportSkus.has(item.sku)) continue; // live listings only
     if ((item.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT') continue;                            // FBA - Amazon controls stock
-    const docId = `${ACCOUNT_LABEL}_${item.sku}`;
+    const docId = `${ACCOUNT_LABEL}_${sidSafe(item.sku)}`;
     const lots = confirmedLotsFor(item, L), lotsQty = lots ? parseFloat(lots.qty) : NaN;
     const amzQty = parseInt(item.quantity, 10) || 0;
     SNAP.inventory[docId].lotsQty = isNaN(lotsQty) ? null : lotsQty;
@@ -2366,7 +2369,7 @@ async function runStockGuard(sellerId) {
   toZero.splice(100);
   let zeroed = 0, failed = 0;
   for (const z of toZero) {
-    const docId = `${ACCOUNT_LABEL}_${z.item.sku}`;
+    const docId = `${ACCOUNT_LABEL}_${sidSafe(z.item.sku)}`;
     try {
       await setAmazonQuantity(sellerId, z.item.sku, 0);
       snapPatch('inventory', docId, { quantity: 0, lastStockPush: { status: 'applied', at: Date.now(), qty: 0,
@@ -2400,7 +2403,7 @@ async function runStockGuard(sellerId) {
         for (const x of parts) { const p = L.lotsByCode[String(x.code)], q = p ? parseFloat(p.qty) : NaN; if (isNaN(q)) { units = 0; break; }
           const need = Math.max(1, Number(x.qty) || 1) / Math.max(1, parseInt(x.lotsPack) || 1); units = Math.min(units, Math.floor(q / need)); low = Math.min(low, q); }
         if (!(low >= OOS_LOTS_BELOW) || !(units >= 1)) continue;
-        const q = Math.min(units, 50), docId = `${ACCOUNT_LABEL}_${it.sku}`;
+        const q = Math.min(units, 50), docId = `${ACCOUNT_LABEL}_${sidSafe(it.sku)}`;
         try {
           await setAmazonQuantity(sellerId, it.sku, q);
           snapPatch('inventory', docId, { quantity: q, lastStockPush: { status: 'applied', at: Date.now(), qty: q, reason: `LOTS back to ${low} - restocked (not managed by OMS Guru)` } });
@@ -2576,8 +2579,8 @@ async function runSync() {
   for (const [asin, category] of Object.entries(categoriesByAsin)) {
     for (const sku of Object.keys(skuToAsinMap).filter((k) => skuToAsinMap[k] === asin)) {
       if (productTypeCache[sku] === category) { catSkipped++; continue; }
-      catBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`), { amazonProductType: category });
-      snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { amazonProductType: category });
+      catBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sidSafe(sku)}`), { amazonProductType: category });
+      snapPatch('inventory', `${ACCOUNT_LABEL}_${sidSafe(sku)}`, { amazonProductType: category });
       productTypeCache[sku] = category;
       catWrites++;
     }
@@ -2612,14 +2615,14 @@ async function runSync() {
         const pushed = pushedTaxSkus.get(sku);
         const hsnCode = pushed && pushed.hsnCode ? pushed.hsnCode : data.hsnCode;
         const taxCode = pushed && pushed.taxCode ? pushed.taxCode : data.taxCode;
-        hsnBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sku}`), { hsnCode, taxCode });
-        snapPatch('inventory', `${ACCOUNT_LABEL}_${sku}`, { hsnCode, taxCode });
+        hsnBatch.update(db.collection('spapiInventory').doc(`${ACCOUNT_LABEL}_${sidSafe(sku)}`), { hsnCode, taxCode });
+        snapPatch('inventory', `${ACCOUNT_LABEL}_${sidSafe(sku)}`, { hsnCode, taxCode });
         hsnWrites++;
       }
       if (hsnWrites > 0) await hsnBatch.commit();
       let live = 0, notLive = 0;
       for (const sku of verifySkus) {
-        const docId = `${ACCOUNT_LABEL}_${sku}`, it = SNAP.inventory[docId], l = it && it.lastTaxPush;
+        const docId = `${ACCOUNT_LABEL}_${sidSafe(sku)}`, it = SNAP.inventory[docId], l = it && it.lastTaxPush;
         if (!l) continue;
         const got = hsnData[sku] || {};
         const okTax = !l.taxCode || got.taxCode === l.taxCode;
