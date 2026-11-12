@@ -992,6 +992,14 @@ async function runRelistRobot(sellerId) {
   if (String(process.env.RELIST_ROBOT || '').toLowerCase() === 'off') { console.log('Relist robot: switched off (RELIST_ROBOT=off).'); return; }
   if (!sellerId) { console.log('Relist robot skipped: SPAPI_SELLER_ID not set.'); return; }
   if (!inventoryFresh || !relistFresh.size) { console.log('Relist robot skipped: listings report or competitor offers not read this run.'); return; }
+  // quota (12 Nov 2026): the relist log is shared by all accounts and grows every day - read only THIS account's
+  // records (document-id range "<label>_...") instead of every account's records of the last 7 days (was ~40,000 reads).
+  const relistLogMine = async (since) => {
+    const F = admin.firestore.FieldPath.documentId(), out = [];
+    const q = await dbMain.collection('spapiRelistLog').orderBy(F).startAt(`${ACCOUNT_LABEL}_`).endAt(`${ACCOUNT_LABEL}_\uf8ff`).get();
+    q.forEach((d) => { if ((d.data().at || 0) > since) out.push(d); });
+    return { forEach: (fn) => out.forEach(fn), size: out.length };
+  };
   const stRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_relistState`);
   const st = Object.assign({ streak: {}, cool: {} }, (await stRef.get()).data() || {});
   if (st.ver !== 9) { st.cool = {}; st.ver = 9; }   // v9 (21 Oct 2026): price-blocked listings now relisted - re-check all now   // v7 (21 Oct 2026): hidden-but-buyable listings relisted, blocked prices fixed with min limit - re-check all now   // v6 (20 Oct 2026): live-but-not-selling listings are now relisted too - re-check them
@@ -999,14 +1007,14 @@ async function runRelistRobot(sellerId) {
   if (!st.rel) {    // first run with the relist cap: count this week's relists from the log
     st.rel = {};
     try {
-      const q = await dbMain.collection('spapiRelistLog').where('at', '>', now - 7 * 864e5).get();
+      const q = await relistLogMine(now - 7 * 864e5);
       q.forEach((d) => { const x = d.data(); if (x.account === ACCOUNT_LABEL && /^relisted/.test(x.status || '') && x.asin) (st.rel[x.asin] = st.rel[x.asin] || []).push(x.at); });
     } catch (e) { console.warn('relist history not loaded:', e.message || e); }
   }
   if (!st.pfix) {   // first run with this rule: price fixes already done in the last 24 h count as tried
     st.pfix = {};
     try {
-      const q = await dbMain.collection('spapiRelistLog').where('at', '>', now - 864e5).get();
+      const q = await relistLogMine(now - 864e5);
       q.forEach((d) => { const x = d.data(); if (x.account === ACCOUNT_LABEL && x.status === 'price_fixed' && x.asin) st.pfix[x.asin] = Math.min(st.pfix[x.asin] || Infinity, x.at); });
       console.log(`Relist robot: ${Object.keys(st.pfix).length} listing(s) already had a price fix today.`);
     } catch (e) { console.warn('price-fix history not loaded:', e.message || e); }
