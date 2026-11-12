@@ -1145,6 +1145,20 @@ async function runRelistRobot(sellerId) {
       const error = e.message || String(e);
       if (/not found/i.test(error) && !oldWhy) {
         // The SKU was removed on Amazon (Seller Central / another tool); the listings report can lag a few hours.
+        // 12 Nov 2026: these stayed "Not selling" forever. If the SKU is still in stock in the report, hand the ASIN to the
+        // Add ASIN robot (it lists it fresh under a new SKU, checks brand approval + profit) at the last known price - once a day max.
+        st.gone = st.gone || {};
+        const lastP = Number(i.price) > 0 ? Number(i.price) : Number(((SNAP.pricing[`${ACCOUNT_LABEL}_${asin}`] || {}).relist || {}).price) || null;
+        if ((i.quantity || 0) > 0 && !(st.gone[asin] && now - st.gone[asin] < 864e5)) {
+          st.gone[asin] = now;
+          await db.collection('spapiAddAsin').doc(`${ACCOUNT_LABEL}_${asin}`).set({ account: ACCOUNT_LABEL, asin, barcode: null, qty: i.quantity || 10,
+            wantPrice: lastP, cost: null, mrp: Number(i.mrp) || null, gst: null, status: 'pending', source: 'relist-gone', requestedAt: Date.now(),
+            error: null, price: null, profit: null }).catch((e) => console.warn('gone -> add asin', e.message || e));
+          console.log(`Relist ${oldSku}: SKU no longer exists on Amazon - sent ASIN ${asin} to Add ASIN at Rs ${lastP || 'auto'} (lists it as a new SKU).`);
+          st.cool[asin] = now + RELIST_COOLDOWN_BLOCKED; delete streak[oldSku];
+          await log(i, { status: 'gone', error, why: `Old SKU missing on Amazon - sent to Add ASIN to list it again${lastP ? ' at ₹' + lastP : ''}` });
+          continue;
+        }
         console.log(`Relist ${oldSku}: SKU no longer exists on Amazon - nothing to relist.`);
         st.cool[asin] = now + RELIST_COOLDOWN_OK; delete streak[oldSku];
         await log(i, { status: 'gone', error });

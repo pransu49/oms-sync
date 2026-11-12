@@ -55,6 +55,8 @@
 - **Relist fixes** (owner 12 Nov 2026, "Not selling" stuck): the relist robot never relists with a blank price (fallback: old offer's
   `our_price`, then the last relist record's price; none = skip with a note). In suggest-only mode, listings blocked by "below your minimum
   price threshold" are relisted as a new SKU at the SAME price (no price change). "Price too low / may be an error" stays a price suggestion.
+  A SKU still in stock in the report but "not found" on Amazon is queued to Add ASIN (`spapiAddAsin`, source `relist-gone`, wantPrice = last
+  price) at most once a day per ASIN.
 
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.
