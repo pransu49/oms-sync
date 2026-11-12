@@ -834,6 +834,10 @@
 (function () { try {
   if (window.__aikmMoreAccts) return; window.__aikmMoreAccts = true;
   var EXTRA = [{ label: "vishal", name: "Vishal E-Commerce" }, { label: "munda", name: "Ecommerce Munda" }];
+  /* 4 account buttons: keep the title readable (it was overlapped) */
+  var st = document.createElement("style");
+  st.textContent = ".ap-brand{flex:none}.ap-top-in{gap:14px}#spapiAccountSwitcherWrap button{padding:7px 11px;font-size:12px}@media(max-width:1350px){#spapiAccountSwitcherWrap button{padding:6px 8px;font-size:11.5px}}";
+  document.head.appendChild(st);
   function go() {
     if (typeof SPAPI_ACCOUNTS === "undefined" || typeof populateSpapiAccountSwitcher !== "function") return false;
     EXTRA.forEach(function (a) { if (!SPAPI_ACCOUNTS.some(function (x) { return x.label === a.label; })) SPAPI_ACCOUNTS.push(a); });
@@ -861,4 +865,15 @@
     return true;
   }
   (function wait(i) { if (!go() && i < 80) setTimeout(function () { wait(i + 1); }, 250); })(0);
+} catch (e) {} })();
+
+/* ===== DO NOT REMOVE — loads Duplicate ASIN bulk delete + listing dates on the Inventory tab (console/dup-asin.js). Keep this block when replacing amazon-name-search.js. ===== */
+(function () { try { if (document.getElementById("aikmDupAsinJs")) return;
+  function add(ref) { if (document.getElementById("aikmDupAsinJs")) return; var s = document.createElement("script"); s.id = "aikmDupAsinJs"; s.defer = true;
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/dup-asin.js"; document.head.appendChild(s); }
+  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
+  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/dup-asin.js&per_page=1")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
 } catch (e) {} })();

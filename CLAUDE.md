@@ -73,6 +73,11 @@
   Record names built from SKUs go through `sidSafe()` ("/" -> "%2F"; Munda has SKUs like "MRP-120 Wala/Old-108") — use it for any new `${ACCOUNT_LABEL}_${sku}` id.
   Each account's workflow reports health under its own key (`spapi_vishal`, `spapi_munda`) — don't copy Sasta's.
 
+- **Duplicate ASIN bulk delete + listing dates** (`console/dup-asin.js`, owner 12 Nov 2026), loader block `aikmDupAsinJs` at the end of
+  `amazon-name-search.js` (keep it). "Duplicate ASINs" tile shows listings grouped by ASIN with one KEEP (most sold 30d, then stock, then oldest);
+  ticked SKUs are queued in main `spapiListingDeletions` (`<acct>_<sku with / as %2F>`); `applyPendingListingDeletions` deletes max 200 per run.
+  Listing date = `openDate` from the listings report, saved in the snapshot only.
+
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.
 Current daily use is on the console's Firebase usage card (aikm_admin/firebaseUsage). Keep each project **under ~35,000 reads/day**.
