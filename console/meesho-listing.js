@@ -89,6 +89,19 @@
       ".ms-stat{margin-top:6px;padding:5px 8px;border-radius:7px;font-size:11.5px;line-height:1.4;font-weight:600;white-space:normal}",
       ".ms-stat.ok{background:#E6F3EC;color:#1E7A4B}.ms-stat.bad{background:#FCECEA;color:#9B2C22;font-weight:500}.ms-stat.bad b{font-weight:700;display:block;margin-bottom:2px}",
       ".ms-reset{all:unset;cursor:pointer;margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;border:1px solid var(--line);font-size:12px;font-weight:600;color:var(--ink-2);background:#fff;white-space:nowrap}",
+      ".ms-ax{margin-left:auto;margin-right:8px;border-color:#E6D3A3;background:var(--gold-soft);color:var(--ink)}.ms-ax+.ms-reset{margin-left:0}",
+      ".ax-ov{position:fixed;inset:0;background:rgba(15,30,53,.45);backdrop-filter:blur(3px);z-index:1600;display:none;align-items:center;justify-content:center;padding:16px}",
+      ".ax-box{background:#fff;border-radius:16px;width:min(760px,96vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;border-top:3px solid var(--gold);box-shadow:0 24px 70px rgba(15,30,53,.3)}",
+      ".ax-hd{display:flex;gap:12px;align-items:flex-start;padding:18px 22px 10px}.ax-hd h3{margin:3px 0 0;font:600 17px 'Lexend','Inter',sans-serif;color:var(--ink)}",
+      ".ax-k{font:600 10.5px 'Lexend','Inter',sans-serif;letter-spacing:.1em;text-transform:uppercase;color:var(--gold-2)}",
+      ".ax-x{all:unset;cursor:pointer;margin-left:auto;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--ink-2)}.ax-x:hover{background:#FBF9F4}",
+      ".ax-bd{padding:4px 22px 8px;overflow:auto}.ax-bd p{margin:0 0 10px;font-size:12.5px;color:var(--ink-2);line-height:1.55}",
+      ".ax-bd textarea{width:100%;box-sizing:border-box;min-height:150px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:12.5px ui-monospace,Menlo,monospace;color:var(--ink);background:#FBF9F4;outline:none;resize:vertical}",
+      ".ax-bd textarea:focus{border-color:var(--gold);background:#fff;box-shadow:0 0 0 3px rgba(201,162,75,.15)}",
+      ".ax-st{margin-top:10px;font-size:12.5px;color:var(--ink-2);min-height:18px}.ax-st b{color:var(--ink)}.ax-st .bad{color:#B42318}",
+      ".ax-ft{display:flex;align-items:center;gap:10px;padding:12px 22px 18px;border-top:1px solid var(--line-2)}.ax-ft span{margin-right:auto;font-size:12px;color:var(--muted)}",
+      ".ax-go{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:9px;background:var(--navy,#0F1E35);color:#fff;font-weight:600;font-size:13px}.ax-go:hover{filter:brightness(1.15)}.ax-go.busy{opacity:.55;pointer-events:none}",
+      ".ax-go.ghost{background:#fff;color:var(--ink);border:1px solid var(--line)}",
       ".ms-reset:hover{border-color:#B42318;color:#B42318;background:#FCECEA}",
       ".ms-src{display:inline-flex;gap:2px;background:#EBE6DA;border-radius:10px;padding:3px;margin:0 0 10px}",
       ".ms-src button{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;padding:6px 13px;border-radius:8px;font-size:12.5px;font-weight:500;color:var(--ink-2)}",
@@ -176,6 +189,7 @@
     if (!$("msQ")) {
       body.innerHTML =
         '<div class="ms-hd"><div><h3>Meesho Listing Robot</h3><p>Pick products, drop in any Meesho template, download it filled in.</p></div>' +
+        '<button type="button" class="ms-reset ms-ax" id="msAx" title="Paste Amazon ASINs or links (even ones you don\'t sell) and download their details as Excel"><i class="ti ti-file-spreadsheet"></i>ASIN → Excel</button>' +
         '<button type="button" class="ms-reset" id="msReset" title="Clear the selected products and the template, start a new file"><i class="ti ti-refresh"></i>Start over</button>' +
         '<div class="ms-steps"><span class="ms-st" id="msS1"><b>1</b>Pick products</span><span class="ms-st" id="msS2"><b>2</b>Add template</span><span class="ms-st" id="msS3"><b>3</b>Fill &amp; download</span></div></div>' +
         '<div class="ms-grid"><div class="ms-col">' +
@@ -233,6 +247,7 @@
       $("msQ").placeholder = SRC === "lots" ? "Search LOTS product name, code, brand or barcode…" : "Search product name, SKU or ASIN…";
       if (SRC === "lots") lotsReady().then(drawList); drawList(); $("msQ").focus();
     });
+    $("msAx").addEventListener("click", axOpen);
     $("msReset").addEventListener("click", function () {
       if (busy) return;
       pick.clear(); tpl = null; grid = null; q = ""; onlyNeed = true;
@@ -612,6 +627,86 @@
     var fresh = await getDocs(miss); Object.keys(fresh).forEach(function (k) { have[k] = fresh[k]; });
     var left = miss.filter(function (a) { return !fresh[a]; });
     return { d: have, warn: !job ? "Robot took too long — filled what was ready. Try Fill again in a minute." : job.status === "failed" ? "Robot failed (" + (job.error || "see GitHub") + ") — filled from basic data." : left.length ? left.length + " product(s) not found in Amazon's catalogue — basic data used." : "" };
+  }
+
+  /* ---------- ASIN -> Excel: details of any Amazon ASIN (yours or not), read by the same robot ---------- */
+  var XLS = null, axList = [];
+  function xlsLib() {
+    if (window.XLSX && window.XLSX.__styled) return Promise.resolve(window.XLSX);
+    if (XLS) return XLS;
+    XLS = new Promise(function (ok, bad) { var s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
+      s.onload = function () { window.XLSX.__styled = true; ok(window.XLSX); }; s.onerror = function () { XLS = null; bad(new Error("Excel library could not load")); }; document.head.appendChild(s); });
+    return XLS;
+  }
+  function axUi() {
+    var o = $("axOv"); if (o) return o;
+    o = document.createElement("div"); o.id = "axOv"; o.className = "ax-ov";
+    o.innerHTML = '<div class="ax-box"><div class="ax-hd"><div><div class="ax-k">Amazon catalogue</div><h3>ASIN → Excel</h3></div><button type="button" class="ax-x" id="axX" title="Close (Esc)">×</button></div>' +
+      '<div class="ax-bd"><p>Paste Amazon <b>ASINs or product links</b> — one per line, or many at once. They don\'t need to be on your Seller Central. ' +
+      'The robot reads each one from Amazon (title, brand, MRP, barcode, weight, size, maker / packer, bullets, description, photos) and you get an Excel file. Up to 200 at a time; about 1 minute.</p>' +
+      '<textarea id="axIn" placeholder="B08T935B9R&#10;https://www.amazon.in/dp/B078H38QTS&#10;…"></textarea><div class="ax-st" id="axSt"></div></div>' +
+      '<div class="ax-ft"><span id="axCnt">0 ASINs</span><button type="button" class="ax-go ghost" id="axAdd" style="display:none"><i class="ti ti-plus"></i>Add to Meesho list</button><button type="button" class="ax-go" id="axGo"><i class="ti ti-download"></i>Fetch &amp; download Excel</button></div></div>';
+    document.body.appendChild(o);
+    var close = function () { o.style.display = "none"; };
+    $("axX").onclick = close; o.addEventListener("click", function (e) { if (e.target === o) close(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && o.style.display === "flex") close(); });
+    $("axIn").addEventListener("input", function () { axList = axParse($("axIn").value); $("axCnt").textContent = axList.length + " ASIN" + (axList.length === 1 ? "" : "s") + (axList.length > 200 ? " — only the first 200 are read" : ""); });
+    $("axGo").onclick = axRun;
+    $("axAdd").onclick = function () {
+      var n = 0; axList.slice(0, 200).forEach(function (a) { if (pick.has(a) || pick.size >= MAX) return; EXT[a] = EXT[a] || { asin: a, sku: "", name: (axDone[a] && axDone[a].title) || "ASIN " + a, quantity: 0, ext: true }; pick.set(a, byAsin()[a] || EXT[a]); n++; });
+      drawList(); drawSteps(); close(); toast(n + " ASIN" + (n === 1 ? "" : "s") + " added to the Meesho list — add a template and click Fill");
+    };
+    return o;
+  }
+  function axParse(t) {
+    var out = [], seen = {};
+    String(t || "").split(/[\s,;]+/).forEach(function (w) { var a = asinIn(w) || (/^[A-Z0-9]{10}$/i.test(w) && /[A-Z]/i.test(w) ? w.toUpperCase() : ""); if (a && !seen[a]) { seen[a] = 1; out.push(a); } });
+    return out;
+  }
+  function axOpen() { var o = axUi(); o.style.display = "flex"; setTimeout(function () { $("axIn").focus(); }, 50); }
+  var axDone = {};
+  async function axRun() {
+    var list = axParse($("axIn").value).slice(0, 200), st = $("axSt"), b = $("axGo");
+    if (!list.length) { st.innerHTML = '<span class="bad">Paste at least one ASIN (10 characters, e.g. B08T935B9R) or an Amazon product link.</span>'; return; }
+    b.classList.add("busy");
+    var oldNote = note;   // show the robot's progress inside this window note = function (h) { st.innerHTML = h; };
+    try {
+      var r = await details(list), d = r.d || {}, got = list.filter(function (a) { return d[a]; }), miss = list.filter(function (a) { return !d[a]; });
+      got.forEach(function (a) { axDone[a] = d[a]; });
+      if (!got.length) throw new Error(r.warn || "Amazon returned nothing for these ASINs — check they are correct");
+      await axExcel(got.map(function (a) { return d[a]; }), miss);
+      st.innerHTML = "<b>✓ " + got.length + " product" + (got.length > 1 ? "s" : "") + " downloaded.</b>" + (miss.length ? ' <span class="bad">Not found on Amazon: ' + miss.map(esc).join(", ") + "</span>" : "") + (r.warn ? ' <span class="bad">' + esc(r.warn) + "</span>" : "");
+      $("axAdd").style.display = "";
+    } catch (e) { st.innerHTML = '<span class="bad">' + esc(e.message || e) + "</span>"; }
+    finally { note = oldNote; b.classList.remove("busy"); }
+  }
+  async function axExcel(rows, miss) {
+    var XL = await xlsLib(), lm = function (d) { try { var m = resolveSpapiLotsMatch(d.title, d.asin), p = m && lotsPriceByCode[m.code], sl = p && bestSlabFor(p.slabs); return p ? { code: m.code, name: p.name, cost: sl ? sl.price : "", qty: p.qty, gst: p.gst, hsn: p.hsn } : null; } catch (e) { return null; } };
+    var c = function (x, k) { var v = x && x[k]; return v ? (v.text || [v.name, v.address, v.pin].filter(Boolean).join(", ")) : ""; };
+    var dimTxt = function (x) { if (!x) return ""; var L = [x.l, x.w, x.h].map(function (v) { return v && v.v != null ? Math.round(v.v * 10) / 10 : ""; }); return L.join(" × ") + " " + ((x.l && x.l.u) || ""); };
+    var heads = ["ASIN", "Amazon link", "Title", "Brand", "MRP ₹", "Barcode (EAN)", "Weight (g)", "Size / dimensions", "Colour", "Size", "Material", "Model", "Country of origin", "Category", "Manufacturer", "Packer", "Importer",
+      "LOTS match", "LOTS cost ₹", "LOTS stock", "GST %", "HSN", "Bullet 1", "Bullet 2", "Bullet 3", "Bullet 4", "Bullet 5", "Description", "Image 1", "Image 2", "Image 3", "Image 4", "Image 5", "Image 6", "Image 7", "Image 8"];
+    var body = rows.map(function (d) {
+      var L = lm(d) || {}, b = d.bullets || [], im = d.images || [];
+      return [d.asin, "https://www.amazon.in/dp/" + d.asin, d.title || "", d.brand || "", d.mrp || "", d.barcode || "", d.weightG || "", typeof d.dims === "object" ? dimTxt(d.dims) : (d.dims || ""), d.color || "", d.size || "", d.material || "", d.modelNumber || "",
+        d.countryOfOrigin || "", d.category || d.productType || "", c(d.contacts, "manufacturer") || d.manufacturer || "", c(d.contacts, "packer"), c(d.contacts, "importer"),
+        L.name ? L.name + " (" + L.code + ")" : "", L.cost || "", L.qty != null ? L.qty : "", L.gst != null ? L.gst : "", L.hsn || "", b[0] || "", b[1] || "", b[2] || "", b[3] || "", b[4] || "", d.description || ""].concat([0, 1, 2, 3, 4, 5, 6, 7].map(function (i) { return im[i] || ""; }));
+    });
+    var stamp = new Date().toLocaleString("en-IN"), n = heads.length;
+    var aoa = [["AIKM PHARMA PRIVATE LIMITED  ·  Amazon product details  ·  " + rows.length + " ASIN" + (rows.length > 1 ? "s" : "")], ["Read from Amazon's catalogue " + stamp + (miss.length ? "  ·  not found: " + miss.join(", ") : "")], heads].concat(body);
+    var ws = XL.utils.aoa_to_sheet(aoa);
+    ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: n - 1 } }, { s: { r: 1, c: 0 }, e: { r: 1, c: n - 1 } }];
+    ws["!cols"] = heads.map(function (h) { return { wch: /^Title|Description|Bullet|Manufacturer|Packer|Importer/.test(h) ? 48 : /link|Image|LOTS match|dimensions/.test(h) ? 30 : 13 }; });
+    ws["!freeze"] = { xSplit: 1, ySplit: 3 }; ws["!views"] = [{ state: "frozen", xSplit: 1, ySplit: 3 }];
+    ws["!autofilter"] = { ref: XL.utils.encode_range({ s: { r: 2, c: 0 }, e: { r: 2 + body.length, c: n - 1 } }) };
+    var st = function (r, cc, s) { var a = XL.utils.encode_cell({ r: r, c: cc }); ws[a] = ws[a] || { t: "s", v: "" }; ws[a].s = s; };
+    st(0, 0, { font: { bold: true, sz: 14, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "0F1E35" } } });
+    st(1, 0, { font: { italic: true, color: { rgb: "4A5468" } }, fill: { fgColor: { rgb: "F6EEDB" } } });
+    for (var cc = 0; cc < n; cc++) st(2, cc, { font: { bold: true, color: { rgb: "0F1E35" } }, fill: { fgColor: { rgb: "FBF9F4" } }, border: { bottom: { style: "medium", color: { rgb: "C9A24B" } } }, alignment: { wrapText: true, vertical: "center" } });
+    body.forEach(function (row, i) { row.forEach(function (v, cc) { var a = XL.utils.encode_cell({ r: 3 + i, c: cc }); if (!ws[a]) return; ws[a].s = { alignment: { vertical: "top", wrapText: cc === 2 }, fill: i % 2 ? { fgColor: { rgb: "FCFBF8" } } : undefined };
+      if ((cc === 1 || cc >= 28) && v) ws[a].l = { Target: v }; }); });
+    var wb = XL.utils.book_new(); XL.utils.book_append_sheet(wb, ws, "Amazon details");
+    XL.writeFile(wb, "Amazon_ASIN_details_" + new Date().toISOString().slice(0, 10) + ".xlsx");
   }
 
   /* ---------- 4. match columns to product data ---------- */
