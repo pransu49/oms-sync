@@ -44,7 +44,7 @@ let SYNC_MODE = String(process.env.SYNC_MODE || 'full').toLowerCase() === 'fast'
 // A queued full sync is often cancelled by the next quick sync (GitHub keeps only one waiting run), so the
 // robot silently skipped hours (21 Oct 2026). Any quick sync now upgrades itself to FULL when the last
 // full sync is older than this - the robot can no longer be skipped.
-const FULL_DUE_MS = { praso: 55 * 60e3, sastastore: 55 * 60e3, munda: 55 * 60e3 };   // owner 21 Oct: robot every hour on both accounts
+const FULL_DUE_MS = { praso: 55 * 60e3, sastastore: 55 * 60e3, vishal: 55 * 60e3 };   // owner 21 Oct: robot every hour on both accounts
 const RUN_STARTED = Date.now();
 let ordersSyncedOk = false;
 let deliveryBackfillRun = false;
