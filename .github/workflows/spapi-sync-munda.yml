@@ -1,7 +1,15 @@
 name: SP-API Sync (Ecommerce Munda)
 
 on:
-  # schedule OFF until the owner confirms Munda's rules after the first check-only run (owner, 12 Nov 2026)
+  schedule:                  # offset from Praso / Sasta Store / Vishal so the four accounts don't run at the same minute
+    - cron: '45 */2 * * *'   # FULL sync (incl. competitor prices)
+    - cron: '0,15,30 * * * *'   # QUICK sync (stock, price, orders, pushes)
+    - cron: '45 1-23/2 * * *'   # QUICK sync
+  push:                      # run right away whenever the sync script or this file is updated
+    branches: [main]
+    paths:
+      - 'spapi-sync.js'
+      - '.github/workflows/spapi-sync-munda.yml'
   workflow_dispatch:         # also triggered by cron-job.org (GitHub's own timer skips many runs)
     inputs:
       mode:
@@ -46,12 +54,9 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           # Quick sync on the 15-minute schedules, full sync otherwise (incl. manual / code updates).
-          SYNC_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode) || (github.event_name == 'schedule' && github.event.schedule != '20 */2 * * *' && 'fast') || 'full' }}
+          SYNC_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode) || (github.event_name == 'schedule' && github.event.schedule != '45 */2 * * *' && 'fast') || 'full' }}
           ACCOUNT_LABEL: munda
           ACCOUNT_NAME: Ecommerce Munda
-          # CHECK-ONLY until the owner confirms (no stock-to-0 rule, no relists). Prices are suggest-only anyway.
-          STOCK_GUARD: 'off'
-          RELIST_ROBOT: 'off'
         shell: bash
         run: node spapi-sync.js 2>&1 | tee run.log
 

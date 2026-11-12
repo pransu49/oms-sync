@@ -69,7 +69,7 @@
   Own seller IDs of every account live in `spapiSnapshots/ourSellers` {ids:{label:sellerId}} — each sync adds its own; robots + page treat them as "us".
 
 - **Ecommerce Munda** (4th Amazon account, owner 12 Nov 2026): workflow `spapi-sync-munda.yml`, label `munda`, secrets `SPAPI_REFRESH_TOKEN_MUNDA` +
-  `SPAPI_SELLER_ID_MUNDA`. CHECK-ONLY (STOCK_GUARD off, RELIST_ROBOT off, no schedule) until the owner confirms its rules. In page `EXTRA` list.
+  `SPAPI_SELLER_ID_MUNDA`. LIVE since 12 Nov 2026 (full :45 every 2 h, quick :00/:15/:30) — same LOTS stock, all robot rules apply. In page `EXTRA` list.
   Record names built from SKUs go through `sidSafe()` ("/" -> "%2F"; Munda has SKUs like "MRP-120 Wala/Old-108") — use it for any new `${ACCOUNT_LABEL}_${sku}` id.
   Each account's workflow reports health under its own key (`spapi_vishal`, `spapi_munda`) — don't copy Sasta's.
 
