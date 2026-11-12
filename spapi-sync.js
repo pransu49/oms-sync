@@ -36,6 +36,21 @@ const FB_OPS = { spapi: { r: 0, w: 0, d: 0 }, main: { r: 0, w: 0, d: 0 } }, FB_C
   });
 })();
 
+// ── Quota saver (owner 12 Nov 2026: "ensure all syncs work under free limits") ──
+// The page and every robot read the SNAPSHOT (spapiSnapshots), not the old per-item collections spapiInventory /
+// spapiOrders / spapiCompetitivePricing. Writing one record per SKU there was pure cost (a bulk price change on Sasta
+// = ~1,100 writes per run). Those writes are now skipped; set SPAPI_LEGACY_MIRROR=on in a workflow to bring them back.
+const LEGACY_MIRROR = (process.env.SPAPI_LEGACY_MIRROR || 'off').toLowerCase() === 'on';
+let LEGACY_SKIPPED = 0;
+if (!LEGACY_MIRROR) (function legacyOff() {
+  const F = admin.firestore, LEG = /^(spapiInventory|spapiOrders|spapiCompetitivePricing)\//;
+  const skip = (ref) => { try { return ref && ref.firestore !== dbMain && LEG.test(ref.path); } catch (e) { return false; } };
+  const DR = F.DocumentReference.prototype, WB = F.WriteBatch.prototype;
+  ['set', 'update', 'create'].forEach((m) => { const o = DR[m]; DR[m] = function (...a) { if (skip(this)) { LEGACY_SKIPPED++; return Promise.resolve(); } return o.apply(this, a); }; });
+  ['set', 'update', 'create'].forEach((m) => { const o = WB[m]; WB[m] = function (ref, ...a) { if (skip(ref)) { LEGACY_SKIPPED++; return this; } return o.call(this, ref, ...a); }; });
+  process.on('exit', () => { if (LEGACY_SKIPPED) console.log(`Quota saver: ${LEGACY_SKIPPED} old per-item record write(s) skipped (snapshot has the data).`); });
+})();
+
 const MARKETPLACE_ID = 'A21TJRUUN4KGV';
 
 const spClient = new SellingPartnerAPI({
@@ -1047,9 +1062,17 @@ async function runRelistRobot(sellerId) {
   const salesReady = rule1.concat(rule3).slice(0, RELIST_SALES_MAX_PER_RUN);
   ready.push(...salesReady);
   console.log(`Relist robot: ${ready.length - salesReady.length} not-selling ready; sales rules: ${rule1.length} stopped selling (7 days), ${rule3.length} no sale 30+ days -> ${salesReady.length} this run.`);
+  // quota (12 Nov 2026): the same "still stuck" note (no price, blocked, skipped...) for the same ASIN is saved to the
+  // log at most once a day - the page still shows the latest one from the snapshot. Real actions are always logged.
+  st.logged = st.logged || {};
+  Object.keys(st.logged).forEach((k) => { if (now - st.logged[k] > 864e5) delete st.logged[k]; });
+  const REPEAT = /^(price_issue|blocked|buyable|failed|gone|bb_skip|learn_war)$/;
   const log = (i, rec) => {
     const doc = { account: ACCOUNT_LABEL, asin: i.asin, name: i.name || '', oldSku: i.sku, price: i.price, mrp: i.mrp || null, qty: i.quantity, at: Date.now(), ...rec };
     snapPatch('pricing', `${ACCOUNT_LABEL}_${sidSafe(i.asin)}`, { relist: doc });
+    const lk = `${i.asin}|${rec.status}`;
+    if (REPEAT.test(rec.status || '') && st.logged[lk] && doc.at - st.logged[lk] < 864e5) return Promise.resolve();
+    if (REPEAT.test(rec.status || '')) st.logged[lk] = doc.at;
     return dbMain.collection('spapiRelistLog').doc(`${ACCOUNT_LABEL}_${sidSafe(i.asin)}_${doc.at}`).set(doc).catch((e) => console.warn('relist log', e.message || e));
   };
   for (const job of ready) {
@@ -1213,7 +1236,7 @@ async function runRelistRobot(sellerId) {
   Object.keys(st.bbCool).forEach((a) => { if (st.bbCool[a] < now) delete st.bbCool[a]; });
   pruneLearn(st.learn);
   Object.keys(st.pfix || {}).forEach((a) => { if (now - st.pfix[a] > 3 * 864e5) delete st.pfix[a]; });
-  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, pfix: st.pfix || {}, rel: st.rel || {}, ver: 9, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
+  await stRef.set({ streak, cool: st.cool, bbCool: st.bbCool, learn: st.learn, pfix: st.pfix || {}, rel: st.rel || {}, logged: st.logged || {}, ver: 9, lastRun: now, stopped: breaker ? `${notSelling.length}/${checked.length} not selling` : null });
 }
 
 // Orders per ASIN for this account (snapshot, last 90 days): days since the last order, and orders in days 7-37.
@@ -1772,6 +1795,7 @@ async function applyPendingPriceUpdates(sellerId) {
 
 // Amazon answers "ACCEPTED" first and decides later. Check each sent price on later syncs:
 // live at the new price -> verified; refused (price error) -> failed with Amazon's own reason.
+const VERIFY_MAX = 150;   // sent prices checked per sync (oldest waiting ones get their turn as others settle)
 async function verifyPricePushes(sellerId) {
   // One-time move (21 Oct 2026): robot records saved in the console's Firebase go to the SP-API Firebase.
   try {
@@ -1787,7 +1811,7 @@ async function verifyPricePushes(sellerId) {
   } catch (e) { console.warn('Robot record move skipped:', e.message || e); }
   // Only prices still waiting for Amazon (verified == false) are read - not every price ever sent.
   const snaps = await Promise.all([db, dbMain].map((d) => d.collection('spapiPriceUpdates')
-    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'applied').where('verified', '==', false).get()));
+    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'applied').where('verified', '==', false).limit(VERIFY_MAX).get()));
   const cut = Date.now() - 3 * 864e5;
   const docs = snaps.flatMap((s) => s.docs).filter((d) => { const x = d.data(); const t = x.appliedAt && x.appliedAt.toMillis ? x.appliedAt.toMillis() : 0;
     return x.verified === false && t > cut && Date.now() - t > 4 * 60000; });
@@ -1797,8 +1821,12 @@ async function verifyPricePushes(sellerId) {
   if (stale.length) console.log(`${stale.length} old unchecked price(s) retired from the check.`);
   if (!docs.length) { console.log('No sent prices waiting for Amazon.'); return; }
   console.log(`Checking ${docs.length} sent price(s) on Amazon...`);
-  for (const doc of docs) {
-    const { sku, newPrice } = doc.data(), checks = (doc.data().checks || 0) + 1;
+  // quota (12 Nov 2026): the check count lives in ONE state doc, so a price still waiting costs no write per sync
+  // (a bulk price change on Sasta was ~730 writes per run). The price record itself is written only when it is settled.
+  const vRef = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_priceVerify`);
+  const vSt = ((await vRef.get().catch(() => null)) || { data: () => null }).data() || {}, vChecks = {};
+  try { for (const doc of docs) {
+    const { sku, newPrice } = doc.data(), checks = Math.max(doc.data().checks || 0, vSt.checks && vSt.checks[doc.id] || 0) + 1;
     try {
       const r = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku },
         query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['offers', 'issues'] } });
@@ -1816,9 +1844,11 @@ async function verifyPricePushes(sellerId) {
       } else if (checks >= 8) {
         await doc.ref.update({ status: 'failed', failedAt: admin.firestore.FieldValue.serverTimestamp(), checks, livePrice: live,
           error: `Amazon still shows ₹${live} after ${checks} checks.` });
-      } else await doc.ref.update({ checks, livePrice: live });
-    } catch (e) { console.warn(`Price check failed for ${sku}:`, e.message || e); }
+      } else vChecks[doc.id] = checks;   // still waiting: counted in the state doc only
+    } catch (e) { console.warn(`Price check failed for ${sku}:`, e.message || e); if (vSt.checks && vSt.checks[doc.id]) vChecks[doc.id] = vSt.checks[doc.id]; }
     await new Promise((res) => setTimeout(res, 500));
+  } } finally {
+    await vRef.set({ checks: vChecks, at: Date.now() }).catch(() => {});
   }
 }
 

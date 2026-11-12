@@ -78,6 +78,16 @@
   ticked SKUs are queued in main `spapiListingDeletions` (`<acct>_<sku with / as %2F>`); `applyPendingListingDeletions` deletes max 200 per run.
   Listing date = `openDate` from the listings report, saved in the snapshot only.
 
+- **Quota savers in `spapi-sync.js`** (owner 12 Nov 2026, "ensure all syncs work under free limits"):
+  old per-item collections `spapiInventory` / `spapiOrders` / `spapiCompetitivePricing` are NOT written any more (nothing reads them —
+  page + robots use the snapshot; `SPAPI_LEGACY_MIRROR=on` brings the writes back). Sent-price checks: max 150 per run, check counts in ONE doc
+  `spapiSnapshots/<acct>_priceVerify`, the price record is written only when settled. Relist log: the same "still stuck" status
+  (price_issue/blocked/buyable/failed/gone/bb_skip/learn_war) per ASIN is saved at most once a day (`relistState.logged`).
+  Relist history is read by document-id range of the own account only (a new account's first run read ~40,000 docs before).
+- **Usage meter**: every robot prints `FBMETER ...` (from `fb-meter.js`, first line of each script) and the sync prints
+  `FIREBASE OPS` + `FIREBASE OPS BY COLLECTION` — use these to estimate before shipping. `usage-diag.yml` (manual) prints hourly
+  Firestore ops per project from Cloud Monitoring.
+
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.
 Current daily use is on the console's Firebase usage card (aikm_admin/firebaseUsage). Keep each project **under ~35,000 reads/day**.

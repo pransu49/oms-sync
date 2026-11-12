@@ -1,4 +1,4 @@
-name: Firebase usage diagnostic (one-off)
+name: Firebase usage diagnostic
 on: { workflow_dispatch: {} }
 jobs:
   d:

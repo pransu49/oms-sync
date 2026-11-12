@@ -1,4 +1,4 @@
-// one-off diagnostic (12 Nov 2026): hourly Firestore ops + which API method / listeners, last 30 h. Reads Cloud Monitoring only.
+// Firebase usage diagnostic (manual: Actions -> 'Firebase usage diagnostic'): hourly Firestore ops + API methods + listeners per project, last 30 h. Reads Cloud Monitoring only.
 const admin = require('firebase-admin');
 const P = [['main', process.env.FIREBASE_SERVICE_ACCOUNT], ['oms', process.env.FIREBASE_SERVICE_ACCOUNT_OMS], ['spapi', process.env.FIREBASE_SERVICE_ACCOUNT_SPAPI]];
 async function ts(token, pid, filter, group, aligner = 'ALIGN_SUM', reducer = 'REDUCE_SUM') {
