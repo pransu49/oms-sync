@@ -189,7 +189,7 @@
     if (!$("msQ")) {
       body.innerHTML =
         '<div class="ms-hd"><div><h3>Meesho Listing Robot</h3><p>Pick products, drop in any Meesho template, download it filled in.</p></div>' +
-        '<button type="button" class="ms-reset ms-ax" id="msAx" title="Paste Amazon ASINs or links (even ones you don\'t sell) and download their details as Excel"><i class="ti ti-file-spreadsheet"></i>ASIN → Excel</button>' +
+        '<button type="button" class="ms-reset ms-ax" id="msAx" title="Paste Amazon ASINs or links (even ones you don\'t sell) — their details are read from Amazon and used for the Meesho file"><i class="ti ti-brand-amazon"></i>Add ASINs</button>' +
         '<button type="button" class="ms-reset" id="msReset" title="Clear the selected products and the template, start a new file"><i class="ti ti-refresh"></i>Start over</button>' +
         '<div class="ms-steps"><span class="ms-st" id="msS1"><b>1</b>Pick products</span><span class="ms-st" id="msS2"><b>2</b>Add template</span><span class="ms-st" id="msS3"><b>3</b>Fill &amp; download</span></div></div>' +
         '<div class="ms-grid"><div class="ms-col">' +
@@ -331,7 +331,8 @@
     if (qa) { q = all[qa] ? qa.toLowerCase() : ""; }   // a pasted Amazon link searches by its ASIN
     if (!keys.length) { list.innerHTML = '<div style="padding:22px;text-align:center;color:var(--muted);font-size:13px">' + (SRC === "lots" ? "Loading the LOTS price list…" : "Loading Amazon products… (open Inventory once if this stays empty)") + "</div>"; $("msCnt").textContent = ""; return; }
     var words = q.split(/\s+/).filter(Boolean);
-    shown = keys.map(function (k) { return all[k]; }).filter(function (i) {
+    var extOn = SRC === "amazon" ? Object.keys(EXT).filter(function (k) { return pick.has(k) && !all[k]; }).map(function (k) { return EXT[k]; }) : [];   // added ASINs stay visible
+    shown = keys.map(function (k) { return all[k]; }).concat(extOn).filter(function (i) {
       if (!words.length) return true;
       var t = ((i.name || "") + " " + (i.sku || "") + " " + i.asin + " " + (i.brand || "") + " " + (i.barcode || "") + " " + (i.lotsCode || "")).toLowerCase();
       return words.every(function (w) { return t.indexOf(w) >= 0; });
@@ -344,7 +345,7 @@
     list.innerHTML = head + (shown.length ? shown.map(function (i) {
       var on = pick.has(i.asin);
       return '<div class="ms-it' + (on ? " on" : "") + '" data-asin="' + esc(i.asin) + '"><span class="ms-ck">' + (on ? "✓" : "") + '</span><span class="ms-im">' + (i.img ? '<img src="' + esc(i.img) + '" loading="lazy" alt="" onerror="this.remove()">' : "") + "</span>" +
-        '<div class="ms-nm"><b title="' + esc(i.name) + '">' + (i.lots ? '<span class="ms-tag">LOTS</span>' : "") + esc(i.name || i.asin) + "</b><small>" + (i.lots ? "Code " + esc(i.lotsCode) + (i.cost != null ? " · cost ₹" + i.cost : "") + (i.mrp ? " · MRP ₹" + i.mrp : "") : esc(i.asin)) + " · " + (i.quantity > 0 ? i.quantity + " in stock" : "0 stock") + "</small></div>" +
+        '<div class="ms-nm"><b title="' + esc(i.name) + '">' + (i.lots ? '<span class="ms-tag">LOTS</span>' : "") + esc(i.name || i.asin) + "</b><small>" + (i.ext ? '<span class="ms-tag">ADDED ASIN</span>' + esc(i.asin) + (i.mrp ? " · MRP ₹" + i.mrp : "") + " · not on your Seller Central" : i.lots ? "Code " + esc(i.lotsCode) + (i.cost != null ? " · cost ₹" + i.cost : "") + (i.mrp ? " · MRP ₹" + i.mrp : "") : esc(i.asin)) + " · " + (i.quantity > 0 ? i.quantity + " in stock" : "0 stock") + "</small></div>" +
         '<span class="ms-pr">' + (i.lots ? (i.cost != null ? "₹" + Math.round(i.cost) : "—") : i.price ? "₹" + Math.round(i.price) : "—") + "</span></div>";
     }).join("") : '<div style="padding:18px;text-align:center;color:var(--muted);font-size:13px">No product matches.</div>');
   }
@@ -641,21 +642,17 @@
   function axUi() {
     var o = $("axOv"); if (o) return o;
     o = document.createElement("div"); o.id = "axOv"; o.className = "ax-ov";
-    o.innerHTML = '<div class="ax-box"><div class="ax-hd"><div><div class="ax-k">Amazon catalogue</div><h3>ASIN → Excel</h3></div><button type="button" class="ax-x" id="axX" title="Close (Esc)">×</button></div>' +
+    o.innerHTML = '<div class="ax-box"><div class="ax-hd"><div><div class="ax-k">Amazon catalogue</div><h3>Add ASINs to the Meesho list</h3></div><button type="button" class="ax-x" id="axX" title="Close (Esc)">×</button></div>' +
       '<div class="ax-bd"><p>Paste Amazon <b>ASINs or product links</b> — one per line, or many at once. They don\'t need to be on your Seller Central. ' +
-      'The robot reads each one from Amazon (title, brand, MRP, barcode, weight, size, maker / packer, bullets, description, photos) and you get an Excel file. Up to 200 at a time; about 1 minute.</p>' +
+      'The robot reads each one from Amazon (title, brand, MRP, barcode, weight, size, maker / packer, bullets, description, photos) and adds it to your Meesho list — those details then fill the Meesho template. Up to 200 at a time; about 1 minute.</p>' +
       '<textarea id="axIn" placeholder="B08T935B9R&#10;https://www.amazon.in/dp/B078H38QTS&#10;…"></textarea><div class="ax-st" id="axSt"></div></div>' +
-      '<div class="ax-ft"><span id="axCnt">0 ASINs</span><button type="button" class="ax-go ghost" id="axAdd" style="display:none"><i class="ti ti-plus"></i>Add to Meesho list</button><button type="button" class="ax-go" id="axGo"><i class="ti ti-download"></i>Fetch &amp; download Excel</button></div></div>';
+      '<div class="ax-ft"><span id="axCnt">0 ASINs</span><button type="button" class="ax-go" id="axGo"><i class="ti ti-plus"></i>Fetch &amp; add to Meesho list</button></div></div>';
     document.body.appendChild(o);
     var close = function () { o.style.display = "none"; };
     $("axX").onclick = close; o.addEventListener("click", function (e) { if (e.target === o) close(); });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape" && o.style.display === "flex") close(); });
     $("axIn").addEventListener("input", function () { axList = axParse($("axIn").value); $("axCnt").textContent = axList.length + " ASIN" + (axList.length === 1 ? "" : "s") + (axList.length > 200 ? " — only the first 200 are read" : ""); });
     $("axGo").onclick = axRun;
-    $("axAdd").onclick = function () {
-      var n = 0; axList.slice(0, 200).forEach(function (a) { if (pick.has(a) || pick.size >= MAX) return; EXT[a] = EXT[a] || { asin: a, sku: "", name: (axDone[a] && axDone[a].title) || "ASIN " + a, quantity: 0, ext: true }; pick.set(a, byAsin()[a] || EXT[a]); n++; });
-      drawList(); drawSteps(); close(); toast(n + " ASIN" + (n === 1 ? "" : "s") + " added to the Meesho list — add a template and click Fill");
-    };
     return o;
   }
   function axParse(t) {
@@ -674,9 +671,20 @@
       var r = await details(list), d = r.d || {}, got = list.filter(function (a) { return d[a]; }), miss = list.filter(function (a) { return !d[a]; });
       got.forEach(function (a) { axDone[a] = d[a]; });
       if (!got.length) throw new Error(r.warn || "Amazon returned nothing for these ASINs — check they are correct");
-      await axExcel(got.map(function (a) { return d[a]; }), miss);
-      st.innerHTML = "<b>✓ " + got.length + " product" + (got.length > 1 ? "s" : "") + " downloaded.</b>" + (miss.length ? ' <span class="bad">Not found on Amazon: ' + miss.map(esc).join(", ") + "</span>" : "") + (r.warn ? ' <span class="bad">' + esc(r.warn) + "</span>" : "");
-      $("axAdd").style.display = "";
+      var n = 0, full = 0;
+      got.forEach(function (a) {
+        var x = d[a], own = byAsin()[a];
+        if (own) { if (!pick.has(a) && pick.size < MAX) { pick.set(a, own); n++; } return; }   // one of your own listings
+        EXT[a] = { asin: a, sku: "", name: x.title || "ASIN " + a, brand: x.brand || "", mrp: Number(x.mrp) || 0, img: (x.images || [])[0] || "", barcode: x.barcode || "", quantity: 0, ext: true };
+        if (pick.size >= MAX) { full++; return; }
+        pick.set(a, EXT[a]); n++;
+      });
+      drawList(); drawSteps();
+      st.innerHTML = "<b>✓ " + n + " product" + (n === 1 ? "" : "s") + " added to your Meesho list</b> with Amazon's details." + (full ? ' <span class="bad">' + full + " not added — a file holds up to " + MAX + " products.</span>" : "") +
+        (miss.length ? ' <span class="bad">Not found on Amazon: ' + miss.map(esc).join(", ") + "</span>" : "") + (r.warn ? ' <span class="bad">' + esc(r.warn) + "</span>" : "") +
+        "<br>Next: pick the Meesho template, then click <b>Fill</b>.";
+      $("axIn").value = ""; axList = []; $("axCnt").textContent = "0 ASINs";
+      if (n && !miss.length && !r.warn) setTimeout(function () { var o = $("axOv"); if (o) o.style.display = "none"; toast(n + " product" + (n === 1 ? "" : "s") + " added — pick the template and click Fill"); }, 1800);
     } catch (e) { st.innerHTML = '<span class="bad">' + esc(e.message || e) + "</span>"; }
     finally { note = oldNote; b.classList.remove("busy"); }
   }
