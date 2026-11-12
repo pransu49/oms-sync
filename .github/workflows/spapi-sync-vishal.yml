@@ -50,6 +50,7 @@ jobs:
           # Quick sync on the 15-minute schedules, full sync otherwise (incl. manual / code updates).
           SYNC_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode) || (github.event_name == 'schedule' && github.event.schedule != '40 */2 * * *' && 'fast') || 'full' }}
           ACCOUNT_LABEL: vishal
+          ACCOUNT_NAME: Vishal E-Commerce
         shell: bash
         run: node spapi-sync.js 2>&1 | tee run.log
 

@@ -827,3 +827,30 @@
     draw();
   })(0);
 } catch (e) {} })();
+
+/* ===== More Amazon accounts on the Amazon page (owner, 12 Nov 2026: Vishal E-Commerce) =====
+   Adds the account to the top switcher and treats ALL own accounts' sellers as "YOU" (shared list spapiSnapshots/ourSellers,
+   written by each account's sync robot). 1 read per page open. Add future accounts to EXTRA below. ===== */
+(function () { try {
+  if (window.__aikmMoreAccts) return; window.__aikmMoreAccts = true;
+  var EXTRA = [{ label: "vishal", name: "Vishal E-Commerce" }];
+  function go() {
+    if (typeof SPAPI_ACCOUNTS === "undefined" || typeof populateSpapiAccountSwitcher !== "function") return false;
+    EXTRA.forEach(function (a) { if (!SPAPI_ACCOUNTS.some(function (x) { return x.label === a.label; })) SPAPI_ACCOUNTS.push(a); });
+    var w = document.getElementById("spapiAccountSwitcherWrap");
+    if (w) { w.innerHTML = ""; populateSpapiAccountSwitcher(); }
+    var h = (location.hash || "").replace("#", "");
+    if (EXTRA.some(function (a) { return a.label === h; }) && typeof spapiCurrentAccount !== "undefined" && spapiCurrentAccount !== h && typeof setSpapiAccount === "function") {
+      setSpapiAccount(h); w && w.querySelectorAll("button[data-acct]").forEach(function (b) { b.classList.toggle("on", b.dataset.acct === h); });
+    }
+    try {
+      fbDbSpapi.collection("spapiSnapshots").doc("ourSellers").get().then(function (d) {
+        var ids = (d.exists && d.data().ids) || {}, n = 0;
+        Object.keys(ids).forEach(function (k) { if (ids[k] && typeof MY_SELLER_IDS !== "undefined" && !MY_SELLER_IDS.has(ids[k])) { MY_SELLER_IDS.add(ids[k]); n++; } });
+        if (n && typeof spMarkAllDirty === "function") { spMarkAllDirty(); spRender(); }
+      }).catch(function () {});
+    } catch (e) {}
+    return true;
+  }
+  (function wait(i) { if (!go() && i < 80) setTimeout(function () { wait(i + 1); }, 250); })(0);
+} catch (e) {} })();

@@ -65,6 +65,8 @@
   ACCOUNT_LABEL `vishal`, secrets `SPAPI_REFRESH_TOKEN_VISHAL` + `SPAPI_SELLER_ID_VISHAL`. Manual runs only until the first test passes; then add
   schedule + push trigger (offset minutes from Sasta Store) and the page account switcher entry. Firebase estimate: ~+2,700 writes/day and
   ~+2,700 deletes/day to the SP-API project.
+  Page switcher entry: `EXTRA` list in the "More Amazon accounts" block at the end of `console/amazon-name-search.js` (keep it).
+  Own seller IDs of every account live in `spapiSnapshots/ourSellers` {ids:{label:sellerId}} — each sync adds its own; robots + page treat them as "us".
 
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.

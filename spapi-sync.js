@@ -2515,6 +2515,15 @@ async function runSync() {
   const test = await spClient.callAPI({ operation: 'getMarketplaceParticipations', endpoint: 'sellers' });
   console.log('Step 0 result:', JSON.stringify(test));
   requestInventoryReport();   // speed: Amazon starts building the listings report now; Step 2 collects it
+  // Own seller IDs of ALL accounts (owner 12 Nov 2026, 3rd account Vishal E-Commerce): one shared doc, each account adds itself.
+  // Our other accounts are never treated as competitors. 1 read per run (+1 write only when an ID is new).
+  try {
+    const ref = db.collection(SNAP_COL).doc('ourSellers'), d = await ref.get(), ids = (d.exists && d.data().ids) || {};
+    Object.values(ids).forEach((x) => x && OUR_SELLER_IDS.add(x));
+    if (process.env.SPAPI_SELLER_ID && ids[ACCOUNT_LABEL] !== process.env.SPAPI_SELLER_ID) {
+      await ref.set({ ids: { [ACCOUNT_LABEL]: process.env.SPAPI_SELLER_ID }, names: { [ACCOUNT_LABEL]: process.env.ACCOUNT_NAME || ACCOUNT_LABEL }, at: Date.now() }, { merge: true });
+    }
+  } catch (e) { console.warn('ourSellers', e.message || e); }
 
   console.log('Step 0a: loading product-type cache...');
   await loadProductTypeCache();
