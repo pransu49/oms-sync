@@ -47,13 +47,13 @@ const why = (e) => {
   try {
     const r = await sp.callAPI({ api_path: '/finances/transfers/2024-06-01/paymentMethods', method: 'GET', query: { marketplaceId: MARKETPLACE_ID } });
     methods = (r && (r.paymentMethods || (r.payload && r.payload.paymentMethods))) || [];
-    console.log('Payment methods:', JSON.stringify(r).slice(0, 1500));
+    console.log('Payment methods:', methods.length, methods.map((m) => m.paymentMethodType + ' ' + m.tail + ' ' + m.assignmentType).join(' | '));
   } catch (e) {
     console.log('getPaymentMethods failed:', e.message || e);
     await tg(`🏦 <b>${esc(NAME)} · Amazon payout ${MODE === 'pay' ? 'NOT requested' : 'check failed'}</b>\n${esc(why(e))}`);
     process.exitCode = MODE === 'pay' ? 1 : 0; return;
   }
-  const list = methods.map((m) => `${m.paymentMethodType || m.type || 'Account'} ${m.tail ? '••' + m.tail : ''}${m.accountHolderName ? ' · ' + m.accountHolderName : ''}${m.assignmentType ? ' (' + m.assignmentType + ')' : ''}`.trim());
+  const list = methods.map((m) => `${m.paymentMethodType || m.type || 'Account'} ${m.tail ? '••' + m.tail : ''}${m.assignmentType ? ' (' + m.assignmentType + ')' : ''}`.trim());
 
   if (MODE !== 'pay') {
     await tg(`🏦 <b>${esc(NAME)} · Amazon payout check (no money moved)</b>\n${list.length ? 'Amazon will pay to:\n' + list.map((x) => '• ' + esc(x)).join('\n') : 'Amazon returned no bank account for Amazon.in.'}\nDaily payout runs at 8 AM.`);
@@ -68,6 +68,8 @@ const why = (e) => {
     await tg(`🏦 <b>${esc(NAME)} · Amazon payout requested ✓</b>\nAvailable balance → ${esc(list[0] || 'your saved bank account')}${id ? '\nReference: ' + esc(id) : ''}\nAmazon usually credits it in 1–3 working days.`);
   } catch (e) {
     console.log('initiatePayout failed:', e.message || e);
+    // backup runs (GitHub sometimes skips the 8 AM timer): stay quiet if today's payout already went
+    if (process.env.PAYOUT_BACKUP === '1' && /24 hours/.test(why(e))) { console.log('Already requested today - backup run quiet.'); return; }
     await tg(`🏦 <b>${esc(NAME)} · Amazon payout NOT requested</b>\n${esc(why(e))}`);
     process.exitCode = 1;
   }

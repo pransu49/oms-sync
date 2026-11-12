@@ -3,6 +3,10 @@ name: Amazon Payout (Sasta Store)
 # Owner, 12 Nov 2026: request Amazon payout of the available balance daily at 8 AM IST (02:30 UTC).
 # Amazon pays ONLY to the bank account saved in Seller Central; one payout per 24 h (Amazon's rule).
 on:
+  schedule:
+    - cron: '30 2 * * *'     # 8:00 AM IST - payout
+    - cron: '50 2 * * *'     # 8:20 AM IST - backup (GitHub sometimes skips a timer); quiet if already paid today
+    - cron: '30 3 * * *'     # 9:00 AM IST - backup
   workflow_dispatch:
     inputs:
       mode:
@@ -32,4 +36,5 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ACCOUNT_NAME: Sasta Store
           PAYOUT_MODE: ${{ (github.event_name == 'schedule' && 'pay') || inputs.mode || 'check' }}
+          PAYOUT_BACKUP: ${{ (github.event_name == 'schedule' && github.event.schedule != '30 2 * * *' && '1') || '0' }}
         run: node payout-robot.js
