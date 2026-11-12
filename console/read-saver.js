@@ -78,3 +78,43 @@
     setInterval(function () { if (!off && Date.now() - last >= LONG) { off = true; each("disableNetwork"); } }, 60e3);
   })();
 })();
+
+/* Live Status honesty fix (12 Nov 2026). The Firebase card only ESTIMATES read/write/delete charges; the real bill
+   also has download (data transfer) charges. When all projects are on the free Spark plan, Google gives no usage
+   numbers and cannot charge - say that instead of a ₹0.00 "Blaze" card and wrong setup steps. */
+(function () {
+  if (window.__aikmFbCard) return; window.__aikmFbCard = 1;
+  var U = null, at = 0, busy = false;
+  function load(cb) {
+    if (U && Date.now() - at < 10 * 60e3) return cb(U);
+    if (busy || typeof fbDb === "undefined" || !fbDb) return; busy = true;
+    fbDb.collection("aikm_admin").doc("firebaseUsage").get().then(function (d) { U = d.exists ? d.data() : {}; at = Date.now(); busy = false; cb(U); }, function () { busy = false; });
+  }
+  function fix(box) {
+    load(function (u) {
+      var free = u.plan === "free" || (u.projects && Object.keys(u.projects).length && Object.keys(u.projects).every(function (k) { return u.projects[k].freePlan; }));
+      var kick = box.querySelector(".fb-kick");
+      if (free) {
+        if (kick) kick.textContent = "Firebase · Free plan (Spark)";
+        box.querySelectorAll(".fb-kpis, .fb-budget, .fb-need").forEach(function (el) { el.style.display = "none"; });
+        if (!box.querySelector(".aikm-free-note")) {
+          var n = document.createElement("div"); n.className = "aikm-free-note";
+          n.style.cssText = "margin:12px 0;padding:12px 14px;border-radius:12px;background:#E7F4EC;color:#1E5B3B;font-size:13px;line-height:1.5";
+          n.innerHTML = "<b>No charges possible</b> — billing is switched off on all 3 Firebase projects, so Google cannot bill you.<br>" +
+            "Free limits: 50,000 reads/day per project and <b>10 GB of downloads per month</b>. If a limit is reached, that tool stops until the limit resets.<br>" +
+            "Google does not share usage numbers on the free plan — see <b>Firebase console → Usage and billing</b>.";
+          (kick && kick.closest(".fb-head") ? kick.closest(".fb-head") : box.firstChild).insertAdjacentElement("afterend", n);
+        }
+      } else if (!box.querySelector(".aikm-est-note")) {
+        if (kick) kick.textContent = kick.textContent.replace(/Blaze plan/i, "Blaze plan · estimate");
+        var m = document.createElement("div"); m.className = "aikm-est-note";
+        m.style.cssText = "margin:8px 0 0;font-size:12px;color:#A66A00";
+        m.textContent = "Estimate of read/write/delete charges only — your real bill also includes download (data transfer) and storage charges. Real bill: Google Cloud Billing → Reports.";
+        box.appendChild(m);
+      }
+    });
+  }
+  new MutationObserver(function () {
+    var box = document.querySelector(".fb-box"); if (box && !box.__aikmFixed) { box.__aikmFixed = 1; fix(box); }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+})();

@@ -143,6 +143,8 @@ async function main() {
     } catch (e) {
       entry.ok = false; entry.error = e.message;
       entry.needsPermission = e.status === 403 || /permission|denied/i.test(e.message);
+      // Project is on the free Spark plan (billing switched off): Google gives no usage numbers then, and can't charge.
+      if (/requires billing to be enabled/i.test(e.message)) { entry.freePlan = true; entry.needsPermission = false; }
       console.log(`${key} (${sa.project_id}): could not read usage — ${e.message}`);
     }
     out.projects[key] = entry;
@@ -153,6 +155,11 @@ async function main() {
     monthInr: Math.round(monthInr * 100) / 100,
     monthProjectedInr: Math.round((monthInr - todayInr + projTodayInr * (daysInMonth - (+todayKey.slice(8)) + 1)) * 100) / 100,
   };
+  const ents = Object.values(out.projects);
+  out.plan = ents.length && ents.every((p) => p.freePlan) ? 'free' : ents.some((p) => p.freePlan) ? 'mixed' : 'blaze';
+  // Honest note: this card only estimates Firestore reads/writes/deletes. Google ALSO bills data downloads
+  // ("Cloud Firestore Internet Data Transfer Out") and storage - see the real bill in Google Cloud Billing → Reports.
+  out.note = 'Estimate covers Firestore reads, writes and deletes only - not download (data transfer) or storage charges. Real bill: Google Cloud Billing → Reports.';
   await docRef.set(out);
   console.log(`Cost: today ₹${out.cost.todayInr} (→ ₹${out.cost.todayProjectedInr} by reset) · this month ₹${out.cost.monthInr} of ₹${BUDGET_INR} · USD→INR ${rate}`);
   console.log('Usage saved.');
