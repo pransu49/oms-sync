@@ -988,9 +988,9 @@
     sec.innerHTML = `
       <div class="banner info">Same product saved twice (new barcode, different spelling). <b>Same name + same size is now joined automatically</b> (barcode ignored). Below are only <b>similar</b> names — pick the one to <b>keep</b>, then <b>Merge</b>. Different sizes are never grouped. Stock, prices and auto bills follow the merge. Nothing changes until you press Merge.</div>
       ${g.some(x => x.sure) ? `<div class="row between"><span class="note">${g.filter(x => x.sure).length} groups have exactly the same name · ${g.filter(x => !x.sure).length} are similar (check those one by one)</span><button class="btn small" id="dAllSure">Merge all "Same name" into latest</button></div>` : ""}
-      ${g.length ? g.map((grp, gi) => `<div class="tablebox" data-g="${gi}"><table class="ab-t"><thead><tr><th style="width:60px">Keep</th><th>${grp.sure ? '<span class="pill bad">Same name</span>' : '<span class="pill warn">Similar name — check</span>'}</th><th>Barcode</th><th>Last bought</th><th class="r">Bought</th><th class="r">Rate</th><th class="r">MRP</th></tr></thead><tbody>
-        ${grp.items.map((x, i) => `<tr><td><input type="radio" name="keep${gi}" value="${i}" ${i === 0 ? "checked" : ""} style="width:18px;height:18px"></td><td><span class="pn">${esc(x.name)}</span><div class="sub">${esc(x.sup)}</div></td><td class="mono sub">${esc(x.barcode || "—")}</td><td class="num">${x.last ? fmtD(x.last) + " " + x.last.slice(2, 4) : "—"}</td><td class="r num">${+x.qty.toFixed(2)} <span class="sub">(${x.bills} bills)</span></td><td class="r num">${x.rate ? inr(x.rate, 2) : "—"}</td><td class="r num">${x.mrp ? inr(x.mrp, 2) : "—"}</td></tr>`).join("")}
-        </tbody></table><div class="row" style="padding:10px 12px;justify-content:flex-end"><span class="msg note" style="margin-right:auto"></span><button class="btn small dIgn">Not duplicate</button><button class="btn small primary dMerge">Merge into kept</button></div></div>`).join("")
+      ${g.length ? g.map((grp, gi) => `<div class="tablebox" data-g="${gi}"><table class="ab-t"><thead><tr><th style="width:60px">Keep</th><th style="width:60px" title="Untick a product that is NOT the same — it stays separate">Same?</th><th>${grp.sure ? '<span class="pill bad">Same name</span>' : '<span class="pill warn">Similar name — check</span>'}</th><th>Barcode</th><th>Last bought</th><th class="r">Bought</th><th class="r">Rate</th><th class="r">MRP</th></tr></thead><tbody>
+        ${grp.items.map((x, i) => `<tr><td><input type="radio" name="keep${gi}" value="${i}" ${i === 0 ? "checked" : ""} style="width:18px;height:18px"></td><td><input type="checkbox" class="dInc" data-i="${i}" checked style="width:18px;height:18px"></td><td><span class="pn">${esc(x.name)}</span><div class="sub">${esc(x.sup)}</div></td><td class="mono sub">${esc(x.barcode || "—")}</td><td class="num">${x.last ? fmtD(x.last) + " " + x.last.slice(2, 4) : "—"}</td><td class="r num">${+x.qty.toFixed(2)} <span class="sub">(${x.bills} bills)</span></td><td class="r num">${x.rate ? inr(x.rate, 2) : "—"}</td><td class="r num">${x.mrp ? inr(x.mrp, 2) : "—"}</td></tr>`).join("")}
+        </tbody></table><div class="row" style="padding:10px 12px;justify-content:flex-end"><span class="msg note" style="margin-right:auto"></span><button class="btn small dIgn">Not duplicate</button><button class="btn small primary dMerge">Merge ticked into kept</button></div></div>`).join("")
       : `<div class="ab-load">No duplicate products found. 👍</div>`}`;
     const all = $("#dAllSure"); if (all) all.onclick = async () => {
       const sure = g.filter(x => x.sure);
@@ -1001,12 +1001,17 @@
     };
     sec.querySelectorAll("[data-g]").forEach(box => {
       const grp = g[+box.dataset.g], msg = box.querySelector(".msg");
+      box.querySelectorAll("input[type=radio]").forEach(r => r.onchange = () => { const c = box.querySelector(`.dInc[data-i="${r.value}"]`); if (c) c.checked = true; });
       box.querySelector(".dIgn").onclick = async () => {
         try { await sbPut([{ kind: "dup_ignore", id: grp.id, data: { keys: grp.items.map(x => x.key), at: nowIso() } }]); DUP.groups.splice(DUP.groups.indexOf(grp), 1); toast("Marked as different products"); dupRender(false); }
         catch (e) { msg.textContent = "Not saved: " + e.message; }
       };
       box.querySelector(".dMerge").onclick = async () => {
-        const keep = grp.items[+box.querySelector("input[type=radio]:checked").value], rest = grp.items.filter(x => x !== keep);
+        const keep = grp.items[+box.querySelector("input[type=radio]:checked").value];
+        const inc = new Set([...box.querySelectorAll(".dInc")].filter(c => c.checked).map(c => grp.items[+c.dataset.i]));
+        if (!inc.has(keep)) { msg.textContent = "Tick “Same?” on the product you keep."; return; }
+        const rest = grp.items.filter(x => x !== keep && inc.has(x)), apart = grp.items.filter(x => !inc.has(x));
+        if (!rest.length) { msg.textContent = "Tick at least one more product to merge — or press Not duplicate."; return; }
         if (!(await askYes(`Merge ${rest.length} product${rest.length > 1 ? "s" : ""} into:\n${keep.name} (${keep.barcode || "no barcode"})?\n\n${rest.map(x => "• " + x.name + " (" + (x.barcode || "no barcode") + ")").join("\n")}`, "Merge"))) return;
         box.querySelectorAll("button").forEach(b => b.disabled = true); msg.textContent = "Merging…";
         try {
@@ -1016,6 +1021,10 @@
           if (m.map[keep.key]) delete m.map[keep.key];
           if (!m.names[keep.key]) m.names[keep.key] = keep.name;
           await sbPut([{ kind: "setting", id: "product_merge", data: { ...m, savedAt: nowIso() } }]);
+          if (apart.length) {   // the unticked ones are different products: don't suggest them with the kept one again
+            const sig = [keep, ...apart].map(x => x.key).sort().join("|");
+            await sbPut([{ kind: "dup_ignore", id: "dup:" + sig.slice(0, 180), data: { keys: [keep, ...apart].map(x => x.key), at: nowIso() } }]);
+          }
           DUP.groups.splice(DUP.groups.indexOf(grp), 1); D = null;
           toast(`Merged into ${keep.name}. The tool refreshes within 30 seconds.`, 5000); dupRender(false);
         } catch (e) { box.querySelectorAll("button").forEach(b => b.disabled = false); msg.textContent = "Not merged: " + e.message; }
