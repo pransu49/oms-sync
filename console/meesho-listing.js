@@ -137,12 +137,26 @@
     document.head.appendChild(st);
   }
 
-  /* ---------- 1. tab + layout ---------- */
+  /* ---------- 1. tab + layout ----------
+     Owner 12 Nov 2026: Meesho Listing is its OWN tool on the AIKM dashboard (dalbhaat.in/pages/aikm), not a tab on the Amazon page.
+     It opens as  /pages/amazon?app=meesho  (same Amazon data, Amazon tabs + KPI tiles hidden). Without ?app=meesho no tab is added. */
+  var APP = /[?&]app=meesho(&|$)/.test(location.search);
+  function appMode() {
+    if ($("msAppCss")) return;
+    var st = document.createElement("style"); st.id = "msAppCss";
+    st.textContent = ".ap-kpis,.ap-bar,#rlOpen,#aaOpen,.rpanel:not(#spapiRpanel-" + ID + "){display:none!important}#spapiRpanel-" + ID + "{display:block!important}";
+    document.head.appendChild(st);
+    var t = document.querySelector(".ap-title"); if (t) t.textContent = "Meesho Listing";
+    var m = document.querySelector(".ap-mark"); if (m) m.textContent = "M";
+    document.title = "Meesho Listing — AIKM";
+  }
+  if (APP) appMode();
   function setup() {
     var bar = $("spapiRtabbar"), last = $("spapiRpanel-pricing");
+    if (!APP) { var old = $("msTab"); if (old) old.remove(); return; }
     if (!bar || !last || $("msTab")) return;
-    css();
-    bar.insertAdjacentHTML("beforeend", '<button class="rtabbtn" id="msTab" data-spapi-r="' + ID + '"><i class="ti ti-robot"></i>Meesho</button>');
+    css(); appMode();
+    bar.insertAdjacentHTML("beforeend", '<button class="rtabbtn" id="msTab" data-spapi-r="' + ID + '" style="display:none"><i class="ti ti-robot"></i>Meesho</button>');
     var panel = $("spapiRpanel-" + ID) || (function () {
       var host = document.querySelectorAll('.rpanel[id^="spapiRpanel-"]'); var after = host[host.length - 1] || last;
       after.insertAdjacentHTML("afterend", '<div class="rpanel" id="spapiRpanel-' + ID + '"><div class="ap-card" id="msBody"></div></div>');
@@ -151,6 +165,10 @@
     var sw = window.switchSpapiSubtabKpi;
     if (typeof sw === "function") window.switchSpapiSubtabKpi = function (n) { sw(n); if (n === ID) draw(); };
     bar.addEventListener("click", function (e) { var b = e.target.closest('[data-spapi-r="' + ID + '"]'); if (b && typeof sw !== "function") { document.querySelectorAll("#spapiRtabbar .rtabbtn").forEach(function (x) { x.classList.toggle("active", x === b); }); document.querySelectorAll(".rpanel").forEach(function (p) { p.classList.toggle("active", p === panel); }); draw(); } });
+    /* open it straight away, and redraw the product list whenever Amazon data (re)loads or the account changes */
+    if (typeof window.switchSpapiSubtabKpi === "function") window.switchSpapiSubtabKpi(ID); else $("msTab").click();
+    var ap = window.applySpapiData;
+    if (typeof ap === "function") window.applySpapiData = function (d) { ap.apply(this, arguments); try { draw(); } catch (e) {} };
   }
 
   function draw() {

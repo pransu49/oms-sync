@@ -15,7 +15,9 @@
 - The RTO Check tab (`console/rto-tab.js`) is loaded by the block at the end of `console/refund-tab.js` (`aikmRtoJs`).
   Keep that block when replacing `refund-tab.js`. Its data comes from `rto-sync.js` (aikm_admin/rtoIndex).
 - The Meesho Listing tab on the Amazon page (`console/meesho-listing.js`) is loaded by the block at the end of
-  `console/amazon-name-search.js` (`aikmMeeshoListingJs`). (Different from `console/meesho-tab.js`, the Meesho + Snapdeal packing page.) Keep that block when replacing `amazon-name-search.js`.
+  `console/amazon-name-search.js` (`aikmMeeshoListingJs`).
+  Owner 12 Nov 2026: it is NOT a tab on the Amazon page any more — it is its own tool on the AIKM dashboard (`/pages/aikm`),
+  opened as `/pages/amazon?app=meesho` (Amazon tabs + KPI tiles hidden, same Amazon data). Without `?app=meesho` no Meesho tab is added. (Different from `console/meesho-tab.js`, the Meesho + Snapdeal packing page.) Keep that block when replacing `amazon-name-search.js`.
   Its Amazon details come from `meesho-robot.js` (workflow `meesho-robot.yml`, on command only) -> spapiSnapshots/meesho_<ASIN>.
   Saved templates (owner 7 Nov 2026): every fresh template dropped is kept in main Firebase, one per category — index `aikm_admin/meeshoTplIndex`
   + file parts `aikm_admin/meeshoTpl_<key>_<n>` (base64). 1 read when the tab opens, 1-2 per template opened. Do not delete them.
