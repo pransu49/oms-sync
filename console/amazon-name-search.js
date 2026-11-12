@@ -833,7 +833,7 @@
    written by each account's sync robot). 1 read per page open. Add future accounts to EXTRA below. ===== */
 (function () { try {
   if (window.__aikmMoreAccts) return; window.__aikmMoreAccts = true;
-  var EXTRA = [{ label: "vishal", name: "Vishal E-Commerce" }];
+  var EXTRA = [{ label: "vishal", name: "Vishal E-Commerce" }, { label: "munda", name: "Ecommerce Munda" }];
   function go() {
     if (typeof SPAPI_ACCOUNTS === "undefined" || typeof populateSpapiAccountSwitcher !== "function") return false;
     EXTRA.forEach(function (a) { if (!SPAPI_ACCOUNTS.some(function (x) { return x.label === a.label; })) SPAPI_ACCOUNTS.push(a); });

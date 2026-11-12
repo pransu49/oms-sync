@@ -77,4 +77,4 @@ jobs:
           JOB_STATUS: ${{ job.status }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: node report-health.js spapi_sasta "Amazon sync (Sasta Store)" run.log || true
+        run: node report-health.js spapi_vishal "Amazon sync (Vishal E-Commerce)" run.log || true

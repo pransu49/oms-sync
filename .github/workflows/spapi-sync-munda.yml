@@ -1,0 +1,74 @@
+name: SP-API Sync (Ecommerce Munda)
+
+on:
+  # schedule OFF until the owner confirms Munda's rules after the first check-only run (owner, 12 Nov 2026)
+  workflow_dispatch:         # also triggered by cron-job.org (GitHub's own timer skips many runs)
+    inputs:
+      mode:
+        description: 'fast = stock/price/orders only, full = everything incl. competitor prices'
+        default: 'full'
+# Never run two syncs for the same account at once - a new one waits for the current one.
+concurrency:
+  group: spapi-sync-munda
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install amazon-sp-api firebase-admin
+
+      # Saved copy of the LOTS catalogue (saves ~25 console Firebase reads per run; the script
+      # re-reads it only when it changed). Shared by both Amazon accounts.
+      - name: Restore saved LOTS catalogue
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/lots-catalog.json
+          key: lots-catalog-${{ github.run_id }}
+          restore-keys: lots-catalog-
+
+      - name: Run SP-API sync
+        env:
+          # Same Amazon developer app as Praso / Sasta Store - only the refresh token and seller ID differ per account.
+          SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
+          SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
+          SPAPI_REFRESH_TOKEN: ${{ secrets.SPAPI_REFRESH_TOKEN_MUNDA }}
+          SPAPI_SELLER_ID: ${{ secrets.SPAPI_SELLER_ID_MUNDA }}
+          # Same two Firebase projects as Praso (the Amazon page reads from the SP-API one).
+          FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # Quick sync on the 15-minute schedules, full sync otherwise (incl. manual / code updates).
+          SYNC_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode) || (github.event_name == 'schedule' && github.event.schedule != '20 */2 * * *' && 'fast') || 'full' }}
+          ACCOUNT_LABEL: munda
+          ACCOUNT_NAME: Ecommerce Munda
+          # CHECK-ONLY until the owner confirms (no stock-to-0 rule, no relists). Prices are suggest-only anyway.
+          STOCK_GUARD: 'off'
+          RELIST_ROBOT: 'off'
+        shell: bash
+        run: node spapi-sync.js 2>&1 | tee run.log
+
+      - name: Keep LOTS catalogue copy for the next run
+        if: always() && hashFiles('.cache/lots-catalog.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/lots-catalog.json
+          key: lots-catalog-${{ hashFiles('.cache/lots-catalog.json') }}
+
+      - name: Report sync health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node report-health.js spapi_munda "Amazon sync (Ecommerce Munda)" run.log || true

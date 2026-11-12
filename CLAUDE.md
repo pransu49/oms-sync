@@ -68,6 +68,10 @@
   Page switcher entry: `EXTRA` list in the "More Amazon accounts" block at the end of `console/amazon-name-search.js` (keep it).
   Own seller IDs of every account live in `spapiSnapshots/ourSellers` {ids:{label:sellerId}} — each sync adds its own; robots + page treat them as "us".
 
+- **Ecommerce Munda** (4th Amazon account, owner 12 Nov 2026): workflow `spapi-sync-munda.yml`, label `munda`, secrets `SPAPI_REFRESH_TOKEN_MUNDA` +
+  `SPAPI_SELLER_ID_MUNDA`. CHECK-ONLY (STOCK_GUARD off, RELIST_ROBOT off, no schedule) until the owner confirms its rules. In page `EXTRA` list.
+  Each account's workflow reports health under its own key (`spapi_vishal`, `spapi_munda`) — don't copy Sasta's.
+
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.
 Current daily use is on the console's Firebase usage card (aikm_admin/firebaseUsage). Keep each project **under ~35,000 reads/day**.
