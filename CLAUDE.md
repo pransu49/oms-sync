@@ -61,6 +61,10 @@
   A SKU still in stock in the report but "not found" on Amazon is queued to Add ASIN (`spapiAddAsin`, source `relist-gone`, wantPrice = last
   price) at most once a day per ASIN.
 
+- **Ecommerce Munda** (3rd Amazon account, owner 12 Nov 2026): workflow `spapi-sync-munda.yml`, ACCOUNT_LABEL `munda`, secrets
+  `SPAPI_REFRESH_TOKEN_MUNDA` + `SPAPI_SELLER_ID_MUNDA`. Manual runs only until the first test passes; then add schedule + push trigger
+  (offset minutes from Sasta Store) and the page account switcher entry. Firebase estimate: ~+2,700 writes/day and ~+2,700 deletes/day to the SP-API project.
+
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.
 Current daily use is on the console's Firebase usage card (aikm_admin/firebaseUsage). Keep each project **under ~35,000 reads/day**.
