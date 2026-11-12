@@ -843,6 +843,14 @@
     if (EXTRA.some(function (a) { return a.label === h; }) && typeof spapiCurrentAccount !== "undefined" && spapiCurrentAccount !== h && typeof setSpapiAccount === "function") {
       setSpapiAccount(h); w && w.querySelectorAll("button[data-acct]").forEach(function (b) { b.classList.toggle("on", b.dataset.acct === h); });
     }
+    /* Also: any seller you named after one of your accounts (e.g. "Vishal E-commerce") counts as YOU - works before that
+       account's robot has saved its seller ID. */
+    (function byName(n) {
+      if (typeof STORE === "undefined" || !STORE.sellerNames || !Object.keys(STORE.sellerNames).length || typeof MY_SELLER_IDS === "undefined") { if (n < 120) setTimeout(function () { byName(n + 1); }, 500); return; }
+      var keys = EXTRA.map(function (a) { return a.name.toLowerCase().split(/[\s-]+/)[0]; }), added = 0;
+      Object.keys(STORE.sellerNames).forEach(function (id) { var nm = String(STORE.sellerNames[id] || "").toLowerCase(); if (!MY_SELLER_IDS.has(id) && keys.some(function (k) { return k && nm.indexOf(k) === 0; })) { MY_SELLER_IDS.add(id); added++; } });
+      if (added && typeof spMarkAllDirty === "function") { spMarkAllDirty(); spRender(); }
+    })(0);
     try {
       fbDbSpapi.collection("spapiSnapshots").doc("ourSellers").get().then(function (d) {
         var ids = (d.exists && d.data().ids) || {}, n = 0;
