@@ -16,19 +16,24 @@ const dbMain = mainApp.firestore();
 // ── Firebase usage meter (owner 12 Nov 2026: "ensure all syncs stay under free limits") ──
 // Counts reads / writes / deletes per Firebase project in this run and prints one line at the end:
 // "FIREBASE OPS spapi r=.. w=.. d=.. | main r=.. w=.. d=..". Counting only - nothing extra is read or written.
-const FB_OPS = { spapi: { r: 0, w: 0, d: 0 }, main: { r: 0, w: 0, d: 0 } };
+const FB_OPS = { spapi: { r: 0, w: 0, d: 0 }, main: { r: 0, w: 0, d: 0 } }, FB_COL = {};
 (function meter() {
-  const F = admin.firestore, which = (ref) => (ref && ref.firestore === dbMain ? FB_OPS.main : FB_OPS.spapi);
+  const F = admin.firestore, isMain = (fs) => fs === dbMain;
+  const tally = (fs, col, op, n = 1) => { const p = isMain(fs) ? 'main' : 'spapi'; FB_OPS[p][op] += n; const k = `${p}:${col}:${op}`; FB_COL[k] = (FB_COL[k] || 0) + n; };
+  const colOf = (ref) => { try { return String(ref.path || '').split('/')[0] || (ref._queryOptions && ref._queryOptions.collectionId) || '?'; } catch (e) { return '?'; } };
   const DR = F.DocumentReference.prototype, Q = F.Query.prototype, WB = F.WriteBatch.prototype;
   const wrap = (proto, name, fn) => { const o = proto[name]; proto[name] = function (...a) { try { fn(this, a); } catch (e) {} return o.apply(this, a); }; };
-  ['set', 'update', 'create'].forEach((m) => wrap(DR, m, (ref) => { which(ref).w++; }));
-  wrap(DR, 'delete', (ref) => { which(ref).d++; });
-  const oQ = Q.get; Q.get = function (...a) { const c = which(this); return oQ.apply(this, a).then((snap) => { c.r += Math.max(1, snap.size); return snap; }); };
-  ['set', 'update', 'create'].forEach((m) => wrap(WB, m, (b, a) => { which(a[0]).w++; }));
-  wrap(WB, 'delete', (b, a) => { which(a[0]).d++; });
+  ['set', 'update', 'create'].forEach((m) => wrap(DR, m, (ref) => tally(ref.firestore, colOf(ref), 'w')));
+  wrap(DR, 'delete', (ref) => tally(ref.firestore, colOf(ref), 'd'));
+  const oQ = Q.get; Q.get = function (...a) { const q = this; return oQ.apply(this, a).then((snap) => { try { tally(q.firestore, (q._queryOptions && q._queryOptions.collectionId) || '?', 'r', Math.max(1, snap.size)); } catch (e) {} return snap; }); };
+  ['set', 'update', 'create'].forEach((m) => wrap(WB, m, (b, a) => tally(a[0].firestore, colOf(a[0]), 'w')));
+  wrap(WB, 'delete', (b, a) => tally(a[0].firestore, colOf(a[0]), 'd'));
   const oGetAll = F.Firestore.prototype.getAll;
-  if (oGetAll) F.Firestore.prototype.getAll = function (...a) { (this === dbMain ? FB_OPS.main : FB_OPS.spapi).r += a.filter((x) => x && x.path).length; return oGetAll.apply(this, a); };
-  process.on('exit', () => console.log(`FIREBASE OPS ${process.env.ACCOUNT_LABEL || 'praso'} ${process.env.SYNC_MODE || 'full'} | spapi r=${FB_OPS.spapi.r} w=${FB_OPS.spapi.w} d=${FB_OPS.spapi.d} | main r=${FB_OPS.main.r} w=${FB_OPS.main.w} d=${FB_OPS.main.d}`));
+  if (oGetAll) F.Firestore.prototype.getAll = function (...a) { const fs = this; a.filter((x) => x && x.path).forEach((x) => tally(fs, colOf(x), 'r')); return oGetAll.apply(this, a); };
+  process.on('exit', () => {
+    console.log(`FIREBASE OPS ${process.env.ACCOUNT_LABEL || 'praso'} ${process.env.SYNC_MODE || 'full'} | spapi r=${FB_OPS.spapi.r} w=${FB_OPS.spapi.w} d=${FB_OPS.spapi.d} | main r=${FB_OPS.main.r} w=${FB_OPS.main.w} d=${FB_OPS.main.d}`);
+    console.log('FIREBASE OPS BY COLLECTION ' + Object.entries(FB_COL).sort((x, y) => y[1] - x[1]).map(([k, n]) => `${k}=${n}`).join(' '));
+  });
 })();
 
 const MARKETPLACE_ID = 'A21TJRUUN4KGV';
