@@ -1028,6 +1028,22 @@ async function runRelistRobot(sellerId) {
         st.cool[asin] = Date.parse(sum.createdDate) + job.minAge * 864e5; continue;
       }
       oldWhy = (old.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR').map((x) => x.message).filter(Boolean).join(' | ').slice(0, 400) || null;
+      // Fix (owner, 12 Nov 2026: 12 relisted SKUs were live with NO price, so they never sold): the listings report leaves
+      // the price blank for inactive SKUs, and the relist copied that blank. Use the price on the old offer, else the
+      // price from the last relist record; with no known price at all, do not relist (a priceless listing can't sell).
+      if (!(Number(i.price) > 0)) {
+        const offerP = Number((((((old.attributes || {}).purchasable_offer || [])[0] || {}).our_price || [])[0] || {}).schedule?.[0]?.value_with_tax) || null;
+        const prevP = Number(((SNAP.pricing[`${ACCOUNT_LABEL}_${asin}`] || {}).relist || {}).price) || null;
+        const known = offerP || prevP;
+        if (!known) {
+          console.log(`Relist ${oldSku}: no selling price known - not relisted (set the price on the Amazon page).`);
+          st.cool[asin] = now + RELIST_COOLDOWN_FAIL; delete streak[oldSku];
+          await log(i, { status: 'price_issue', why: 'This listing has no selling price on Amazon', fixNote: 'Set a price for this SKU (Inventory tab → Price → Push) - the robot relists only with a price.' });
+          continue;
+        }
+        console.log(`Relist ${oldSku}: Amazon report had no price - using Rs ${known} (${offerP ? 'old offer' : 'last relist'}).`);
+        i.price = known;
+      }
       // Suppressed by Amazon for its price: a relist at the same price is suppressed again - show the reason instead.
       // 21 Oct 2026: price fixes did NOT clear "below your minimum price threshold" (18155) even after 5+ h with no
       // min price left on the listing, while relists came back live ~90% of the time. So: fix the price once; if the
@@ -1035,7 +1051,13 @@ async function runRelistRobot(sellerId) {
       st.pfix = st.pfix || {};
       const priceBlocked = (old.issues || []).some((x) => (x.severity || '').toUpperCase() === 'ERROR' && (x.categories || []).includes('INVALID_PRICE'));
       const fixTriedAt = st.pfix[asin];
-      if (priceBlocked && fixTriedAt && now - fixTriedAt > 2 * 3600e3) {
+      // 12 Nov 2026: in suggest-only mode the price fix never runs, so "below your minimum price threshold" listings stayed
+      // hidden for good. That block comes from the OLD listing's own min-price limit - a new SKU at the SAME price has no
+      // limit and came back live ~90% of the time (21 Oct). Same price = no price change, so this is allowed in suggest-only mode.
+      const minLimitBlock = priceBlocked && /minimum price threshold/i.test(oldWhy || '');
+      if (minLimitBlock && !PRICE_AUTO) {
+        console.log(`Relist ${oldSku}: blocked by the listing's own minimum-price limit - relisting as a new SKU at the same price Rs ${i.price}.`);
+      } else if (priceBlocked && fixTriedAt && now - fixTriedAt > 2 * 3600e3) {
         console.log(`Relist ${oldSku}: still blocked for its price ${Math.round((now - fixTriedAt) / 36e5)} h after the price fix - relisting as a new SKU at Rs ${i.price}.`);
         delete st.pfix[asin];
       } else if (priceBlocked) {

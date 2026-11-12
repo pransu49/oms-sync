@@ -52,6 +52,10 @@
   `initiatePayout` supports only EU stores (DE FR IT ES SE NL PL BE); Amazon.in returns "Provided MarketplaceId is invalid". `getPaymentMethods`
   (read-only) does work for Amazon.in. Kept for a manual `check` run / if Amazon adds India. No schedule.
 
+- **Relist fixes** (owner 12 Nov 2026, "Not selling" stuck): the relist robot never relists with a blank price (fallback: old offer's
+  `our_price`, then the last relist record's price; none = skip with a note). In suggest-only mode, listings blocked by "below your minimum
+  price threshold" are relisted as a new SKU at the SAME price (no price change). "Price too low / may be an error" stays a price suggestion.
+
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.
 Current daily use is on the console's Firebase usage card (aikm_admin/firebaseUsage). Keep each project **under ~35,000 reads/day**.
