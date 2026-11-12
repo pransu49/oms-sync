@@ -1,0 +1,35 @@
+name: Amazon Payout (Sasta Store)
+
+# Owner, 12 Nov 2026: request Amazon payout of the available balance daily at 8 AM IST (02:30 UTC).
+# Amazon pays ONLY to the bank account saved in Seller Central; one payout per 24 h (Amazon's rule).
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check = read-only (list bank account, move nothing) · pay = request payout now'
+        default: 'check'
+
+concurrency:
+  group: payout-sastastore
+  cancel-in-progress: false
+
+jobs:
+  payout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install amazon-sp-api
+      - name: Request payout
+        env:
+          SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
+          SPAPI_CLIENT_SECRET: ${{ secrets.SPAPI_CLIENT_SECRET }}
+          SPAPI_REFRESH_TOKEN: ${{ secrets.SPAPI_REFRESH_TOKEN_SASTASTORE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ACCOUNT_NAME: Sasta Store
+          PAYOUT_MODE: ${{ (github.event_name == 'schedule' && 'pay') || inputs.mode || 'check' }}
+        run: node payout-robot.js
