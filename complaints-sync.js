@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // complaints-sync.js — buyer complaints for the console's Complaints tab (read-only on Amazon).
 //
 // Per account with a working SP-API key:

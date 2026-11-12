@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // rto-sync.js — builds the RTO Check list for the console (read-only on Amazon and NimbusPost).
 //
 // Sources

@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // refund-robot.js
 // Submits refunds to Amazon ONLY when someone clicks "Refund now" in the console's Bulk Refund tab
 // (after checking the details). Never runs by itself.

@@ -21,7 +21,6 @@ const FB_OPS = { spapi: { r: 0, w: 0, d: 0 }, main: { r: 0, w: 0, d: 0 } };
   const F = admin.firestore, which = (ref) => (ref && ref.firestore === dbMain ? FB_OPS.main : FB_OPS.spapi);
   const DR = F.DocumentReference.prototype, Q = F.Query.prototype, WB = F.WriteBatch.prototype;
   const wrap = (proto, name, fn) => { const o = proto[name]; proto[name] = function (...a) { try { fn(this, a); } catch (e) {} return o.apply(this, a); }; };
-  const oGet = DR.get; DR.get = function (...a) { which(this).r++; return oGet.apply(this, a); };
   ['set', 'update', 'create'].forEach((m) => wrap(DR, m, (ref) => { which(ref).w++; }));
   wrap(DR, 'delete', (ref) => { which(ref).d++; });
   const oQ = Q.get; Q.get = function (...a) { const c = which(this); return oQ.apply(this, a).then((snap) => { c.r += Math.max(1, snap.size); return snap; }); };

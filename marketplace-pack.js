@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // marketplace-pack.js — AIKM Meesho + Snapdeal robot (OMS Guru)
 // Every run (daily at 11:30 AM IST, Mon-Sat, see .github/workflows/marketplace-pack.yml):
 //   1. Logs into OMS Guru and reads ALL "New" orders, keeps the Meesho and Snapdeal ones

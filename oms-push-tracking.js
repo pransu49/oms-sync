@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // oms-push-tracking.js
 // Pushes NimbusPost (and Zippy) AWBs into OMS Guru using OMS Guru's own "Bulk Update Order Details" import
 // (the same CSV you upload by hand at client.omsguru.com/import_data).

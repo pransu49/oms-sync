@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // amazon-confirm.js
 // Confirms self-ship orders on Amazon (Orders API: confirmShipment) with the NimbusPost or Zippy AWB.
 // Accounts: the ones with an SP-API refresh token (Praso, Sasta Store).

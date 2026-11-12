@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // easyship.js — AIKM Easy Ship robot (OMS Guru)
 // Every run:
 //   1. Logs into OMS Guru and reads the "New" orders of the 5 Amazon accounts

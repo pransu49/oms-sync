@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // loss-alerts.js - every 2 hours: new loss orders of today -> Telegram.
 // Same rule and maths as the console's Loss Orders tab (console/loss-tab.js):
 //   profit = price x qty + 85% of buyer's shipping - cost x qty - courier - Amazon fee - GST on margin - Rs 3

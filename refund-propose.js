@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // refund-propose.js — "Ready to refund" list for the console's Bulk Refund tab + Telegram alert.
 // Never refunds anything itself: it only lines orders up. Money moves when the owner presses
 // "Approve & refund" in the console (which shows a confirm box first).

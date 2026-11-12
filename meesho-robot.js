@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // meesho-robot.js
 // Reads full product details from Amazon's catalogue for the products picked in the Meesho tab
 // (dalbhaat.in/pages/amazon -> Meesho). Started only by that tab ("Fill file"). Never runs by itself.

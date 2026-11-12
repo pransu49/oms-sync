@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // oos-alerts.js - LOTS low-stock alerts on Telegram, only for LOTS products MAPPED to an Amazon ASIN
 // (aikm_admin/spapiAsinLotsMap - the same mapping the SP-API robot uses).
 //   - LOTS stock below LOW_QTY (12) -> "Low stock / out of stock" alert with the current LOTS stock

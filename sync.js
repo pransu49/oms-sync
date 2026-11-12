@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // OMS Guru -> Firebase Firestore sync
 // Pulls "Export Data" (last N days of orders) from client.omsguru.com and
 // writes them into the same Firestore project the Dalbhaat Admin Console reads from.

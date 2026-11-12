@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // attendance-alerts.js - Telegram alerts from the staff attendance page (dalbhaat.in/pages/attendance).
 //   - every check-in / check-out (late check-ins are marked)
 //   - "not checked in" once per person per day, after their start time + grace minutes

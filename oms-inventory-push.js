@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // oms-inventory-push.js
 // Owner, 25 Oct 2026: "the robot pushes LOTS inventory to OMS, and OMS manages live inventory on Amazon".
 //

@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // oms-rto-push.js
 // When a parcel is marked received in the console's RTO Check tab, accept that return in OMS Guru
 // using OMS Guru's own import "Bulk Import Return Order Data" (type 6 — marks orders as returned received).

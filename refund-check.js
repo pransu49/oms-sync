@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // refund-check.js
 // Reads Amazon's own refund records (Finances API: listFinancialEventsByOrderId -> RefundEventList)
 // so the Bulk Refund tab knows which orders were ALREADY refunded - however they were refunded

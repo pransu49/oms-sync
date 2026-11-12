@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // firebase-usage.js
 // Reads Firestore usage (reads / writes / deletes) for each Firebase project from Google Cloud
 // Monitoring — the same numbers the Firebase console "Usage" tab shows — and saves them to

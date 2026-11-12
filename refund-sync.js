@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // OMS Guru -> Firestore: REFUND ORDERS (once a day)
 // Separate from sync.js (which keeps the last 15 days of ALL orders every 10 min).
 // SELF-SHIP ONLY. RTO status comes from NimbusPost (OMS often doesn't update RTOs):

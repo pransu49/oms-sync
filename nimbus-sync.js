@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // nimbus-sync.js
 // NimbusPost Partner API v2 -> Firestore (project of FIREBASE_SERVICE_ACCOUNT — the one the Admin Console reads).
 //

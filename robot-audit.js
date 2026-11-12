@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // robot-audit.js - ROBOT WATCHDOG (owner, 25 Oct 2026: "ensure such mistakes by the robot are caught - it is making me loss").
 //
 // Independent check of what the Amazon robot (spapi-sync.js) and the OMS stock robot (oms-inventory-push.js) left on

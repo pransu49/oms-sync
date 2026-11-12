@@ -1,3 +1,4 @@
+try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
 // daily-summary.js - one Telegram message every evening (~9 pm IST):
 // robot health, and today's counts of price changes, relists, refunds and SLA-due orders.
 // Reads only 4 Firebase records (syncHealth + telegramAlerts + bbDaily + attendanceAlerts) in the console project.
