@@ -518,7 +518,8 @@ async function syncInventory() {
   const skuIdx = headers.indexOf('seller-sku'), qtyIdx = headers.indexOf('quantity'),
     priceIdx = headers.indexOf('price'), asinIdx = headers.indexOf('asin1'),
     nameIdx = headers.indexOf('item-name'), categoryIdx = headers.indexOf('zshop-category1'),
-    mrpIdx = headers.indexOf('maximum-retail-price'), fcIdx = headers.indexOf('fulfillment-channel');
+    mrpIdx = headers.indexOf('maximum-retail-price'), fcIdx = headers.indexOf('fulfillment-channel'),
+    openIdx = headers.indexOf('open-date');   // when the listing was created (owner 12 Nov 2026: shown on the Amazon page)
   console.log('Column indexes - sku:', skuIdx, 'name:', nameIdx, 'asin:', asinIdx, 'category:', categoryIdx, 'mrp:', mrpIdx);
 
   // Compare against the snapshot (0 reads) instead of reading every inventory doc.
@@ -541,6 +542,8 @@ async function syncInventory() {
     const fc = fcIdx >= 0 ? (cols[fcIdx] || '').trim() : '';
     reportSkus.add(sku);
     if (SNAP.inventory[docId]) SNAP.inventory[docId].fulfillmentChannel = fc || 'DEFAULT';
+    const openDate = openIdx >= 0 ? (cols[openIdx] || '').trim() || null : null;
+    if (openDate && SNAP.inventory[docId] && SNAP.inventory[docId].openDate !== openDate) snapPatch('inventory', docId, { openDate });   // snapshot only - 0 extra writes
     const newData = {
       account: ACCOUNT_LABEL, sku,
       name: cols[nameIdx] || '',
@@ -560,7 +563,7 @@ async function syncInventory() {
     if (changed) {
       batch.set(db.collection('spapiInventory').doc(docId),
         { ...newData, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
-      snapPatch('inventory', docId, { ...newData, fulfillmentChannel: fc || 'DEFAULT' });
+      snapPatch('inventory', docId, { ...newData, fulfillmentChannel: fc || 'DEFAULT', ...(openDate ? { openDate } : {}) });
       changedCount++;
     } else { skippedCount++; }
   }
@@ -2206,9 +2209,10 @@ async function applyPendingListingDeletions(sellerId) {
   const pendingSnap = await dbMain.collection('spapiListingDeletions')
     .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
   if (pendingSnap.empty) { console.log('No pending listing deletions.'); return; }
-  console.log(`Applying ${pendingSnap.size} pending listing deletion(s)...`);
+  const docs = pendingSnap.docs.slice(0, 200);   // bulk duplicate delete (12 Nov 2026): max 200 per run, rest next run
+  console.log(`Applying ${docs.length} of ${pendingSnap.size} pending listing deletion(s)...`);
 
-  for (const doc of pendingSnap.docs) {
+  for (const doc of docs) {
     const { sku } = doc.data();
     try {
       const asin = skuToAsinMap[sku] || null;
@@ -2229,7 +2233,6 @@ async function applyPendingListingDeletions(sellerId) {
       await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
       console.warn(`Listing deletion FAILED for SKU ${sku}:`, e.message || e);
     }
-    await new Promise((r) => setTimeout(r, 800));
   }
 }
 
