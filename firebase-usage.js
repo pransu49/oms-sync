@@ -81,6 +81,64 @@ async function usdToInr(prev) {
   return (prev && prev.usdInr) || 88;
 }
 
+
+// ---------- REAL bill from Google (Cloud Billing export to BigQuery) ----------
+// Owner setup (12 Nov 2026): Billing → Billing export → BigQuery → "Standard usage cost" into a dataset in one of
+// our 3 projects, and the project's firebase-adminsdk account given "BigQuery Data Viewer" + "BigQuery Job User".
+// Google refreshes the export a few times a day, so this is the real bill with a few hours' delay (not per second).
+async function bq(token, path, body) {
+  const r = await fetch(`https://bigquery.googleapis.com/bigquery/v2/${path}`, body ? { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { headers: { Authorization: `Bearer ${token}` } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error((j.error && j.error.message) || `HTTP ${r.status}`); e.status = r.status; throw e; }
+  return j;
+}
+async function findBillingTable(token, projectId) {
+  const ds = (await bq(token, `projects/${projectId}/datasets?all=true`)).datasets || [];
+  for (const d of ds) {
+    const id = d.datasetReference.datasetId;
+    const tb = (await bq(token, `projects/${projectId}/datasets/${id}/tables?maxResults=100`)).tables || [];
+    const t = tb.map((x) => x.tableReference.tableId).find((x) => /^gcp_billing_export_v1_/.test(x));
+    if (t) return { table: `${projectId}.${id}.${t}`, location: d.location };
+  }
+  return null;
+}
+async function realBill(apps) {
+  const tried = [];
+  for (const { key, app, projectId } of apps) {
+    let token;
+    try { token = (await app.options.credential.getAccessToken()).access_token; } catch (e) { continue; }
+    let found;
+    try { found = await findBillingTable(token, projectId); } catch (e) { tried.push(`${projectId}: ${e.message}`); continue; }
+    if (!found) { tried.push(`${projectId}: no billing export table`); continue; }
+    const net = '(cost + IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0))';
+    const sql = `SELECT service.description AS svc, sku.description AS sku, IFNULL(project.id, '-') AS proj,
+        SUM(IF(invoice.month = FORMAT_DATE('%Y%m', CURRENT_DATE('Asia/Kolkata')), ${net}, 0)) AS month,
+        SUM(IF(invoice.month = FORMAT_DATE('%Y%m', DATE_SUB(CURRENT_DATE('Asia/Kolkata'), INTERVAL 1 MONTH)), ${net}, 0)) AS lastMonth,
+        SUM(IF(DATE(usage_start_time, 'Asia/Kolkata') = CURRENT_DATE('Asia/Kolkata'), ${net}, 0)) AS today,
+        SUM(IF(DATE(usage_start_time, 'Asia/Kolkata') = DATE_SUB(CURRENT_DATE('Asia/Kolkata'), INTERVAL 1 DAY), ${net}, 0)) AS yesterday,
+        ANY_VALUE(currency) AS cur, MAX(export_time) AS last
+      FROM \`${found.table}\`
+      WHERE invoice.month >= FORMAT_DATE('%Y%m', DATE_SUB(CURRENT_DATE('Asia/Kolkata'), INTERVAL 1 MONTH))
+      GROUP BY svc, sku, proj`;
+    try {
+      const j = await bq(token, `projects/${projectId}/queries`, { query: sql, useLegacySql: false, timeoutMs: 60000, location: found.location });
+      const f = (j.schema && j.schema.fields || []).map((x) => x.name);
+      const rows = (j.rows || []).map((r) => { const o = {}; r.f.forEach((c, i) => { o[f[i]] = c.v; }); return o; });
+      const N = (v) => Math.round((Number(v) || 0) * 100) / 100;
+      const sum = (k) => N(rows.reduce((a, r) => a + (Number(r[k]) || 0), 0));
+      const items = rows.map((r) => ({ svc: r.svc, sku: r.sku, proj: r.proj, month: N(r.month), today: N(r.today) }))
+        .filter((r) => r.month > 0.009 || r.today > 0.009).sort((a, b) => b.month - a.month).slice(0, 12);
+      const last = rows.reduce((a, r) => Math.max(a, r.last ? Number(r.last) * 1000 : 0), 0);
+      const cur = (rows.find((r) => r.cur) || {}).cur || 'INR';
+      console.log(`Real bill (${found.table}): month ${cur} ${sum('month')}, today ${sum('today')}, last month ${sum('lastMonth')}`);
+      return { ok: true, table: found.table, via: key, currency: cur, monthInr: sum('month'), todayInr: sum('today'), yesterdayInr: sum('yesterday'),
+        lastMonthInr: sum('lastMonth'), items, exportedAt: last ? new Date(last).toISOString() : null };
+    } catch (e) { tried.push(`${projectId}: ${e.message}`); }
+  }
+  console.log('Real bill not available yet:', tried.join(' | ') || 'no projects');
+  return { ok: false, why: tried.slice(0, 3) };
+}
+
 async function main() {
   const now = new Date(), start = pacificMidnight(now);
   const hourAgo = new Date(now - 3600e3 > start ? now - 3600e3 : start.getTime());
@@ -159,6 +217,12 @@ async function main() {
   out.plan = ents.length && ents.every((p) => p.freePlan) ? 'free' : ents.some((p) => p.freePlan) ? 'mixed' : 'blaze';
   // Honest note: this card only estimates Firestore reads/writes/deletes. Google ALSO bills data downloads
   // ("Cloud Firestore Internet Data Transfer Out") and storage - see the real bill in Google Cloud Billing → Reports.
+  // real bill (needs the one-time billing export setup; harmless until then)
+  try {
+    const apps = PROJECTS.map(([key, , json]) => { const sa = JSON.parse(json); return { key, projectId: sa.project_id, app: admin.apps.find((a) => a.name === key) }; }).filter((x) => x.app);
+    out.realBill = await realBill(apps);
+    if (out.realBill.ok) { out.realBill.checkedAt = new Date().toISOString(); }
+  } catch (e) { out.realBill = { ok: false, why: [e.message] }; }
   out.note = 'Estimate covers Firestore reads, writes and deletes only - not download (data transfer) or storage charges. Real bill: Google Cloud Billing → Reports.';
   await docRef.set(out);
   console.log(`Cost: today ₹${out.cost.todayInr} (→ ₹${out.cost.todayProjectedInr} by reset) · this month ₹${out.cost.monthInr} of ₹${BUDGET_INR} · USD→INR ${rate}`);

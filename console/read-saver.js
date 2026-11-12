@@ -94,6 +94,29 @@
     load(function (u) {
       var free = u.plan === "free" || (u.projects && Object.keys(u.projects).length && Object.keys(u.projects).every(function (k) { return u.projects[k].freePlan; }));
       var kick = box.querySelector(".fb-kick");
+      var rb = u.realBill;
+      if (rb && rb.ok && !box.querySelector(".aikm-real-bill")) {
+        var R = function (n) { n = Number(n) || 0; return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: n < 100 ? 2 : 0, maximumFractionDigits: 2 }); };
+        var ago = rb.exportedAt ? Math.max(0, Math.round((Date.now() - Date.parse(rb.exportedAt)) / 36e5)) : null;
+        var esc2 = function (t) { return String(t || "").replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+        var rbox = document.createElement("div"); rbox.className = "aikm-real-bill";
+        rbox.style.cssText = "margin:12px 0;padding:14px 16px;border-radius:14px;background:#0F1E35;color:#F8F1E1;font-size:13px";
+        rbox.innerHTML = '<div style="font:600 11px Lexend,Inter,sans-serif;letter-spacing:.1em;text-transform:uppercase;color:#E3C47A">Real bill · from Google Cloud Billing</div>' +
+          '<div style="display:flex;gap:22px;flex-wrap:wrap;margin:8px 0 6px">' +
+          '<div><div style="opacity:.7;font-size:12px">This month</div><div style="font:600 24px Lexend,sans-serif">' + R(rb.monthInr) + '</div></div>' +
+          '<div><div style="opacity:.7;font-size:12px">Today so far</div><div style="font:600 24px Lexend,sans-serif">' + R(rb.todayInr) + '</div></div>' +
+          '<div><div style="opacity:.7;font-size:12px">Yesterday</div><div style="font:600 24px Lexend,sans-serif">' + R(rb.yesterdayInr) + '</div></div>' +
+          '<div><div style="opacity:.7;font-size:12px">Last month</div><div style="font:600 24px Lexend,sans-serif">' + R(rb.lastMonthInr) + '</div></div></div>' +
+          ((rb.items || []).length ? '<div style="margin-top:6px;border-top:1px solid rgba(227,196,122,.25);padding-top:8px">' + rb.items.slice(0, 5).map(function (it) {
+            return '<div style="display:flex;justify-content:space-between;gap:12px;padding:2px 0"><span style="opacity:.85">' + esc2(it.sku) + ' <span style="opacity:.55">· ' + esc2(it.proj) + '</span></span><b>' + R(it.month) + '</b></div>'; }).join("") + '</div>' : "") +
+          '<div style="margin-top:8px;opacity:.6;font-size:11.5px">Google updates this a few times a day' + (ago != null ? " · last update " + (ago < 1 ? "under 1 h" : ago + " h") + " ago" : "") + ' · amounts before GST unless Google adds tax lines.</div>';
+        var hd = kick && kick.closest(".fb-head"); (hd || box.firstChild).insertAdjacentElement("afterend", rbox);
+      } else if (!free && !(rb && rb.ok) && !box.querySelector(".aikm-real-bill")) {
+        var nb = document.createElement("div"); nb.className = "aikm-real-bill";
+        nb.style.cssText = "margin:10px 0;padding:10px 12px;border-radius:10px;background:#FCF2DD;color:#7A4E00;font-size:12.5px";
+        nb.textContent = "Real Google bill not connected yet — figures below are only an estimate of read/write/delete charges.";
+        var hd2 = kick && kick.closest(".fb-head"); (hd2 || box.firstChild).insertAdjacentElement("afterend", nb);
+      }
       if (free) {
         if (kick) kick.textContent = "Firebase · Free plan (Spark)";
         box.querySelectorAll(".fb-kpis, .fb-budget, .fb-need").forEach(function (el) { el.style.display = "none"; });
