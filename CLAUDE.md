@@ -48,10 +48,9 @@
   the run (`requestInventoryReport`) and only collected in Step 2; no extra sleeps after listings calls (sp-guard already spaces them);
   snapshot chunks are written 4 at a time; the Orders tab draws 200 rows at a time (`order-fees.js`). Keep these.
 
-- **Amazon payout robot** (`payout-robot.js`, workflow `payout-robot.yml`, owner 12 Nov 2026): Sasta Store ONLY, daily 8:00 AM IST (+ quiet
-  backups 8:20 / 9:00 in case GitHub skips the timer). Calls Transfers API `initiatePayout` (accountType "Standard Orders") — Amazon pays only to
-  the default deposit method saved in Seller Central (bank ••217), max once per 24 h. Manual run: mode `check` = read-only, `pay` = request now.
-  Telegram message every day. No Firebase use. Do not add Praso or change the time without the owner.
+- **Amazon payout robot** (`payout-robot.js`, workflow `payout-robot.yml`, owner 12 Nov 2026): SWITCHED OFF — Amazon's Transfers API
+  `initiatePayout` supports only EU stores (DE FR IT ES SE NL PL BE); Amazon.in returns "Provided MarketplaceId is invalid". `getPaymentMethods`
+  (read-only) does work for Amazon.in. Kept for a manual `check` run / if Amazon adds India. No schedule.
 
 ## Firebase free quota — check BEFORE deploying any new tool or robot (owner rule, 27 Oct 2026)
 Every Firebase project must stay inside the free daily quota: **50,000 reads · 20,000 writes · 20,000 deletes**.

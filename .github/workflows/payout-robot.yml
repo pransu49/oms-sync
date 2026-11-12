@@ -3,10 +3,7 @@ name: Amazon Payout (Sasta Store)
 # Owner, 12 Nov 2026: request Amazon payout of the available balance daily at 8 AM IST (02:30 UTC).
 # Amazon pays ONLY to the bank account saved in Seller Central; one payout per 24 h (Amazon's rule).
 on:
-  schedule:
-    - cron: '30 2 * * *'     # 8:00 AM IST - payout
-    - cron: '50 2 * * *'     # 8:20 AM IST - backup (GitHub sometimes skips a timer); quiet if already paid today
-    - cron: '30 3 * * *'     # 9:00 AM IST - backup
+  # schedule OFF (12 Nov 2026): Amazon's initiatePayout only supports EU stores (DE FR IT ES SE NL PL BE), not Amazon.in.
   workflow_dispatch:
     inputs:
       mode:
