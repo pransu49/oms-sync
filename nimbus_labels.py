@@ -260,6 +260,50 @@ def blank_band(page):
     return a / zoom, b / zoom
 
 
+def clear_amazon_marks(page):
+    """Amazon Shipping labels (NimbusPost / ProShip): white out the black "VA" box and the
+    "amazon shipping" logo at the bottom, so the product name gets a big empty space.
+    Only acts when the black VA box is found; any other label is left untouched."""
+    pix = page.get_pixmap(colorspace=pymupdf.csGRAY, alpha=False)
+    w, h, s, st = pix.width, pix.height, pix.samples, pix.stride
+    W, H = page.rect.width, page.rect.height
+    kx, ky = W / w, H / h
+    dark = lambda x, y: s[y * st + x] < 110
+    xa, xb = int(w * 0.55), int(w * 0.90)
+    rows = [y for y in range(int(h * 0.60), int(h * 0.95))
+            if sum(1 for x in range(xa, xb, 2) if dark(x, y)) > 0.5 * (xb - xa) / 2]
+    if not rows:
+        return False
+    # tallest solid run = the black box
+    runs, r0, r1 = [], rows[0], rows[0]
+    for y in rows[1:]:
+        if y - r1 > 2:
+            runs.append((r0, r1)); r0 = y
+        r1 = y
+    runs.append((r0, r1))
+    y0, y1 = max(runs, key=lambda t: t[1] - t[0])
+    if y1 - y0 < 10 * h / H:
+        return False
+    # box edges: columns that are dark on most rows of the box (white "VA" / "P" inside don't matter)
+    cols = [x for x in range(w) if sum(1 for y in range(y0, y1 + 1) if dark(x, y)) > 0.6 * (y1 - y0 + 1)]
+    if not cols:
+        return False
+    cols = [c for c in cols if c > w * 0.3]
+    if not cols:
+        return False
+    xl, xr = min(cols), max(cols)
+    if (xr - xl) < w * 0.25:
+        return False
+    page.draw_rect(pymupdf.Rect(xl * kx - 2, y0 * ky - 2, xr * kx + 2, (y1 + 1) * ky + 2), color=None, fill=(1, 1, 1), overlay=True)
+    # routing boxes below the VA box end with a long horizontal line; the logo is everything below that line
+    xs = range(int(w * 0.03), int(w * 0.97), 2)
+    n = len(xs)
+    lines = [y for y in range(y1 + 1, h) if sum(1 for x in xs if dark(x, y)) > 0.45 * n]
+    if lines and lines[-1] > h * 0.80:
+        page.draw_rect(pymupdf.Rect(0, (lines[-1] + 1) * ky, W, H), color=None, fill=(1, 1, 1), overlay=True)
+    return True
+
+
 def fit(text, size, maxw):
     words, lines, cur = text.split(' '), [], ''
     for wd in words:
@@ -410,6 +454,10 @@ def main():
         else:
             np_ = out.new_page(width=TW, height=TH)
             np_.show_pdf_page(np_.rect, d, p, keep_proportion=True)
+        try:
+            clear_amazon_marks(out[-1])
+        except Exception as e:
+            print('Amazon label clean-up skipped for', k, e)
         stamp(out[-1], orders[k]['items'], i + 1, len(final), dd_text(dds.get(k)))
     data = out.tobytes(garbage=3, deflate=True)
 
