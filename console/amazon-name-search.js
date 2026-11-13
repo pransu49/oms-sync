@@ -1112,10 +1112,14 @@
     clearTimeout(t);
     t = setTimeout(function () {
       if (!inp.isConnected || String(inp.value).trim() === "") return;
+      /* LOTS pack 0/1 would undo the split and remove this box while you are still typing (e.g. "1" on the way to "100") —
+         such values are applied only when you leave the box / press Enter, like before. */
+      if (inp.dataset.lpi != null && !(parseInt(inp.value, 10) >= 2)) return;
+      if (document.activeElement !== inp) return;   // already applied by Enter / leaving the box
       var sel = inp.dataset.lpi != null ? 'input[data-lpi="' + inp.dataset.lpi + '"]' : 'input[data-i="' + inp.dataset.i + '"]';
       inp.dispatchEvent(new Event("change", { bubbles: true }));   // the page's own handler applies it and redraws
       var box = document.getElementById("spapiMatchSel"), n = box && box.querySelector(sel);
       if (n) { n.focus(); try { var L = String(n.value).length; n.type === "number" ? (n.type = "text", n.setSelectionRange(L, L), n.type = "number") : n.setSelectionRange(L, L); } catch (e) {} }
-    }, 700);
+    }, 900);
   }, true);
 } catch (e) {} })();
