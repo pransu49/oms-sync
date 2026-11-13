@@ -95,6 +95,7 @@ async function bq(token, path, body) {
 }
 async function findBillingTable(token, projectId) {
   const ds = (await bq(token, `projects/${projectId}/datasets?all=true`)).datasets || [];
+  try { const tk = await (await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${token}`)).json(); console.log(`BigQuery ${projectId}: robot account = ${tk.email || tk.azp || '?'}`); } catch (e) {}
   console.log(`BigQuery ${projectId}: datasets [${ds.map((d) => d.datasetReference.datasetId + '@' + d.location).join(', ')}]`);
   for (const d of ds) {
     const id = d.datasetReference.datasetId;
