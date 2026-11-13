@@ -162,8 +162,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   shipments (reference = Amazon order id). AWBs live in ONE doc main `aikm_admin/proshipIndex` {data: JSON {orderId:{a,c,s,st,t}}} — same shape as
   zippyIndex; `oms-push-tracking.js` + `amazon-confirm.js` read it (ProShip fills in only where NimbusPost / Zippy have no live AWB) and
   `nimbus_labels.py` adds ProShip labels of the SLA date (ProShip `/api/tools/refresh/url`). Settings `aikm_admin/proshipSettings`, last
-  connection test + rates `aikm_admin/proshipCheck`. The panel is NOT loaded until the owner approves the preview: the loader block
-  (`aikmProshipJs`, end of `console/refund-tab.js`) is added then — keep it once added.
+  connection test + rates `aikm_admin/proshipCheck`. The panel is loaded by the block at the end of
+  `console/refund-tab.js` (`aikmProshipJs`, switched on 13 Nov 2026) — keep it.
   Firebase: +1 read per oms-push-tracking / amazon-confirm run (~190/day); per ship job ~4 reads + OMS chunks, ~3 + N/10 writes; console
   1 read per load (proshipIndex) + ~5 when the panel is opened. First real `check` run (13 Nov 2026): `/api/auth/signin` answered 200 "MFA required. OTP sent to registered email" — the user in the secrets has MFA on,
   so no robot login until ProShip switches MFA off for the API user (or the owner adds a user without it). Sandbox practice run (13 Nov 2026): login (no OTP there), pricing, create (awb_number + courier_id + label_url in the answer), find-by-reference,
