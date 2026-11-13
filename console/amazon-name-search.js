@@ -1096,3 +1096,26 @@
     .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
     .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
 } catch (e) {} })();
+
+/* ===== Map window: LOTS pack / Pcs boxes update while typing (owner 13 Nov 2026: "unable to edit LOTS pack") =====
+   They only applied on Enter / leaving the box, so the cost line did not change while typing and the box felt stuck.
+   Now: typing applies after a short pause, the box keeps focus and the cursor, and the boxes are wider. 0 Firebase reads. */
+(function () { try {
+  if (window.__aikmMmLive) return; window.__aikmMmLive = true;
+  var st = document.createElement("style");
+  st.textContent = ".mm-lp input{width:64px!important;height:30px!important;font-size:13px!important}.mm-qty input{min-width:48px}";
+  document.head.appendChild(st);
+  var t = null;
+  document.addEventListener("input", function (ev) {
+    var inp = ev.target && ev.target.closest && ev.target.closest("#spapiMatchSel input[data-lpi], #spapiMatchSel input[data-i]");
+    if (!inp) return;
+    clearTimeout(t);
+    t = setTimeout(function () {
+      if (!inp.isConnected || String(inp.value).trim() === "") return;
+      var sel = inp.dataset.lpi != null ? 'input[data-lpi="' + inp.dataset.lpi + '"]' : 'input[data-i="' + inp.dataset.i + '"]';
+      inp.dispatchEvent(new Event("change", { bubbles: true }));   // the page's own handler applies it and redraws
+      var box = document.getElementById("spapiMatchSel"), n = box && box.querySelector(sel);
+      if (n) { n.focus(); try { var L = String(n.value).length; n.type === "number" ? (n.type = "text", n.setSelectionRange(L, L), n.type = "number") : n.setSelectionRange(L, L); } catch (e) {} }
+    }, 700);
+  }, true);
+} catch (e) {} })();
