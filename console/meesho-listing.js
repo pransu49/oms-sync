@@ -1039,6 +1039,25 @@
   }
   function drawGrid() {
     var res = $("msRes"); res.style.display = "";
+    var tw0 = res.querySelector(".ms-tw"), keepY = window.scrollY, keepT = tw0 ? tw0.scrollTop : 0, keepL = tw0 ? tw0.scrollLeft : 0;
+    try { drawGrid0(res); } finally {
+      var tw1 = res.querySelector(".ms-tw"); if (tw1) { tw1.scrollTop = keepT; tw1.scrollLeft = keepL; }
+      if (Math.abs(window.scrollY - keepY) > 2) window.scrollTo(0, keepY);
+    }
+  }
+  function statHtml(list) { return list.length ? '<div class="ms-stat bad"><b>✕ Left out — fix:</b>' + list.map(esc).join("<br>") + "</div>" : '<div class="ms-stat ok">✓ Ready for Meesho</div>'; }
+  // typing in a box: update only that product's check + the counts — no redraw, so nothing jumps
+  function refreshRow(ri) {
+    var res = $("msRes"), tr = res && res.querySelectorAll(".ms-t tbody tr")[ri]; if (!tr) return;
+    var st = tr.querySelector("td.p .ms-stat"), html = statHtml(issues(grid.rows[ri]));
+    if (st) st.outerHTML = html;
+    var ready = grid.rows.filter(function (r) { return !issues(r).length; }).length, bad = grid.rows.length - ready;
+    var rp = $("msReadyP"), bp = $("msRejP"), dl = $("msDl");
+    if (rp) rp.textContent = "✓ " + ready + " ready for Meesho";
+    if (bp) { bp.textContent = bad + " would be rejected — left out"; bp.style.display = bad ? "" : "none"; }
+    if (dl) { dl.classList.toggle("dim", !ready); dl.innerHTML = '<i class="ti ti-download"></i>Download ' + ready + " ready product" + (ready === 1 ? "" : "s"); }
+  }
+  function drawGrid0(res) {
     var n = counts(), nc = needCols(), keep = [cPriceC(), cMrpC()].filter(Boolean), cols = onlyNeed && nc.length ? tpl.cols.filter(function (c) { return nc.indexOf(c) >= 0 || keep.indexOf(c) >= 0; }) : tpl.cols, dl = "";
     var iss = grid.rows.map(issues), ready = iss.filter(function (x) { return !x.length; }).length;
     var head = cols.map(function (c) {
@@ -1051,7 +1070,7 @@
       return '<tr><td class="p"><textarea class="ms-ti" rows="2" data-title="' + ri + '" title="Product title on Meesho — edit freely">' + esc(tv) + "</textarea>" +
         '<div class="ms-pk"><label>Pack of <input type="number" min="1" max="500" value="' + packN(r.p) + '" data-pack="' + ri + '"></label>' +
         (packN(r.p) > 1 ? "<span>cost, MRP, weight × " + packN(r.p) + "</span>" : "<span>set 10 to sell a pack of 10</span>") + (r.p.titleOverride ? '<button type="button" class="ms-lnk" data-tireset="' + ri + '">Auto title</button>' : "") + "</div><small>" + esc(r.p.asin) + (r.p.lots ? " · LOTS" + (r.d ? " + Amazon details" : "") : r.d ? "" : " · basic data") + "</small>" +
-        (iss[ri].length ? '<div class="ms-stat bad"><b>✕ Left out — fix:</b>' + iss[ri].map(esc).join("<br>") + "</div>" : '<div class="ms-stat ok">✓ Ready for Meesho</div>') + "</td>" + cols.map(function (c) {
+        statHtml(iss[ri]) + "</td>" + cols.map(function (c) {
         var v = r.vals[c.idx], need = !v.v && (c.req || (onlyNeed && nc.length));
         var why = invalid(c, v.v), bad = (v.v && c.options && c.options.indexOf(v.v) < 0) || v.low || !!why;
         if (why) v.was = why;
@@ -1067,7 +1086,7 @@
           (nocost ? '<span class="ms-pill n">' + nocost + " without cost — Amazon price used</span>" : "") +
           (grid.rows.length - low - nocost > 0 ? '<span class="ms-pill g">' + (grid.rows.length - low - nocost) + " priced for " + S.minPct + "–" + S.tgtPct + "% profit</span>" : ""); })() +
       (nc.length ? '<button type="button" class="ms-lnk" id="msTog">' + (onlyNeed ? "Show all " + tpl.cols.length + " columns" : "Show only columns that need you") + "</button>" : "") +
-      '<span class="ms-pill g">✓ ' + ready + " ready for Meesho</span>" + (grid.rows.length - ready ? '<span class="ms-pill y" style="background:#FBEDEB;color:#9B2C22">' + (grid.rows.length - ready) + " would be rejected — left out</span>" : "") +
+      '<span class="ms-pill g" id="msReadyP">✓ ' + ready + " ready for Meesho</span>" + '<span class="ms-pill y" id="msRejP" style="background:#FBEDEB;color:#9B2C22' + (grid.rows.length - ready ? "" : ";display:none") + '">' + (grid.rows.length - ready) + " would be rejected — left out</span>" +
       '<button type="button" class="ms-go gold' + (ready ? "" : " dim") + '" id="msDl"><i class="ti ti-download"></i>Download ' + ready + " ready product" + (ready === 1 ? "" : "s") + "</button></div>" +
       dl + '<div class="ms-tw"><table class="ms-t"><thead><tr><th class="p">Product</th>' + head + "</tr></thead><tbody>" + body + "</tbody></table></div>" +
       '<div class="ms-note" style="text-align:left">Each product is checked with Meesho\'s rules first — only ✓ Ready ones go in the file, so Meesho should accept the whole upload. Change the MRP box if Amazon\'s MRP is wrong; the price is worked out again. Yellow = Meesho needs it. Use <b>Same for all</b> to fill a whole column at once. Then upload the downloaded file in Meesho → Catalog Upload → Bulk upload.</div>';
@@ -1087,11 +1106,16 @@
     res.oninput = function (e) {
       var el = e.target; if (!el.dataset || el.dataset.r == null) return;
       var v = grid.rows[+el.dataset.r].vals[+el.dataset.c]; v.v = el.value.trim(); v.auto = false; v.low = false;
-      clearTimeout(res._t); res._t = setTimeout(function () {   // re-check after typing stops (MRP also re-prices)
-        var cm = cMrpC(); if (cm && +el.dataset.c === cm.idx) onMrp(+el.dataset.r, v.v);
-        var f = document.activeElement && document.activeElement.dataset ? [document.activeElement.dataset.r, document.activeElement.dataset.c] : null;
-        drawGrid(); if (f) { var x = res.querySelector('[data-r="' + f[0] + '"][data-c="' + f[1] + '"]'); if (x) { x.focus(); var L = x.value.length; try { x.setSelectionRange(L, L); } catch (er) {} } }
-      }, 700);
+      var ri0 = +el.dataset.r;
+      clearTimeout(res._t); res._t = setTimeout(function () {   // re-check after typing stops — only this product, nothing redrawn
+        var cm = cMrpC(), cp = cPriceC();
+        if (cm && +el.dataset.c === cm.idx) {   // MRP typed: price worked out again, shown in place
+          onMrp(ri0, v.v);
+          var pin = cp && res.querySelector('[data-r="' + ri0 + '"][data-c="' + cp.idx + '"]'), pv = cp && grid.rows[ri0].vals[cp.idx];
+          if (pin && pv && document.activeElement !== pin) { pin.value = pv.v; pin.parentNode.title = pv.was || ""; pin.parentNode.classList.toggle("bad", !!pv.low); }
+        }
+        refreshRow(ri0);
+      }, 500);
       var td = el.parentNode, c = tpl.cols.filter(function (x) { return x.idx === +el.dataset.c; })[0];
       td.classList.toggle("need", !v.v && !!c.req); td.classList.toggle("bad", !!(v.v && c.options && c.options.indexOf(v.v) < 0) || !!invalid(c, v.v));
       if (MAKER.test(c.head) && v.v && !invalid(c, v.v)) memSet(mkKey(c.head, brandOf(grid.rows[+el.dataset.r])), v.v);   // remembered for this brand only
