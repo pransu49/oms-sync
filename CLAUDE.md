@@ -161,7 +161,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 
 - **ProShip (Prozo) courier for Amazon self-ship** (owner 13 Nov 2026): robot `proship.js`, workflow `proship.yml` (on command only, modes
   check / ship / sync / cancel; secrets `PROSHIP_USERNAME` + `PROSHIP_PASSWORD` = an API user from ProShip -> Settings -> Manage Users).
-  Console panel `console/proship-tab.js` (Self-Ship -> "ProShip" pill): tick orders -> job doc main `proshipJobs/<id>` {ids:{orderId:weightKg}, box, pickup}
+  Console panel `console/proship-tab.js` — its OWN side-menu tab "ProShip" (data-tab `proship`, link `/pages/console?tab=proship`, full page width,
+  owner 13 Nov 2026; ALL waiting orders listed by default, SLA chips + search filter; the Self-Ship "ProShip" pill only opens the tab): tick orders -> job doc main `proshipJobs/<id>` {ids:{orderId:weightKg}, box, pickup}
   -> robot reads the orders FRESH from OMS chunks, skips cancelled / already-AWB (OMS, nimbusIndex, zippyIndex, proshipIndex) and creates the
   shipments (reference = Amazon order id). AWBs live in ONE doc main `aikm_admin/proshipIndex` {data: JSON {orderId:{a,c,s,st,t}}} — same shape as
   zippyIndex; `oms-push-tracking.js` + `amazon-confirm.js` read it (ProShip fills in only where NimbusPost / Zippy have no live AWB) and

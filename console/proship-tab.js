@@ -1,5 +1,7 @@
 /* ===== console/proship-tab.js \u2014 Self-Ship \u2192 ProShip (Prozo): ship Amazon self-ship orders straight from the console
    Loaded by the block at the end of console/refund-tab.js (aikmProshipJs). Owner 13 Nov 2026.
+   Own side-menu tab "ProShip" (data-tab="proship", link /pages/console?tab=proship), full page width,
+   ALL orders waiting to ship listed by default (SLA-date chips filter). The Self-Ship "ProShip" pill just opens this tab.
    No file upload: tick orders \u2192 "Ship via ProShip" \u2192 the server robot (proship.js, workflow proship.yml) creates the
    shipments and writes the AWBs to aikm_admin/proshipIndex (\u2192 OMS Guru \u2192 Amazon, same road as NimbusPost / Zippy).
    Labels: the normal label robot (nimbus-labels.yml) adds ProShip labels of the SLA date by itself.
@@ -9,15 +11,14 @@
   var tries = 0;
   var wait = setInterval(function () {
     tries++;
-    var base = document.getElementById("fsTabNimbus") && document.getElementById("tab-selfship");
-    // start after the Zippy button exists (it wraps the same view switch); don't wait for it for ever
-    if (base && (document.getElementById("fsTabZippy") || tries > 40)) { clearInterval(wait); setTimeout(init, 800); }
+    var base = document.getElementById("mainTabbar") && document.querySelector(".app-content") && document.getElementById("tab-selfship");
+    // start after the NimbusPost / Zippy pills exist (so our shortcut pill sits next to them); don't wait for them for ever
+    if (base && ((document.getElementById("fsTabNimbus") && document.getElementById("fsTabZippy")) || tries > 40)) { clearInterval(wait); setTimeout(init, 800); }
     else if (tries > 240) clearInterval(wait);
   }, 500);
 
   function init() {
     if (window.__aikmProshipV1) return; window.__aikmProshipV1 = true;
-    var tab = document.getElementById("tab-selfship");
 
     /* ---------- styles (re-uses the NimbusPost panel look) ---------- */
     var css = document.createElement("style");
@@ -25,7 +26,17 @@
     css.textContent =
       "@media screen{" +
       "html#aikm body #selfshipProshipPanel .nb-card{padding:22px 24px !important;}" +
-      "html#aikm body #selfshipProshipPanel .card > div.nb-head{display:flex !important;justify-content:space-between;align-items:flex-start;gap:14px;background:transparent !important;border:0 !important;padding:0 !important;margin:0 !important;}" +
+      "html#aikm body #tab-proship{max-width:none !important;width:100% !important;}" +
+      "html#aikm body #selfshipProshipPanel{width:100%;}" +
+      "html#aikm body #selfshipProshipPanel .nb-card{background:var(--x-surface);border:1px solid var(--x-line);border-radius:14px;box-shadow:var(--x-shadow);max-width:none !important;}" +
+      "html#aikm body #selfshipProshipPanel .nb-sub{max-width:900px;}" +
+      "html#aikm body #selfshipProshipPanel .nb-filter-row input#psQ{flex:1;min-width:260px;max-width:520px;}" +
+      "html#aikm body #psTable{width:100%;}" +
+      "html#aikm body #psTable thead th{position:sticky;top:0;z-index:1;background:var(--x-surface-2);}" +
+      "html#aikm body #psTable .ps-addr{max-width:340px;white-space:normal;color:var(--x-text-2);font-size:12px;margin-top:2px;line-height:1.4;}" +
+      "html#aikm body #psTable .ps-sla{white-space:nowrap;font-weight:600;}" +
+      "html#aikm body #psTable .ps-sla.over{color:var(--x-red);}" +
+      "html#aikm body #selfshipProshipPanel .nb-card > div.nb-head{display:flex !important;justify-content:space-between;align-items:flex-start;gap:14px;background:transparent !important;border:0 !important;padding:0 !important;margin:0 !important;}" +
       "html#aikm body #selfshipProshipPanel .nb-filter{margin-top:18px;}" +
       "html#aikm body .ps-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px;}" +
       "html#aikm body .ps-grid label{display:flex;flex-direction:column;gap:5px;font-size:11.5px;font-weight:600;color:var(--x-muted);}" +
@@ -123,14 +134,14 @@
             if (!z.exists || settings.address) return; var x = z.data() || {};
             Object.assign(settings, { name: [x.fn, x.ln].filter(Boolean).join(" ").replace(/\s+\.$/, ""), phone: x.phone || "", email: x.email || "", address: [x.a1, x.a2].filter(Boolean).join(", "),
               city: x.city || "", state: x.state || "", pin: x.pin || "", weight: x.weight || DEF.weight, l: x.l || DEF.l, b: x.b || DEF.b, h: x.h || DEF.h });
-            setLoaded = true; fillSettings(); pickupNote(); if (panel.style.display === "block") build();
+            setLoaded = true; fillSettings(); pickupNote(); if (isOpen()) build();
           }).catch(function () { setLoaded = true; pickupNote(); });
           return;
         }
         var x = s.data() || {};
         Object.assign(settings, x, { skuWeights: Object.assign({}, settings.skuWeights, x.skuWeights || {}) });
         try { localStorage.setItem(LS_KEY, JSON.stringify(settings)); } catch (e) {}
-        setLoaded = true; fillSettings(); pickupNote(); if (panel.style.display === "block") build();
+        setLoaded = true; fillSettings(); pickupNote(); if (isOpen()) build();
       }, function (e) { setLoaded = true; console.warn("ProShip settings sync error", e); });
       d.collection("aikm_admin").doc("proshipCheck").onSnapshot(function (s) { check = s.exists ? s.data() : null; showConn(); }, function () {});
       loadInFile();
@@ -141,7 +152,7 @@
         d.collection("aikm_admin").doc(name).get().then(function (s) {
           var ids = (s.exists && s.data().ids) || {};
           Object.keys(ids).forEach(function (k) { if (!inFile[k] || ids[k] > inFile[k].t) inFile[k] = { t: ids[k], w: name === "nimbusExported" ? "NimbusPost" : "Zippy" }; });
-          if (panel.style.display === "block") pickRows();
+          if (isOpen()) pickRows();
         }).catch(function () {});
       });
     }
@@ -163,33 +174,53 @@
       idxRef.onSnapshot(function (s) {
         try { idx = s.exists && s.data().data ? JSON.parse(s.data().data) : {}; } catch (e) { idx = {}; }
         feedFallback();
-        if (panel.style.display === "block") pickRows();
+        if (isOpen()) pickRows();
         if (typeof window.__aikmCfRefresh === "function") window.__aikmCfRefresh();
       }, function (e) { console.warn("ProShip index read error", e); });
     }
     var idxTimer = setInterval(function () { hookIdx(); if (idxRef) clearInterval(idxTimer); }, 3000);
     setInterval(feedFallback, 30000);
 
-    /* ---------- pill button ---------- */
+    /* ---------- own side-menu tab "ProShip" (full page width) ---------- */
+    var bar = document.getElementById("mainTabbar"), content = document.querySelector(".app-content");
+    var tbtn = document.createElement("button");
+    tbtn.className = "tabbtn"; tbtn.dataset.tab = "proship";
+    tbtn.innerHTML = '<i class="ti ti-truck-delivery tab-ic"></i>ProShip';
+    var tAfter = bar.querySelector('[data-tab="selfship"]');
+    tAfter ? tAfter.insertAdjacentElement("afterend", tbtn) : bar.appendChild(tbtn);
+    var sub = document.createElement("div");
+    sub.className = "subtabbar no-print"; sub.id = "subtab-proship"; sub.style.display = "none";
+    sub.innerHTML = '<span class="subtab-label">ProShip</span><span class="nb-muted" id="psSubNote">Amazon self-ship \u00b7 direct shipping</span>';
+    content.insertBefore(sub, content.querySelector(".tabpanel"));
+    var tpanel = document.createElement("div");
+    tpanel.id = "tab-proship"; tpanel.className = "tabpanel";
+    var lastP = content.querySelectorAll(".tabpanel"); lastP = lastP[lastP.length - 1];
+    lastP.parentNode.insertBefore(tpanel, lastP.nextSibling);
+    function isOpen() { return tpanel.classList.contains("active"); }
+
+    /* Self-Ship "ProShip" pill = shortcut to the tab */
     var after = document.getElementById("fsTabZippy") || document.getElementById("fsTabNimbus");
-    var btn = document.createElement("button");
-    btn.type = "button"; btn.id = "fsTabProship";
-    btn.style.cssText = "all:unset;cursor:pointer;background:var(--fs-pill-bg);color:var(--fs-pill-text);font-size:11.5px;font-weight:600;padding:7px 16px;border-radius:20px;display:flex;align-items:center;gap:6px;box-shadow:0 1px 3px rgba(0,0,0,.06);";
-    btn.innerHTML = '<i class="ti ti-truck-delivery" style="font-size:13px;color:#D4AF37;"></i>ProShip';
-    after.parentNode.insertBefore(btn, after.nextSibling);
+    if (after) {
+      var btn = document.createElement("button");
+      btn.type = "button"; btn.id = "fsTabProship";
+      btn.style.cssText = "all:unset;cursor:pointer;background:var(--fs-pill-bg);color:var(--fs-pill-text);font-size:11.5px;font-weight:600;padding:7px 16px;border-radius:20px;display:flex;align-items:center;gap:6px;box-shadow:0 1px 3px rgba(0,0,0,.06);";
+      btn.innerHTML = '<i class="ti ti-truck-delivery" style="font-size:13px;color:#D4AF37;"></i>ProShip <i class="ti ti-arrow-up-right" style="font-size:12px;opacity:.6;"></i>';
+      btn.title = "Open the ProShip tab";
+      after.parentNode.insertBefore(btn, after.nextSibling);
+      btn.addEventListener("click", function () { tbtn.click(); });
+    }
 
     /* ---------- panel ---------- */
     var panel = document.createElement("div");
     panel.id = "selfshipProshipPanel";
-    panel.style.display = "none";
     function field(id, label, req, cls, type) {
       return '<label class="' + (cls || "") + '"><span>' + label + (req ? " <b>*</b>" : "") + '</span><input type="' + (type || "text") + '" id="' + id + '"' + (type === "number" ? ' step="0.01" min="0.01"' : "") + "></label>";
     }
     panel.innerHTML =
-      '<div class="card nb-card">' +
+      '<div class="nb-card">' +
         '<div class="nb-head"><div><div class="nb-kicker">PROSHIP \u00b7 DIRECT SHIPPING</div>' +
         '<div class="nb-title">Ship Amazon self-ship orders through ProShip</div>' +
-        '<div class="nb-sub">Pick an SLA date \u2192 tick the orders \u2192 <b>Ship via ProShip</b>. No file to upload: the shipments are created on the server, the AWBs go to OMS Guru and Amazon by themselves. Orders ProShip sends by ATS go at <b>450 g</b>; all others at the weight below. Only Amazon self-ship orders that are still <b>New</b> (no AWB yet) are listed.</div></div>' +
+        '<div class="nb-sub">Every Amazon self-ship order still waiting to ship (no AWB yet) is listed below. Tick the orders \u2192 <b>Ship via ProShip</b>. No file to upload: the shipments are created on the server, the AWBs go to OMS Guru and Amazon by themselves. Orders ProShip sends by ATS go at <b>450 g</b>; all others at the weight shown.</div></div>' +
         '<div class="ps-conn" id="psConn"><i class="dot"></i><span id="psConnTxt">Not tested yet</span><button type="button" id="psTest">Test connection</button></div></div>' +
 
         '<details class="ps-fold" id="psSetFold"><summary><i class="ti ti-building-warehouse"></i>Pickup address &amp; default box <span class="nb-muted" id="psSetNote"></span><span id="psSetSaved" class="nb-muted"></span></summary><div>' +
@@ -207,15 +238,16 @@
         '<details class="ps-fold" id="psRateFold" style="display:none;"><summary><i class="ti ti-receipt-2"></i><span id="psRateTitle">ProShip rates</span> <span class="nb-muted" id="psRateNote"></span></summary><div id="psRates"></div></details>' +
 
         '<div class="nb-filter">' +
-          '<div class="nb-lbl">SLA date <span class="nb-muted" id="psPoolNote"></span></div>' +
+          '<div class="nb-lbl">Orders to ship <span class="nb-muted" id="psPoolNote"></span></div>' +
           '<div class="nb-chips" id="psDates"></div>' +
-          '<div class="nb-filter-row"><select id="psAcct"><option value="">All accounts</option></select>' +
+          '<div class="nb-filter-row"><input type="text" id="psQ" autocomplete="off" placeholder="Search order ID, buyer, product, city or PIN">' +
+          '<select id="psAcct"><option value="">All accounts</option></select>' +
           '<button type="button" id="psRefresh"><i class="ti ti-refresh"></i> Refresh</button></div>' +
         "</div>" +
         '<div id="psResult" style="display:none;">' +
           '<div class="nb-kpis" id="psKpis"></div>' +
           '<div class="table-scroll"><table class="data" id="psTable"><thead><tr>' +
-            '<th style="width:28px;"><input type="checkbox" id="psAll" title="Select all"></th><th>Order</th><th>Buyer</th><th>Items</th><th>Weight (kg)</th><th>Status</th>' +
+            '<th style="width:28px;"><input type="checkbox" id="psAll" title="Select all"></th><th>SLA</th><th>Order</th><th>Buyer &amp; address</th><th>Items</th><th>Weight (kg)</th><th>Status</th>' +
           '</tr></thead><tbody id="psBody"></tbody></table></div>' +
           '<div class="nb-actions"><button type="button" id="psShip" class="btn-gold"><i class="ti ti-truck-delivery"></i> Ship via ProShip</button>' +
           '<button type="button" id="psLabels"><i class="ti ti-printer"></i> Download labels</button>' +
@@ -224,8 +256,7 @@
           '<div id="psLblStatus" class="ps-status" style="display:none;"></div>' +
         "</div>" +
       "</div>";
-    var anchor = document.getElementById("selfshipZippyPanel") || document.getElementById("selfshipNimbusPanel") || document.getElementById("selfshipFakeShipPanel") || document.getElementById("selfshipGenerateGroup");
-    anchor.parentNode.insertBefore(panel, anchor.nextSibling);
+    tpanel.appendChild(panel);
     function $(id) { return document.getElementById(id); }
 
     var MAP = { psName: "name", psPhone: "phone", psEmail: "email", psAddr: "address", psCity: "city", psState: "state", psPin: "pin", psGst: "gstin", psW: "weight", psL: "l", psB: "b", psH: "h" };
@@ -282,31 +313,19 @@
       setTimeout(function () { if (testing) { testing = 0; showConn(); alert("The test did not finish. Try again in a minute; if it repeats, tell Claude."); } }, 240000);
     });
 
-    /* ---------- view switching (adds "ProShip" to Generate / Fake ship / NimbusPost / Zippy) ---------- */
-    var ON = { bg: "#0F1E35", fg: "#F5F4EC", sh: "0 4px 12px rgba(15,30,53,.24)" }, OFF = { bg: "var(--fs-pill-bg)", fg: "var(--fs-pill-text)", sh: "0 1px 3px rgba(0,0,0,.06)" };
-    function paint(b, on) { if (!b) return; var s = on ? ON : OFF; b.style.background = s.bg; b.style.color = s.fg; b.style.boxShadow = s.sh; }
-    var prevSwitch = window.switchSelfShipView;
-    window.switchSelfShipView = function (view, byUser) {
-      // theme switch re-calls this with "generate" \u2014 keep ProShip open in that case
-      if (!byUser && view === "generate" && panel.style.display === "block") view = "proship";
-      if (view === "proship") {
-        if (panel.style.display !== "block") { try { prevSwitch("generate", true); } catch (e) {} } // closes NimbusPost / Zippy / Fake ship cleanly
-        ["selfshipGenerateGroup", "selfshipFakeShipPanel", "selfshipNimbusPanel", "selfshipZippyPanel"].forEach(function (id) { var el = $(id); if (el) el.style.display = "none"; });
-        panel.style.display = "block";
-        tab.querySelectorAll(".wrap > .foot, .wrap > .rule-box").forEach(function (x) { if (!x.dataset.psHid) x.dataset.psHid = x.style.display || "-"; x.style.display = "none"; });
-        ["fsTabGenerate", "fsTabFakeShip", "fsTabNimbus", "fsTabZippy"].forEach(function (id) { paint($(id), false); });
-        paint(btn, true);
-        hookPanel(); hookIdx(); fillSettings(); pickupNote(); showConn(); build();
-        return;
-      }
-      panel.style.display = "none"; paint(btn, false);
-      tab.querySelectorAll("[data-ps-hid]").forEach(function (x) { x.style.display = x.dataset.psHid === "-" ? "" : x.dataset.psHid; delete x.dataset.psHid; });
-      prevSwitch(view, byUser);
-    };
-    btn.addEventListener("click", function () { window.switchSelfShipView("proship", true); });
+    /* ---------- open the tab ---------- */
+    tbtn.addEventListener("click", function () {
+      document.querySelectorAll(".tabbtn").forEach(function (x) { x.classList.remove("active"); });
+      document.querySelectorAll(".tabpanel").forEach(function (x) { x.classList.remove("active"); });
+      document.querySelectorAll(".subtabbar").forEach(function (x) { x.style.display = "none"; });
+      tbtn.classList.add("active"); tpanel.classList.add("active"); sub.style.display = "flex";
+      try { document.body.classList.remove("sidebar-open"); document.getElementById("appSidebarBackdrop").classList.remove("show"); } catch (e) {}
+      try { window.scrollTo(0, 0); } catch (e) {}
+      hookPanel(); hookIdx(); fillSettings(); pickupNote(); showConn(); build();
+    });
 
     /* ---------- pending self-ship pool (same rules as the NimbusPost / Zippy files) ---------- */
-    var pool = [], lastRows = [], selDate = "", selAcct = "", busy = false, jobRes = {};
+    var pool = [], lastRows = [], selDate = "all", selAcct = "", selQ = "", busy = false, jobRes = {};
     function weightFor(items) {
       var tot = 0, all = true;
       items.forEach(function (it) { var w = settings.skuWeights[it.sku] || otherWeights[it.sku]; if (w) tot += w * it.qty; else all = false; });
@@ -351,6 +370,7 @@
       var sel = $("psAcct"), cur = sel.value;
       sel.innerHTML = '<option value="">All accounts</option>' + Object.keys(accts).sort().map(function (a) { return "<option" + (a === cur ? " selected" : "") + ">" + esc(a) + "</option>"; }).join("");
       $("psPoolNote").textContent = data.length ? "\u00b7 " + pool.length + " self-ship orders waiting" : "\u00b7 OMS data loading\u2026";
+      $("psSubNote").textContent = data.length ? pool.length + " Amazon self-ship orders waiting to ship" : "OMS data loading\u2026";
       renderDates();
     }
     function niceDay(k) {
@@ -362,11 +382,11 @@
       return d.toLocaleDateString("en-IN", { weekday: "short" }) + " \u00b7 " + label;
     }
     function renderDates() {
-      var t = todayYmd(), counts = {}, over = 0;
-      pool.forEach(function (r) { if (selAcct && account(r.o.channel) !== selAcct) return; if (r.sla && r.sla < t) over++; else counts[r.sla || "none"] = (counts[r.sla || "none"] || 0) + 1; });
+      var t = todayYmd(), counts = {}, over = 0, tot = 0;
+      pool.forEach(function (r) { if (selAcct && account(r.o.channel) !== selAcct) return; tot++; if (r.sla && r.sla < t) over++; else counts[r.sla || "none"] = (counts[r.sla || "none"] || 0) + 1; });
       var keys = Object.keys(counts).sort();
-      var opts = (over ? [["overdue", "Overdue", over]] : []).concat(keys.map(function (k) { return [k, k === "none" ? "No SLA date" : niceDay(k), counts[k]]; }));
-      if (!opts.some(function (o) { return o[0] === selDate; })) selDate = opts.length ? (counts[t] ? t : opts[0][0]) : "";
+      var opts = (tot ? [["all", "All orders", tot]] : []).concat(over ? [["overdue", "Overdue", over]] : []).concat(keys.map(function (k) { return [k, k === "none" ? "No SLA date" : niceDay(k), counts[k]]; }));
+      if (!opts.some(function (o) { return o[0] === selDate; })) selDate = "all";
       $("psDates").innerHTML = opts.length ? opts.map(function (o) {
         return '<button type="button" class="nb-chip' + (o[0] === selDate ? " on" : "") + (o[0] === "overdue" ? " over" : "") + '" data-k="' + o[0] + '">' + esc(o[1]) + " <span>" + o[2] + "</span></button>";
       }).join("") : '<span class="nb-muted">No self-ship orders waiting right now.</span>';
@@ -375,12 +395,19 @@
     }
     function pickRows() {
       var t = todayYmd();
+      var q = selQ.toLowerCase().replace(/\s+/g, " ").trim();
       lastRows = pool.filter(function (r) {
         if (selAcct && account(r.o.channel) !== selAcct) return false;
+        if (q) {
+          var o = r.o, hay = [r.id, o.buyerName, o.buyerCity, o.buyerState, o.buyerPincode, o.buyerAddress1, o.buyerAddress2, account(o.channel)]
+            .concat(r.items.map(function (it) { return it.name + " " + it.sku; })).join(" ").toLowerCase();
+          if (hay.indexOf(q) < 0) return false;
+        }
+        if (selDate === "all") return true;
         if (selDate === "overdue") return r.sla && r.sla < t;
         if (selDate === "none") return !r.sla;
         return r.sla === selDate;
-      }).sort(function (a, b) { return (b.loss - a.loss) || account(a.o.channel).localeCompare(account(b.o.channel)) || a.id.localeCompare(b.id); });
+      }).sort(function (a, b) { return (b.loss - a.loss) || (a.sla || "9999").localeCompare(b.sla || "9999") || account(a.o.channel).localeCompare(account(b.o.channel)) || a.id.localeCompare(b.id); });
       lastRows.forEach(function (r) {
         r.ship = liveShip(r.id);
         if (!r.touched) r.sel = r.state === "ok" && !inFile[r.id] && !r.loss;
@@ -395,7 +422,7 @@
       var sel = 0, bad = 0, done = 0, loss = 0;
       lastRows.forEach(function (r) { if (r.sel) sel++; if (r.state !== "ok") bad++; if (r.ship) done++; if (r.loss) loss++; });
       $("psKpis").innerHTML =
-        kpi("Orders on this date", lastRows.length, "") + kpi("Selected to ship", sel, "nb-ok") + kpi("Loss orders", loss, loss ? "nb-bad" : "") +
+        kpi(selDate === "all" ? "Orders to ship" : "Orders in this view", lastRows.length, "") + kpi("Selected to ship", sel, "nb-ok") + kpi("Loss orders", loss, loss ? "nb-bad" : "") +
         kpi("Need a fix", bad, bad ? "nb-bad" : "") + kpi("Shipped in ProShip", done, done ? "nb-warnk" : "");
       var body = $("psBody");
       body.innerHTML = lastRows.length ? lastRows.map(function (r, i) {
@@ -410,15 +437,18 @@
           : err ? '<div class="nb-muted nb-small" style="margin-top:5px;max-width:220px;white-space:normal;">' + esc(err) + "</div>" : "";
         return '<tr class="' + (r.sel || sh ? "" : "nb-row-out") + (r.loss && !sh ? " nb-row-loss" : "") + '">' +
           '<td><input type="checkbox" class="ps-sel" data-i="' + i + '"' + (r.sel ? " checked" : "") + (ok && !sh ? "" : " disabled") + "></td>" +
+          '<td><div class="ps-sla' + (r.sla && r.sla < todayYmd() ? " over" : "") + '">' + (r.sla ? esc(niceDay(r.sla)) : '<span class="nb-muted">\u2014</span>') + "</div>" +
+            (r.sla && r.sla < todayYmd() ? '<div class="nb-small" style="color:var(--x-red);">Overdue</div>' : "") + "</td>" +
           '<td><div class="cx-awb">' + esc(r.id) + '</div><div class="nb-muted nb-small">' + esc(account(o.channel)) + "</div>" +
             '<div style="margin-top:5px;">' + (r.isCod ? '<span class="nb-pay nb-cod">COD ' + rs(r.cod) + "</span>" : '<span class="nb-pay">Prepaid</span>') + "</div>" +
             '<div style="margin-top:5px;">' + (r.loss ? '<span class="nb-loss">LOSS \u00b7 ' + rs(r.profit) + "</span>" : '<span class="nb-muted nb-small">Profit ' + rs(r.profit) + "</span>") + "</div></td>" +
           '<td><div class="nb-name">' + esc(o.buyerName || "") + "</div>" +
+            '<div class="ps-addr">' + esc([o.buyerAddress1, o.buyerAddress2].filter(Boolean).join(", ")) + "</div>" +
             '<div class="nb-muted nb-small">' + esc([o.buyerCity, o.buyerState, o.buyerPincode].filter(Boolean).join(" \u00b7 ")) + "</div></td>" +
           '<td class="ps-items">' + r.items.map(function (it) { return "<div>" + esc(it.name) + " <b>\u00d7 " + it.qty + '</b> <span class="nb-muted nb-small">' + rs(it.price) + "</span></div>"; }).join("") + "</td>" +
           '<td><input type="number" step="0.01" min="0.01" class="nb-w" data-i="' + i + '" value="' + r.weight + '"' + (sh ? " disabled" : "") + "></td>" +
           '<td><span class="nb-tag ' + tag + '">' + esc(note) + "</span>" + under + "</td></tr>";
-      }).join("") : '<tr><td colspan="6" class="nb-muted" style="text-align:center;padding:22px !important;">No orders for this SLA date.</td></tr>';
+      }).join("") : '<tr><td colspan="7" class="nb-muted" style="text-align:center;padding:22px !important;">' + (pool.length ? "No orders match this view." : "No self-ship orders waiting right now.") + "</td></tr>";
       body.querySelectorAll(".nb-w").forEach(function (inp) {
         inp.addEventListener("change", function () {
           var r = lastRows[+inp.dataset.i], w = num(inp.value);
@@ -436,7 +466,7 @@
       $("psResult").style.display = "block";
       $("psShip").disabled = !sel || busy;
       $("psShip").innerHTML = busy ? '<i class="ti ti-loader-2 ps-spin"></i> Shipping\u2026' : '<i class="ti ti-truck-delivery"></i> Ship ' + (sel ? sel + " order" + (sel > 1 ? "s" : "") + " " : "") + "via ProShip";
-      $("psNote").textContent = busy ? "" : sel ? "" : done && done === lastRows.length ? "All orders of this date are shipped." : "Tick at least one order.";
+      $("psNote").textContent = busy ? "" : sel ? "" : done && done === lastRows.length ? "All orders in this view are shipped." : "Tick at least one order.";
     }
 
     /* ---------- ship ---------- */
@@ -509,7 +539,7 @@
     function labels() {
       if (lblBusy) return;
       var d = db(), sla = /^\d{4}-\d{2}-\d{2}$/.test(selDate) ? selDate : "";
-      if (!sla) { alert("Pick one SLA date (not \u201cOverdue\u201d) to download its labels."); return; }
+      if (!sla) { alert("Labels are made per SLA date.\n\nClick one date chip above (e.g. \u201cToday\u201d), then Download labels."); return; }
       if (!d) { alert("Still connecting \u2014 try again in a few seconds."); return; }
       if (typeof window.aikmGhDispatch !== "function") { alert("Please reload the console (Ctrl + Shift + R) and try again."); return; }
       lblBusy = true; show("psLblStatus", "<b>Labels SLA " + esc(sla) + "</b> \u2014 starting on the server\u2026", "run");
@@ -538,10 +568,11 @@
     $("psLabels").addEventListener("click", labels);
     $("psRefresh").addEventListener("click", function () { loadInFile(); build(); });
     $("psAcct").addEventListener("change", function (e) { selAcct = e.target.value; renderDates(); });
+    var qT; $("psQ").addEventListener("input", function () { clearTimeout(qT); qT = setTimeout(function () { selQ = $("psQ").value; pickRows(); }, 150); });
     $("psAll").addEventListener("change", function (e) {
       lastRows.forEach(function (r) { if (r.state === "ok" && !r.ship && (!r.loss || !e.target.checked)) { r.sel = e.target.checked; r.touched = true; } }); render();
     });
-    setInterval(function () { if (panel.style.display === "block" && !busy && document.activeElement && !document.activeElement.classList.contains("nb-w")) buildPool(); }, 60000);
+    setInterval(function () { if (isOpen() && !busy && document.activeElement && !document.activeElement.classList.contains("nb-w") && document.activeElement.id !== "psQ") buildPool(); }, 60000);
     try { var last = localStorage.getItem(LAST); if (last) { var lt = setInterval(function () { if (db()) { clearInterval(lt); watch(last); } }, 3000); } } catch (e) {}
     window.__proshipBuild = build; window.__proshipRows = function () { return lastRows; };
   }
