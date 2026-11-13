@@ -201,7 +201,7 @@
     /* NimbusPost + Zippy switched off (owner 13 Nov 2026: ProShip ships everything now) — hide their pills, panels and the
        "Upload NimbusPost export" button. Their code stays loaded (other panels read their weight settings). */
     var off = document.createElement("style"); off.id = "aikm-ship-off-css";
-    off.textContent = "#fsTabNimbus,#fsTabZippy,#selfshipNimbusPanel,#selfshipZippyPanel,#cfUpload,#cfUpNote{display:none !important;}";
+    off.textContent = "#fsTabNimbus,#fsTabZippy,#selfshipNimbusPanel,#selfshipZippyPanel,#cfUpload,#cfUpNote,.tabbtn[data-tab=\"nimbusdash\"],.tabbtn[data-tab*=\"zippy\"],#ndHvBanner{display:none !important;}";  // NimbusPost / Zippy off (owner 13 Nov 2026) - side-menu items hidden too
     document.head.appendChild(off);
 
     /* Self-Ship "ProShip" pill = shortcut to the tab */
