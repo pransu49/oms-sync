@@ -87,6 +87,8 @@
 - **Tab toolbars** (owner 13 Nov 2026, block "Tab toolbars" at the end of `amazon-name-search.js` — keep it): every Amazon tab has ONE compact
   row: search · filters/actions · count · export (36 px, same button style). Competitor Pricing's bulk-price bar (`#bpBar`, display:contents) is
   INSIDE that row; Buy Box lost + OMS hints became (i) tooltips; OMS auto-map buttons moved into the OMS search row.
+  Top search (owner 13 Nov 2026, block "Top search" — keep it): ONE search box `#apTopQ` in the header menu row types into the open tab's own
+  (now hidden) `.ap-search input` and fires input/keyup/change. New tabs: keep a `.ap-search input` in `.ap-tools` and it works automatically.
 - **Quota savers in `spapi-sync.js`** (owner 12 Nov 2026, "ensure all syncs work under free limits"):
   old per-item collections `spapiInventory` / `spapiOrders` / `spapiCompetitivePricing` are NOT written any more (nothing reads them —
   page + robots use the snapshot; `SPAPI_LEGACY_MIRROR=on` brings the writes back). Sent-price checks: max 150 per run, check counts in ONE doc

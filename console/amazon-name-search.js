@@ -1004,3 +1004,65 @@
   new MutationObserver(function () { if (q) return; q = true; setTimeout(function () { q = false; all(); }, 30); }).observe(main, { childList: true, subtree: true });
   all();
 } catch (e) {} })();
+
+/* ===== Top search (owner 13 Nov 2026: "search option on top instead of mid"): ONE search box in the header menu row.
+   It types into the open tab's own search (Orders / Inventory / Competitor Pricing / Buy Box lost / OMS inventory /
+   Duplicate ASINs), so every tab keeps its own filtering. The search boxes inside the tabs are hidden. 0 Firebase reads. ===== */
+(function () { try {
+  if (window.__aikmTopSearch) return; window.__aikmTopSearch = true;
+  var ICON = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23C9A24B' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E\")";
+  var css = document.createElement("style");
+  css.textContent =
+    ".ap-main .ap-tools .ap-search,.ap-main .dpa-bar .ap-search{display:none!important}" +
+    ".ap-act-in>.ap-act-sp{display:none}.ap-act-in>#ahPill{order:3}#spapiPricingTable_cards .bp-sep{display:none}" +
+    ".ap-tsearch{order:2;flex:1 1 360px;max-width:560px;min-width:220px;height:34px;box-sizing:border-box;display:flex;align-items:center;gap:8px;margin:0 2px 0 auto;padding:0 10px 0 36px;" +
+      "background:rgba(255,255,255,.08) " + ICON + " no-repeat 12px center;border:1px solid rgba(255,255,255,.16);border-radius:9px;transition:background-color .15s,border-color .15s}" +
+    ".ap-tsearch:focus-within{background-color:rgba(255,255,255,.14);border-color:rgba(201,162,75,.7);box-shadow:0 0 0 3px rgba(201,162,75,.15)}" +
+    ".ap-tsearch input{all:unset;flex:1;min-width:0;height:100%;font:500 12.5px 'Inter',sans-serif;color:#fff}.ap-tsearch input::placeholder{color:rgba(255,255,255,.55)}" +
+    ".ap-tsearch button{all:unset;cursor:pointer;color:rgba(255,255,255,.6);font-size:15px;line-height:1;padding:2px 4px}.ap-tsearch button:hover{color:#fff}.ap-tsearch button[hidden]{display:none}" +
+    ".ap-tsearch kbd{font:600 10px 'Inter',sans-serif;color:rgba(255,255,255,.5);border:1px solid rgba(255,255,255,.2);border-radius:5px;padding:1px 5px}" +
+    "@media(max-width:760px){.ap-tsearch{flex:1 0 220px;max-width:none}.ap-tsearch kbd{display:none}}";
+  document.head.appendChild(css);
+
+  function target() {   // the search input of what is open now
+    var ins = [].slice.call(document.querySelectorAll(".ap-main .ap-tools .ap-search input, .ap-main .dpa-bar .ap-search input"));
+    return ins.filter(function (i) { var card = i.closest(".ap-card") || i.closest("[id$='_cards']") || i.parentNode.parentNode; return card && card.offsetParent !== null && card.getBoundingClientRect().height > 0; })[0] || null;
+  }
+  var box, inp, clr, last = null, typing = 0;
+  function build() {
+    var row = document.querySelector(".ap-act-in"); if (!row) return false;
+    if (box) return true;
+    box = document.createElement("label"); box.className = "ap-tsearch";
+    box.innerHTML = '<input type="text" id="apTopQ" autocomplete="off" placeholder="Search…"><button type="button" title="Clear" hidden>✕</button>';
+    var sp = row.querySelector(".ap-act-sp"); row.insertBefore(box, sp || null);
+    inp = box.querySelector("input"); clr = box.querySelector("button");
+    inp.addEventListener("input", function () { typing = Date.now(); push(inp.value); clr.hidden = !inp.value; });
+    inp.addEventListener("keydown", function (e) { if (e.key === "Escape") { inp.value = ""; push(""); clr.hidden = true; } });
+    clr.onclick = function () { inp.value = ""; push(""); clr.hidden = true; inp.focus(); };
+    document.addEventListener("keydown", function (e) { if (e.key === "/" && !/INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "")) { e.preventDefault(); inp.focus(); } });
+    return true;
+  }
+  function push(v) {
+    var t = target(); if (!t) return;
+    t.value = v;
+    t.dispatchEvent(new Event("input", { bubbles: true }));
+    t.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "a" }));
+    t.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  function sync() {   // when the tab / view changes: show that tab's search text + placeholder
+    if (!build()) return;
+    var t = target();
+    if (!t) { box.style.visibility = "hidden"; last = null; return; }
+    box.style.visibility = "";
+    var ph = t.getAttribute("placeholder") || "Search…"; if (inp.placeholder !== ph) inp.placeholder = ph;
+    if (t !== last && Date.now() - typing > 800) { inp.value = t.value || ""; clr.hidden = !inp.value; }
+    last = t;
+  }
+  var q = false;
+  (function wait(i) {
+    if (!build()) { if (i < 120) setTimeout(function () { wait(i + 1); }, 250); return; }
+    new MutationObserver(function () { if (q) return; q = true; setTimeout(function () { q = false; sync(); }, 60); })
+      .observe(document.querySelector(".ap-main") || document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
+    sync();
+  })(0);
+} catch (e) {} })();
