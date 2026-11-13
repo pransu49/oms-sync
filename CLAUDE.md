@@ -106,6 +106,10 @@
   words, account -> "Tick N loss orders" / "Untick all loss". Reads rows from the DOM (tr.nb-row-loss, "LOSS · ₹x") and clicks the table's own
   checkboxes (change event), so each panel's own loss confirmation still runs. 0 Firebase. Loaded by the block at the end of `console/proship-tab.js`
   (`aikmLossBulkJs`) — keep it. Only set text when it changed (body MutationObserver would loop).
+  FAST tick: while ticking, the panel's `<x>Kpis` box (cfKpis/psKpis/nbKpis/zpKpis) is renamed so each per-tick redraw stops at its
+  first line; ONE normal redraw at the end (200 ticks: 7 s -> 0.3 s). If a panel's render() stops starting with its Kpis box, fix KPI map.
+  AUTO rule (owner 13 Nov 2026: "loss above ₹40 = don't ship, rest ship"): "Always tick loss orders up to ₹X automatically", default ON at ₹40,
+  saved per computer (localStorage `aikm_loss_auto`, "" = off). Each order is auto-ticked once only, so a manual untick stays.
 - Orders cost (`order-fees.js`): old/relisted SKUs (not in inventory) use the order item's ASIN mapping first (packs, combos, vendor).
 - **LOTS-62 stock for Sasta Store** (owner 13 Nov 2026): `spapi-sync-sastastore.yml` sets `LOTS62_STOCK=on` -> the out-of-stock rule and its restock use
   the HIGHER of LOTS-GN and LOTS-62 stock (main `aikm_admin/lots62Catalog`, read only when its savedAt changed; cached in `.cache/lots62-catalog.json`).

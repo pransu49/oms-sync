@@ -26,6 +26,8 @@
     ".lb-bar button.lb-go{all:unset;cursor:pointer;padding:7px 14px;border-radius:8px;background:#D4AF37;color:#1A1405;font-weight:700;font-size:12.5px;white-space:nowrap;}" +
     ".lb-bar button.lb-go[disabled]{opacity:.45;cursor:default;}" +
     ".lb-bar button.lb-off{all:unset;cursor:pointer;padding:7px 12px;border-radius:8px;border:1px solid var(--x-line,#e7e2d3);background:var(--x-surface,#fff);font-weight:600;font-size:12px;white-space:nowrap;}" +
+    ".lb-bar .lb-auto{flex-basis:100%;display:flex;align-items:center;gap:6px;font-weight:600;color:var(--x-text,#0F1E35);padding-top:6px;border-top:1px dashed color-mix(in srgb,var(--x-red,#c0392b) 25%,transparent);}" +
+    ".lb-bar .lb-auto input.lb-auto-on{width:16px;height:16px;accent-color:#D4AF37;}.lb-bar .lb-auto input.lb-auto-max{width:72px !important;}" +
     ".lb-bar .lb-n{color:var(--x-text-2,#3b4659);white-space:nowrap;}";
   document.head.appendChild(css);
 
@@ -57,20 +59,49 @@
     return true;
   }
 
-  /* ---- tick / untick by clicking the table's own checkboxes (each panel re-draws after a change) ---- */
+  /* ---- tick / untick FAST (owner 13 Nov 2026: was slow) ----
+     Each panel re-draws ALL rows after every single tick (~1,200 rows x 200 ticks). Every panel's draw starts with
+     document.getElementById("<x>Kpis") \u2014 so while we tick, that box gets another id: the draw stops at once (after the
+     row is already ticked), and ONE normal draw runs at the end. The errors of the stopped draws are hidden. */
+  var KPI = { cfTable: "cfKpis", psTable: "psKpis", nbTable: "nbKpis", zpTable: "zpKpis" };
+  var muting = false;
+  window.addEventListener("error", function (e) { if (muting) { e.preventDefault(); e.stopImmediatePropagation(); return true; } }, true);
   function apply(table, list, on, bar, done) {
-    var k = 0, total = list.length, cls = list.length ? list[0].cls.split(" ")[0] : "";
+    if (!list.length) { done(); return; }
+    var cls = list[0].cls.split(" ")[0], kpi = document.getElementById(KPI[table.id] || ""), last = null;
     bar.classList.add("lb-busy");
-    (function step() {
-      var t0 = Date.now();
-      while (k < total && Date.now() - t0 < 60) {
-        var r = list[k++];
-        var cb = table.querySelector('input.' + cls + '[data-i="' + r.i + '"]');
-        if (cb && !cb.disabled && cb.checked !== on) { cb.checked = on; cb.dispatchEvent(new Event("change", { bubbles: true })); }
-      }
-      setText(bar.querySelector(".lb-n"), (on ? "Ticking\u2026 " : "Unticking\u2026 ") + k + " / " + total);
-      if (k < total) setTimeout(step, 0); else { bar.classList.remove("lb-busy"); done(); }
-    })();
+    muting = true;
+    if (kpi) kpi.id = kpi.id + "__lbwait";
+    try {
+      list.forEach(function (r) {
+        var cb = table.querySelector("input." + cls + '[data-i="' + r.i + '"]');
+        if (cb && !cb.disabled && cb.checked !== on) { cb.checked = on; try { cb.dispatchEvent(new Event("change", { bubbles: true })); } catch (e) {} last = cb; }
+      });
+    } finally {
+      if (kpi) kpi.id = KPI[table.id];
+      muting = false;
+    }
+    // one real draw with everything ticked
+    if (last) { var cb = table.querySelector("input." + cls + '[data-i="' + last.getAttribute("data-i") + '"]') || last; try { cb.dispatchEvent(new Event("change", { bubbles: true })); } catch (e) {} }
+    bar.classList.remove("lb-busy");
+    done();
+  }
+
+  /* ---- automatic rule: "ship loss orders up to \u20b9X" (saved on this computer; default \u20b940) ---- */
+  var AUTO_KEY = "aikm_loss_auto";
+  function autoMax() { try { var v = localStorage.getItem(AUTO_KEY); return v === null ? "40" : v; } catch (e) { return "40"; } }
+  function setAuto(v) { try { localStorage.setItem(AUTO_KEY, v); } catch (e) {} }
+  var autoDone = {}; // table|order id -> already auto-ticked once (a manual untick afterwards is respected)
+  function rowId(table, i) { var cb = table.querySelector('input[data-i="' + i + '"]'), tr = cb && cb.closest("tr"), x = tr && tr.querySelector(".cx-awb"); return x ? x.textContent.trim() : "i" + i; }
+  function runAuto(id) {
+    var max = autoMax(); if (max === "") return;
+    var table = document.getElementById(id), anchor = table && (table.closest(".table-scroll") || table), bar = anchor && anchor.previousElementSibling;
+    if (!bar || !bar.classList.contains("lb-bar") || bar.classList.contains("lb-busy")) return;
+    var list = lossRows(table).filter(function (r) {
+      if (r.on || !(r.loss <= +max)) return false;
+      var k = id + "|" + rowId(table, r.i); if (autoDone[k]) return false; autoDone[k] = 1; return true;
+    });
+    if (list.length) apply(table, list, true, bar, function () { refresh(id); });
   }
 
   /* ---- one bar per table ---- */
@@ -91,7 +122,9 @@
         '<select class="lb-acct"><option value="">All accounts</option></select>' +
         '<button type="button" class="lb-go">Tick</button>' +
         '<button type="button" class="lb-off">Untick all loss</button>' +
-        '<span class="lb-n"></span>';
+        '<span class="lb-n"></span>' +
+        '<label class="lb-auto" title="Saved on this computer"><input type="checkbox" class="lb-auto-on"> Always tick loss orders up to \u20b9' +
+        '<input type="number" class="lb-auto-max" min="0" step="1"> automatically</label>';
       anchor.parentNode.insertBefore(bar, anchor);
       bar._st = { max: "", q: "", acct: "" };
       var maxI = bar.querySelector(".lb-max"), qI = bar.querySelector(".lb-q"), aS = bar.querySelector(".lb-acct");
@@ -106,6 +139,11 @@
         if (!list.length) return;
         apply(table, list, true, bar, function () { refresh(id); });
       });
+      var aOn = bar.querySelector(".lb-auto-on"), aMax = bar.querySelector(".lb-auto-max");
+      var am = autoMax(); aOn.checked = am !== ""; aMax.value = am || "40";
+      function saveAuto() { setAuto(aOn.checked ? (aMax.value.trim() || "40") : ""); autoDone = {}; document.querySelectorAll(".lb-bar").forEach(function (b2) { syncAuto(b2); }); TABLES.forEach(runAuto); }
+      aOn.addEventListener("change", saveAuto);
+      aMax.addEventListener("change", saveAuto);
       bar.querySelector(".lb-off").addEventListener("click", function () {
         var list = lossRows(table).filter(function (r) { return r.on; });
         if (!list.length) return;
@@ -115,6 +153,8 @@
     refresh(id, rows);
   }
 
+  function syncAuto(bar) { var am = autoMax(), on = bar.querySelector(".lb-auto-on"), mx = bar.querySelector(".lb-auto-max");
+    if (on && document.activeElement !== mx) { on.checked = am !== ""; if (am) mx.value = am; } }
   function refresh(id, rows) {
     var table = document.getElementById(id); if (!table) return;
     var anchor = table.closest(".table-scroll") || table, bar = anchor.previousElementSibling;
@@ -142,7 +182,7 @@
 
   /* ---- keep the bars in step with the tables (they re-draw on every change) ---- */
   var pending = false;
-  function scan() { pending = false; TABLES.forEach(ensure); }
+  function scan() { pending = false; TABLES.forEach(ensure); TABLES.forEach(runAuto); }
   new MutationObserver(function () { if (!pending) { pending = true; setTimeout(scan, 250); } })
     .observe(document.body, { childList: true, subtree: true });
   scan();
