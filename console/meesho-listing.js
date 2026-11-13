@@ -144,6 +144,11 @@
       ".ms-sel{flex:1;height:34px;border:1px solid var(--line);border-radius:8px;padding:0 8px;font:13px 'Inter',sans-serif;background:#fff;color:var(--ink)}",
       ".ms-pn{font-weight:600;font-size:12px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}",
       ".ms-pn+small{color:var(--muted);font-size:11px}",
+      ".ms-ti{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:7px;padding:5px 7px;font:600 12px/1.35 'Inter',sans-serif;color:var(--ink);background:#fff;resize:vertical;outline:none}",
+      ".ms-ti:focus{border-color:var(--gold);box-shadow:0 0 0 3px rgba(201,162,75,.15)}",
+      ".ms-pk{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin:5px 0 3px;font-size:11px;color:var(--muted)}.ms-pk label{display:inline-flex;align-items:center;gap:5px;font-weight:600;color:var(--ink-2)}",
+      ".ms-pk input{width:52px;height:26px;border:1px solid var(--gold);border-radius:7px;text-align:center;font-weight:700;color:var(--ink);background:var(--gold-soft,#F6EEDB)}",
+      ".ms-t td.p>small{display:block;color:var(--muted);font-size:11px}",
       ".ms-bar{height:6px;border-radius:3px;background:#EEEBE3;overflow:hidden;margin-top:8px}.ms-bar i{display:block;height:100%;background:var(--gold);transition:width .4s}",
       "@media(max-width:980px){.ms-grid{grid-template-columns:1fr}.ms-col+.ms-col{border-left:0;border-top:1px solid var(--line-2)}.ms-steps{display:none}.ms-sg{grid-template-columns:1fr}}"
     ].join("");
@@ -528,7 +533,7 @@
   async function libLoad() {
     var db = mainDb(); if (!db) return;
     try { var d = await db.collection("aikm_admin").doc("meeshoTplIndex").get(), x = d.exists ? d.data() : {}; LIB = x.list || {};
-      MRPFIX = x.mrp || {};
+      MRPFIX = x.mrp || {}; PACKS = x.packs || {};
       var bw = Object.keys(x.badWords || {}).map(function (k) { return x.badWords[k]; }); if (bw.length) learnWords(bw, true);
       if (!x.rebuilt2) libRebuild(db, x);
     } catch (e) { LIB = null; }
@@ -724,15 +729,32 @@
     n = parseFloat(p.taxPercent); return isNaN(n) ? "" : n;
   }
   function toCm(x) { if (!x || x.v == null) return ""; var f = { mm: 0.1, m: 100, in: 2.54, inches: 2.54 }[String(x.u).toLowerCase()] || 1; return Math.round(x.v * f * 10) / 10; }
+  // Pack of N and own title, set in the review table per product (LOTS sells 1, you list a pack of 10).
+  // Kept online in aikm_admin/meeshoTplIndex.packs.<key> = { n, title } so the next file remembers them.
+  var PACKS = {};
+  var pkKey = function (p) { return String(p.asin || "").toUpperCase().replace(/[^A-Z0-9-]/g, "_"); };
+  var packN = function (p) { return Math.max(1, Math.min(500, parseInt(p.packN, 10) || 1)); };
+  function packSave(p) {
+    var k = pkKey(p), v = { n: packN(p), title: p.titleOverride || "" }; PACKS[k] = v;
+    try { var upd = {}; upd["packs." + k] = v.n > 1 || v.title ? v : firebase.firestore.FieldValue.delete();
+      var d = mainDb().collection("aikm_admin").doc("meeshoTplIndex"); d.set({ touched: Date.now() }, { merge: true }).then(function () { return d.update(upd); }).catch(function () {}); } catch (e) {}
+  }
+  function autoTitle(x) {   // the robot's title; "(Pack of N)" added when you list a pack
+    var t = safe(tidy((x.d && x.d.title) || x.p.name || "")), n = packN(x.p);
+    if (n > 1) t = t.replace(/[\s,|(\[-]*pack\s*of\s*\d+[)\]]?/ig, "").trim() + " (Pack of " + n + ")";
+    return t;
+  }
   var MRPFIX = {};   // MRP typed in the review table (Amazon's was wrong), per ASIN, kept online in aikm_admin/meeshoTplIndex.mrp
+  var mrpKey = function (p) { return String(p.asin).toUpperCase() + (packN(p) > 1 ? "x" + packN(p) : ""); };
   function mrpOf(p, d) {
-    var m = Number(MRPFIX[String(p.asin).toUpperCase()]) || Number(p.mrp) || Number(d && d.mrp) || 0; if (m) return m;
-    try { var lm = resolveSpapiLotsMatch(p.name, p.asin), pr = lm && lotsPriceByCode[lm.code]; m = Number(pr && pr.mrp) || 0; } catch (e) {}
-    return m;
+    var fix = Number(MRPFIX[mrpKey(p)]); if (fix) return fix;   // typed for this pack size
+    var m = Number(MRPFIX[String(p.asin).toUpperCase()]) || Number(p.mrp) || Number(d && d.mrp) || 0;
+    if (!m) try { var lm = resolveSpapiLotsMatch(p.name, p.asin), pr = lm && lotsPriceByCode[lm.code]; m = Number(pr && pr.mrp) || 0; } catch (e) {}
+    return m * packN(p);   // pack of 10 = 10 x one-piece MRP
   }
   function costOf(p) {
-    if (p.lots) return p.cost > 0 ? Number(p.cost) : null;   // LOTS product: its own best slab price
-    try { var c = getEffectiveSpapiUnitCost(p.name, p.sku); if (c && c.value > 0) return Number(c.value); } catch (e) {}
+    if (p.lots) return p.cost > 0 ? Number(p.cost) * packN(p) : null;   // LOTS product: its own best slab price x pack
+    try { var c = getEffectiveSpapiUnitCost(p.name, p.sku); if (c && c.value > 0) return Number(c.value) * packN(p); } catch (e) {}
     return null;
   }
   // Meesho price for the wanted profit. Meesho charges no commission and no shipping,
@@ -745,7 +767,7 @@
     if (p._pi) return p._pi;
     var mrp = mrpOf(p, d), cost = costOf(p), gst = Number(gstOf(p)), r = (isNaN(gst) ? 5 : gst) / 100;
     if (!cost) {
-      var v = Number(p.price) || 0; if (!v) return (p._pi = { v: "", was: "no cost & no Amazon price" });
+      var v = (Number(p.price) || 0) * packN(p); if (!v) return (p._pi = { v: "", was: "no cost & no Amazon price" });
       v = Math.round(v * (1 + (Number(S.pct) || 0) / 100));
       return (p._pi = { v: mrp && v > maxFor(mrp) ? maxFor(mrp) : v, was: "No cost known — Amazon price used. Add cost (LOTS mapping / manual cost) for profit pricing." });
     }
@@ -798,9 +820,9 @@
     var t = (x.d && x.d.title) || x.p.name || "", o = (x.d && x.d.other) || {}, g;
     var m = /(\d+)\s*[x×*]\s*(\d+(?:\.\d+)?\s*(?:kgs?|gms?|grams?|g|ml|l)\b)/i.exec(t); if (m) return Math.round(+m[1] * grams(m[2]));
     g = grams(t) || grams(o.item_net_weight || o.net_content_weight || o.net_content || o.net_quantity || "");
-    return Math.round(g || (x.d && x.d.weightG) || (x.p.weightKg ? x.p.weightKg * 1000 : 0));
+    return Math.round((g || (x.d && x.d.weightG) || (x.p.weightKg ? x.p.weightKg * 1000 : 0)) * packN(x.p));
   }
-  function packOf(x) { var t = (x.d && x.d.title) || x.p.name || "", m = /pack\s*of\s*(\d+)/i.exec(t) || /(\d+)\s*[x×]\s*\d/i.exec(t), o = (x.d && x.d.other) || {};
+  function packOf(x) { if (packN(x.p) > 1) return String(packN(x.p)); var t = (x.d && x.d.title) || x.p.name || "", m = /pack\s*of\s*(\d+)/i.exec(t) || /(\d+)\s*[x×]\s*\d/i.exec(t), o = (x.d && x.d.other) || {};
     var n = parseInt(o.number_of_items || o.number_of_pieces, 10);
     return m ? m[1] : (n > 0 && n <= 100 ? String(n) : "1"); }
   // Amazon's contact text -> { name, address }. Names like "+91-80-2520..", "1134" or "No. 1134" were
@@ -853,7 +875,8 @@
     [/weight/, function (x) {
       var g = netG(x); if (!g) return "";
       if (x.c.options) { var hit = x.c.options.filter(function (o) { return /^\s*[\d.]+\s*[a-z]+\s*$/i.test(o) && Math.abs(grams(o) - g) < 0.5; });
-        return { v: hit.filter(function (o) { return !/ml|l$/i.test(o); })[0] || hit[0] || "", was: g + " g" }; }
+        var more = x.c.options.filter(function (o) { var m = /(more|greater|above|over)\s*than\s*([\d.]+)\s*(kg|g)/i.exec(o); return m && g > (+m[2]) * (/kg/i.test(m[3]) ? 1000 : 1); })[0];   // e.g. "More Than 4kg" for a pack of 10 x 1 kg
+        return { v: hit.filter(function (o) { return !/ml|l$/i.test(o); })[0] || hit[0] || more || "", was: g + " g" }; }
       return /\bkg|kilo/.test(x.h) ? Math.round(g / 10) / 100 : g;
     }],
     [/net quantity|pack of|no\.? of (pieces|items)|number of (pieces|items)/, function (x) { return packOf(x); }],
@@ -874,9 +897,9 @@
     [/generic name/, function (x) { var o = x.c.options || [], cat = (tpl && tpl.cat || "").toLowerCase();
       var hit = o.filter(function (a) { return a.toLowerCase() === cat; })[0] || o.filter(function (a) { return cat && (cat.indexOf(a.toLowerCase()) >= 0 || a.toLowerCase().indexOf(cat) >= 0) && a.length > 3; })[0];
       return hit ? { v: hit } : ((x.d && x.d.other && (x.d.other.item_type_name || x.d.other.generic_name)) || ""); }],
-    [/inventory|stock|available quantity|quantity available|^qty/, function (x) { return x.p.quantity > 0 ? x.p.quantity : (Number(S.stock) || 0); }],
+    [/inventory|stock|available quantity|quantity available|^qty/, function (x) { return x.p.quantity > 0 ? Math.floor(x.p.quantity / packN(x.p)) : (Number(S.stock) || 0); }],
     [/sku|style id|style code|product id/, function (x) { return x.p.sku || x.p.asin; }, "text"],
-    [/product name|title|catalog name|^name$/, function (x) { return safe(tidy((x.d && x.d.title) || x.p.name || "")); }, "text"],
+    [/product name|title|catalog name|^name$/, function (x) { return x.p.titleOverride ? x.p.titleOverride : autoTitle(x); }, "text"],
     [/image|photo|picture/, function (x) { var im = (x.d && x.d.images && x.d.images.length ? x.d.images : (x.p.img ? [x.p.img] : [])); im = im.filter(function (u, i) { return im.indexOf(u) === i; }); return im[x.slot] || ""; }, "text"],
     [/brand/, function (x) { return S.brand || (x.d && x.d.brand) || x.p.brand || ""; }, "text"],
     [/country/, function (x) { return (x.d && x.d.countryOfOrigin) || S.country || "India"; }],
@@ -945,8 +968,15 @@
       var mem = memGet();
       items.forEach(function (p) { var d0 = r.d[dA(p)]; if (p.ext && d0) { if (d0.title) p.name = d0.title; if (d0.mrp && !p.mrp) p.mrp = d0.mrp; delete p._pi; } });
       buildBrandContacts(items.map(function (p) { return { d: r.d[dA(p)] || null }; }));
-      grid = { rows: items.map(function (p) {
-        var d = r.d[dA(p)] || null, slot = 0, vals = {};
+      items.forEach(function (p) { var k = PACKS[pkKey(p)]; if (k) { p.packN = k.n || 1; p.titleOverride = k.title || ""; } });
+      grid = { rows: items.map(function (p) { return buildRow(p, r.d[dA(p)] || null, mem); }), warn: r.warn || "" };
+      drawGrid();
+      note(r.warn ? "⚠ " + esc(r.warn) : "Done — check the yellow boxes below, then download.");
+    } catch (e) { note("⚠ " + esc(e.message || e)); }
+    busy = false; drawSteps();
+  }
+  function buildRow(p, d, mem) {
+        var slot = 0, vals = {};
         tpl.cols.forEach(function (c) {
           var h = c.head.toLowerCase(), rule = RULES.filter(function (x) { return x[0].test(h); })[0], v, kind = rule ? rule[2] : "";
           var x = { p: p, d: d, h: h, slot: 0, c: c };
@@ -961,11 +991,14 @@
           vals[c.idx] = { v: sn.v === "" || sn.v == null ? "" : String(sn.v), was: sn.was || "", low: !!sn.low, auto: sn.v !== "" && sn.v != null, text: kind === "text" || !!c.options };
         });
         return { p: p, d: d, vals: vals };
-      }), warn: r.warn || "" };
-      drawGrid();
-      note(r.warn ? "⚠ " + esc(r.warn) : "Done — check the yellow boxes below, then download.");
-    } catch (e) { note("⚠ " + esc(e.message || e)); }
-    busy = false; drawSteps();
+  }
+  // Pack of N or title changed in the review table: rebuild that product (price, MRP, weight, stock, title), keep your other typed boxes
+  var PACKCOL = /product name|title|catalog name|^name$|price|\bmrp\b|maximum retail|weight|net quantity|pack of|no\.? of|number of|inventory|stock|quantity|^qty/i;
+  function repack(ri) {
+    var old = grid.rows[ri], p = old.p; delete p._pi;
+    var nw = buildRow(p, old.d, memGet());
+    tpl.cols.forEach(function (c) { if (old.vals[c.idx] && old.vals[c.idx].auto === false && !PACKCOL.test(c.head)) nw.vals[c.idx] = old.vals[c.idx]; });
+    grid.rows[ri] = nw;
   }
 
   /* ---------- 5. Meesho check (before upload) ----------
@@ -989,7 +1022,7 @@
   }
   function onMrp(ri, v) {   // MRP typed -> saved for this ASIN (online) and the price worked out again
     var r = grid.rows[ri], cp = cPriceC(), m = parseFloat(v); if (!(m > 0)) return;
-    var a = String(r.p.asin).toUpperCase(); MRPFIX[a] = m; delete r.p._pi;
+    var a = mrpKey(r.p); MRPFIX[a] = m; delete r.p._pi;
     try { var upd = {}; upd["mrp." + a] = m; var d = mainDb().collection("aikm_admin").doc("meeshoTplIndex"); d.set({ touched: Date.now() }, { merge: true }).then(function () { return d.update(upd); }).catch(function () {}); } catch (e) {}
     if (cp && r.vals[cp.idx].auto !== false) { var i = priceInfo(r.p, r.d); r.vals[cp.idx] = { v: i.v === "" ? "" : String(i.v), was: i.was, low: !!i.low, auto: true, text: false }; }
   }
@@ -1014,7 +1047,10 @@
         '<div class="ms-all"><input data-all="' + c.idx + '"' + (c.options ? ' list="' + id + '"' : "") + ' placeholder="Same for all"><button type="button" data-allgo="' + c.idx + '">Apply</button></div></th>';
     }).join("");
     var body = grid.rows.map(function (r, ri) {
-      return '<tr><td class="p"><div class="ms-pn" title="' + esc(r.p.name) + '">' + esc(r.p.name) + "</div><small>" + esc(r.p.asin) + (r.p.lots ? " · LOTS" + (r.d ? " + Amazon details" : "") : r.d ? "" : " · basic data") + "</small>" +
+      var nc0 = colOf(/product name|title|catalog name|^name$/i), tv = nc0 ? r.vals[nc0.idx].v : (r.p.titleOverride || r.p.name);
+      return '<tr><td class="p"><textarea class="ms-ti" rows="2" data-title="' + ri + '" title="Product title on Meesho — edit freely">' + esc(tv) + "</textarea>" +
+        '<div class="ms-pk"><label>Pack of <input type="number" min="1" max="500" value="' + packN(r.p) + '" data-pack="' + ri + '"></label>' +
+        (packN(r.p) > 1 ? "<span>cost, MRP, weight × " + packN(r.p) + "</span>" : "<span>set 10 to sell a pack of 10</span>") + (r.p.titleOverride ? '<button type="button" class="ms-lnk" data-tireset="' + ri + '">Auto title</button>' : "") + "</div><small>" + esc(r.p.asin) + (r.p.lots ? " · LOTS" + (r.d ? " + Amazon details" : "") : r.d ? "" : " · basic data") + "</small>" +
         (iss[ri].length ? '<div class="ms-stat bad"><b>✕ Left out — fix:</b>' + iss[ri].map(esc).join("<br>") + "</div>" : '<div class="ms-stat ok">✓ Ready for Meesho</div>') + "</td>" + cols.map(function (c) {
         var v = r.vals[c.idx], need = !v.v && (c.req || (onlyNeed && nc.length));
         var why = invalid(c, v.v), bad = (v.v && c.options && c.options.indexOf(v.v) < 0) || v.low || !!why;
@@ -1035,6 +1071,19 @@
       '<button type="button" class="ms-go gold' + (ready ? "" : " dim") + '" id="msDl"><i class="ti ti-download"></i>Download ' + ready + " ready product" + (ready === 1 ? "" : "s") + "</button></div>" +
       dl + '<div class="ms-tw"><table class="ms-t"><thead><tr><th class="p">Product</th>' + head + "</tr></thead><tbody>" + body + "</tbody></table></div>" +
       '<div class="ms-note" style="text-align:left">Each product is checked with Meesho\'s rules first — only ✓ Ready ones go in the file, so Meesho should accept the whole upload. Change the MRP box if Amazon\'s MRP is wrong; the price is worked out again. Yellow = Meesho needs it. Use <b>Same for all</b> to fill a whole column at once. Then upload the downloaded file in Meesho → Catalog Upload → Bulk upload.</div>';
+    res.onchange = function (e) {
+      var el = e.target;
+      if (el.dataset && el.dataset.pack != null) {
+        var ri = +el.dataset.pack, p = grid.rows[ri].p, n = Math.max(1, Math.min(500, parseInt(el.value, 10) || 1));
+        p.packN = n; repack(ri); packSave(p); drawGrid();
+        toast(n > 1 ? "Pack of " + n + " — title, price, MRP, weight and stock updated" : "Back to single piece");
+      } else if (el.dataset && el.dataset.title != null) {
+        var r2 = grid.rows[+el.dataset.title], t = tidy(el.value), nc1 = colOf(/product name|title|catalog name|^name$/i);
+        r2.p.titleOverride = t && t !== autoTitle({ p: r2.p, d: r2.d }) ? t : "";
+        if (nc1) r2.vals[nc1.idx] = { v: t || autoTitle({ p: r2.p, d: r2.d }), was: "", auto: !r2.p.titleOverride, text: true };
+        packSave(r2.p); drawGrid(); toast("✓ Title saved for this product");
+      }
+    };
     res.oninput = function (e) {
       var el = e.target; if (!el.dataset || el.dataset.r == null) return;
       var v = grid.rows[+el.dataset.r].vals[+el.dataset.c]; v.v = el.value.trim(); v.auto = false; v.low = false;
@@ -1049,6 +1098,8 @@
     };
     res.onclick = function (e) {
       if (e.target.closest("#msTog")) { onlyNeed = !onlyNeed; drawGrid(); return; }
+      var tr = e.target.closest("[data-tireset]");
+      if (tr) { var rr = grid.rows[+tr.dataset.tireset]; rr.p.titleOverride = ""; packSave(rr.p); repack(+tr.dataset.tireset); drawGrid(); return; }
       if (e.target.closest("#msDl")) { download(); return; }
       var b = e.target.closest("[data-allgo]"); if (!b) return;
       var idx = +b.dataset.allgo, inp = res.querySelector('[data-all="' + idx + '"]'), v = inp.value.trim();

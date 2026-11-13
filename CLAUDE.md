@@ -25,6 +25,7 @@
   Products can come from Amazon listings OR the LOTS price list (`lotsVendor.products`, switch at the top of the list): LOTS items are
   `LOTS-<code>` (cost = best LOTS slab, MRP/GST/HSN/photo/stock from LOTS); if mapped 1:1 to an ASIN in spapiAsinLotsMap, the robot also reads that ASIN's details.
   'Add ASINs' button: paste ASINs / Amazon links (not necessarily ours) -> meesho-robot reads Amazon's catalogue -> added to the pick list as EXT items; Fill uses those details (owner does NOT want an Excel download; axExcel() kept unused).
+  Review table: editable title + 'Pack of N' per product (cost, MRP, weight x N, stock / N, title gets '(Pack of N)'); saved online in meeshoTplIndex.packs.<key>; MRP typed for a pack saved as mrp.<ASIN>x<N>.
   Meesho rules checked before download (`issues()`): MRP >= price x 1.10, no learned blocked word in Brand, required boxes filled. Only rows that pass are written to the file.
 - Auto sale bills (`console/sale-autobill.js`) is loaded on the Purchase & Sales page (`page.purchase-bills.liquid`)
   by the block `AIKM AUTO SALE BILLS LOADER` just before `</body>`. Keep that block when replacing that template.
