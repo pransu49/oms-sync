@@ -42,6 +42,7 @@ async function signin() {
   if (!USER || !PASS) throw new Error('Missing PROSHIP_USERNAME / PROSHIP_PASSWORD — add both in GitHub -> Settings -> Secrets and variables -> Actions.');
   const res = await fetch(BASE + '/api/auth/signin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: USER, password: PASS }) });
   const text = await res.text(); let j = {}; try { j = JSON.parse(text); } catch (e) {}
+  if (!j.accessToken && /mfa|otp/i.test(j.message || text)) throw new Error('ProShip login needs an OTP (MFA is on for this user) — a robot cannot enter OTPs. Ask ProShip to switch off MFA / OTP for the API user. ProShip said: ' + clip(j.message || text, 160));
   if (!j.accessToken) throw new Error(`ProShip login failed (status ${res.status}): ${clip(j.message || text, 200)}`);
   if (j.status && String(j.status).toUpperCase() !== 'ACTIVE') throw new Error(`ProShip user is ${j.status} — only ACTIVE users can use the API.`);
   token = j.accessToken;

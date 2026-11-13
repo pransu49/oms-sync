@@ -165,4 +165,5 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   connection test + rates `aikm_admin/proshipCheck`. The panel is NOT loaded until the owner approves the preview: the loader block
   (`aikmProshipJs`, end of `console/refund-tab.js`) is added then — keep it once added.
   Firebase: +1 read per oms-push-tracking / amazon-confirm run (~190/day); per ship job ~4 reads + OMS chunks, ~3 + N/10 writes; console
-  1 read per load (proshipIndex) + ~5 when the panel is opened. Not tested against the real ProShip API yet — first live order is the test.
+  1 read per load (proshipIndex) + ~5 when the panel is opened. First real `check` run (13 Nov 2026): `/api/auth/signin` answered 200 "MFA required. OTP sent to registered email" — the user in the secrets has MFA on,
+  so no robot login until ProShip switches MFA off for the API user (or the owner adds a user without it). Create / label / track calls are still untested.
