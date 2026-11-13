@@ -201,8 +201,17 @@
     /* NimbusPost + Zippy switched off (owner 13 Nov 2026: ProShip ships everything now) — hide their pills, panels and the
        "Upload NimbusPost export" button. Their code stays loaded (other panels read their weight settings). */
     var off = document.createElement("style"); off.id = "aikm-ship-off-css";
-    off.textContent = "#fsTabNimbus,#fsTabZippy,#selfshipNimbusPanel,#selfshipZippyPanel,#cfUpload,#cfUpNote,.tabbtn[data-tab=\"nimbusdash\"],.tabbtn[data-tab*=\"zippy\"],#ndHvBanner{display:none !important;}";  // NimbusPost / Zippy off (owner 13 Nov 2026) - side-menu items hidden too
+    off.textContent = "#fsTabNimbus,#fsTabZippy,#selfshipNimbusPanel,#selfshipZippyPanel,#cfUpload,#cfUpNote,#ndHvBanner{display:none !important;}" +
+      /* side-menu items: the menu's own styles use html#aikm ... !important, so this needs the same weight */
+      "html#aikm body #mainTabbar .tabbtn[data-tab=\"nimbusdash\"],html#aikm body #mainTabbar .tabbtn[data-tab*=\"zippy\"],html#aikm body .tabbtn[data-tab=\"nimbusdash\"],html#aikm body .tabbtn[data-tab*=\"zippy\"]{display:none !important;}";  // NimbusPost / Zippy off (owner 13 Nov 2026) - side-menu items hidden too
     document.head.appendChild(off);
+    /* belt and braces: hide the side-menu buttons inline too (beats any menu style), re-checked as other tabs load */
+    var hideOff = function () {
+      document.querySelectorAll('.tabbtn[data-tab="nimbusdash"],.tabbtn[data-tab*="zippy"]').forEach(function (b) {
+        if (b.style.display !== "none") { b.style.setProperty("display", "none", "important"); if (b.classList.contains("active")) { var c = document.querySelector('.tabbtn[data-tab="courier"]'); if (c) c.click(); } }
+      });
+    };
+    hideOff(); [1500, 4000, 8000, 15000].forEach(function (t) { setTimeout(hideOff, t); });
 
     /* Self-Ship "ProShip" pill = shortcut to the tab */
     var after = document.getElementById("fsTabZippy") || document.getElementById("fsTabNimbus");
