@@ -887,6 +887,10 @@
   if (window.__aikmHdrMenu) return; window.__aikmHdrMenu = true;
   var css = document.createElement("style");
   css.textContent =
+    /* account names centred (owner 13 Nov 2026): brand and sync take equal space on both sides */
+    ".ap-top .ap-top-in>.ap-spacer{display:none}.ap-top .ap-top-in>.ap-brand{flex:1 1 0;min-width:0}.ap-top .ap-top-in>.ap-sync{flex:1 1 0;min-width:0;justify-content:flex-end}" +
+    ".ap-top .ap-top-in>#spapiAccountSwitcherWrap{flex:none}" +
+    "@media(max-width:760px){.ap-top .ap-top-in>.ap-brand,.ap-top .ap-top-in>.ap-sync{flex:1 1 100%;justify-content:flex-start}}" +
     ".ap-act{display:flex;align-items:center;gap:8px;padding:0 28px 12px;margin-top:-2px}" +
     ".ap-act-in{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:12px;border-top:1px solid rgba(255,255,255,.08);flex:1;min-width:0}" +
     ".ap-act-sp{flex:1}" +
