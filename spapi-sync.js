@@ -2216,36 +2216,136 @@ async function applyAddAsinRequests(sellerId) {
   }
 }
 
-async function applyPendingNewListings(sellerId) {
-  const pendingSnap = await db.collection('spapiNewListingRequests')
-    .where('account', '==', ACCOUNT_LABEL).where('status', '==', 'pending').get();
-  if (pendingSnap.empty) { console.log('No pending new-listing requests.'); return; }
-  console.log(`Applying ${pendingSnap.size} pending new-listing request(s)...`);
-
-  for (const doc of pendingSnap.docs) {
-    const { sku, productType, title, brand, price, mrp, hsn, barcode, barcodeType, quantity } = doc.data();
+// ── New product on Amazon (owner 13 Nov 2026: "create new listing in Seller Central if not available on Amazon") ──
+// Page form (console/new-listing.js) writes spapiNewListingRequests/<acct>_<id> { v:2, account, title, brand, barcode, mrp, price, cost,
+// lotsCode, gst, hsn, qty, image, bullets[], description, productType?, extra{attr:value}, create:bool, status:'pending' }.
+// Robot: barcode already on Amazon -> handed to Add ASIN (offer on the existing ASIN). Otherwise: product type (Amazon's
+// recommendation for the title), full LISTING attributes, VALIDATION_PREVIEW first. Errors -> 'needs_info' with Amazon's list
+// (the page asks for those fields). OK + create -> sent; later runs read the new ASIN, map it to the LOTS item -> 'live'.
+// Firebase: 1 query per run (only this account's open requests) + 1-2 writes per request handled.
+const NL_TEXT = (v) => [{ value: String(v), language_tag: 'en_IN', marketplace_id: MARKETPLACE_ID }];
+const NL_VAL = (v) => [{ value: v, marketplace_id: MARKETPLACE_ID }];
+async function nlProductType(title) {
+  const words = String(title || '').replace(/[^A-Za-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2).slice(0, 6);
+  for (const query of [{ itemName: String(title).slice(0, 200), locale: 'en_IN' }, { keywords: words }]) {
     try {
-      if (!sku || !productType) throw new Error('Missing SKU or productType.');
-      const attributes = {};
-      if (title) attributes.item_name = [{ value: title, marketplace_id: MARKETPLACE_ID }];
-      if (brand) attributes.brand = [{ value: brand, marketplace_id: MARKETPLACE_ID }];
-      if (price != null) attributes.purchasable_offer = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', our_price: [{ schedule: [{ value_with_tax: price }] }] }];
-      if (mrp != null) attributes.list_price = [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value: mrp }];
-      if (hsn) attributes.product_tax_code = [{ value: String(hsn) }];
-      if (barcode) attributes.externally_assigned_product_identifier = [{ type: (barcodeType || 'ean').toLowerCase(), value: String(barcode), marketplace_id: MARKETPLACE_ID }];
-      if (quantity != null) attributes.fulfillment_availability = [{ fulfillment_channel_code: 'DEFAULT', quantity }];
-      await spClient.callAPI({
-        operation: 'putListingsItem', endpoint: 'listingsItems',
-        path: { sellerId, sku }, query: { marketplaceIds: [MARKETPLACE_ID] },
-        body: { productType, attributes },
-      });
-      await doc.ref.update({ status: 'applied', appliedAt: admin.firestore.FieldValue.serverTimestamp() });
-      console.log(`New listing created/mapped for SKU ${sku}`);
+      const r = await spClient.callAPI({ operation: 'searchDefinitionsProductTypes', endpoint: 'productTypeDefinitions', query: Object.assign({ marketplaceIds: [MARKETPLACE_ID] }, query) });
+      const pt = ((r.productTypes || [])[0] || {}).name; if (pt) return pt;
+    } catch (e) { console.warn('New listing: product type search failed:', e.message || e); }
+  }
+  return null;
+}
+async function applyPendingNewListings(sellerId) {
+  const snap = await db.collection('spapiNewListingRequests').where('account', '==', ACCOUNT_LABEL).where('status', 'in', ['pending', 'submitted']).limit(20).get();
+  if (snap.empty) { console.log('No pending new-listing requests.'); return; }
+  console.log(`New listing: ${snap.size} open request(s).`);
+  for (const d of snap.docs) {
+    const r = d.data(), done = (patch) => d.ref.set({ ...patch, doneAt: Date.now() }, { merge: true });
+    try {
+      // A) sent earlier: has Amazon made the product (ASIN) yet?
+      if (r.status === 'submitted') {
+        if (Date.now() - (r.submittedAt || 0) < 10 * 60e3) continue;
+        const li = await spClient.callAPI({ operation: 'getListingsItem', endpoint: 'listingsItems', path: { sellerId, sku: r.sku },
+          query: { marketplaceIds: [MARKETPLACE_ID], includedData: ['summaries', 'issues'] } }).catch((e) => ({ err: e.message || String(e) }));
+        const asin = ((li.summaries || [])[0] || {}).asin || null;
+        const errs = (li.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR');
+        if (asin) {
+          if (r.lotsCode) {
+            const rec = { code: String(r.lotsCode), name: r.title || '', vendorName: 'LOTS', parts: [{ code: String(r.lotsCode), name: r.title || '', qty: 1 }], savedAt: new Date().toISOString(), source: 'new-listing' };
+            await dbMain.collection('aikm_admin').doc('spapiAsinLotsMap').set({ map: { [asin]: rec } }, { merge: true }).catch(() => {});
+          }
+          await done({ status: 'live', asin, error: null, issues: errs.map((x) => ({ attr: (x.attributeNames || []).join(', '), msg: x.message })).slice(0, 20) });
+          console.log(`New listing ${r.sku}: Amazon created ASIN ${asin}${r.lotsCode ? ` (mapped to LOTS ${r.lotsCode})` : ''}.`);
+        } else if (errs.length) {
+          await done({ status: 'needs_info', issues: errs.map((x) => ({ attr: (x.attributeNames || []).join(', '), msg: x.message })).slice(0, 25), error: 'Amazon rejected the product - fill what it asks and send again.' });
+        } else if (Date.now() - (r.submittedAt || 0) > 3 * 864e5) {
+          await done({ status: 'failed', error: 'Amazon has not created the product in 3 days. Check Seller Central → Inventory → Fix incomplete listings.' });
+        }
+        continue;
+      }
+      if (r.v !== 2) {   // old-style request (kept for old records)
+        await done({ status: 'failed', error: 'Old request format - please create it again from the New listing button.' }); continue;
+      }
+      const title = String(r.title || '').trim(), brand = String(r.brand || '').trim();
+      const mrp = Number(r.mrp) || 0, price = Number(r.price) || 0, qty0 = Math.max(0, Math.min(999, parseInt(r.qty, 10) || 0));
+      if (!title || !brand || !mrp || !price) { await done({ status: 'needs_info', error: 'Name, brand, MRP and selling price are needed.', issues: [] }); continue; }
+      if (price > mrp) { await done({ status: 'needs_info', error: `Selling price ₹${price} is above MRP ₹${mrp}.`, issues: [] }); continue; }
+      const barcode = String(r.barcode || '').replace(/\D/g, '');
+      // 1) already on Amazon? -> just add our offer to that ASIN (Add ASIN robot), no new product
+      if (barcode) {
+        const found = await asinsForBarcode(barcode).catch(() => []);
+        if (found.length) {
+          const asin = found[0].asin;
+          if (!r.create) { await done({ status: 'exists', asin, handedOff: false, error: null, issues: [], note: `Already on Amazon as ${asin} - no new product needed. Press "List my offer on it" to sell it (Add ASIN robot).` }); continue; }
+          await db.collection('spapiAddAsin').doc(`${ACCOUNT_LABEL}_${sidSafe(asin)}`).set({ account: ACCOUNT_LABEL, asin, barcode, name: title, qty: qty0 || 10,
+            mrp, wantPrice: price, cost: Number(r.cost) > 0 ? Number(r.cost) : null, gst: r.gst != null && r.gst !== '' ? Number(r.gst) : null,
+            status: 'pending', source: 'new-listing', requestedAt: Date.now() }, { merge: true });
+          await done({ status: 'exists', asin, handedOff: true, error: null, issues: [], note: `Already on Amazon as ${asin} - sent to Add ASIN to list your offer on it (no new product needed). Check the Add ASIN window for the result.` });
+          console.log(`New listing: barcode ${barcode} already on Amazon (${asin}) - sent to Add ASIN.`);
+          continue;
+        }
+      }
+      // 2) profit rule (same as Add ASIN)
+      let cost = Number(r.cost) > 0 ? Number(r.cost) : null;
+      if (!cost && r.lotsCode) { const c = await loadCostData(); cost = bestSlab(c.lots[String(r.lotsCode)]); }
+      const productType = r.productType || await nlProductType(title);
+      if (!productType) { await done({ status: 'needs_info', error: 'Amazon could not suggest a category for this name. Type the product type (e.g. GROCERY, SKIN_CLEANING_AGENT).', issues: [] }); continue; }
+      const gst = r.gst != null && r.gst !== '' && Number.isFinite(Number(r.gst)) ? Number(r.gst) : null;
+      const taxCode = gst != null && GST_CODE[gst] ? GST_CODE[gst] : null;
+      let sku = r.sku || `NL-${String(r.lotsCode || barcode || Date.now().toString(36)).toUpperCase().replace(/[^A-Z0-9-]/g, '')}`;
+      for (let n = 2; SNAP.inventory[`${ACCOUNT_LABEL}_${sidSafe(sku)}`]; n++) sku = `${r.sku || sku.replace(/-\d+$/, '')}-${n}`;
+      const ship = myUsualShip(), i = { sku, asin: null, name: title, account: ACCOUNT_LABEL, amazonProductType: productType, weightKg: Number(r.weightKg) || 0.5, price, taxCode, mrp };
+      let profit = null;
+      if (cost) {
+        profit = Math.round(orderProfit(i, cost, price, ship));
+        if (!priceOk(i, cost, price, ship)) { const fl = floorPrice(i, cost, ship); await done({ status: 'needs_info', productType, sku, cost, profit, error: `Price ₹${price} earns ₹${profit}/order - minimum ${RULE_TXT}${fl ? `, needs ₹${fl}+` : ''} (cost ₹${cost}). Change the price.`, issues: [] }); continue; }
+      }
+      let qty = qty0;
+      if (r.lotsCode) { const c = await loadCostData(), lp = c.lots[String(r.lotsCode)], lq = lp ? parseFloat(lp.qty) : NaN; if (!isNaN(lq) && lq < NEW_LISTING_MIN_LOTS) qty = 0; }
+      // 3) full product details
+      const bullets = (Array.isArray(r.bullets) ? r.bullets : String(r.bullets || '').split('\n')).map((x) => String(x).trim()).filter(Boolean).slice(0, 5);
+      const attributes = {
+        item_name: NL_TEXT(title), brand: NL_TEXT(brand), manufacturer: NL_TEXT(r.manufacturer || brand),
+        bullet_point: (bullets.length ? bullets : [title]).map((x) => ({ value: x, language_tag: 'en_IN', marketplace_id: MARKETPLACE_ID })),
+        product_description: NL_TEXT(r.description || title),
+        country_of_origin: NL_VAL('IN'), item_package_quantity: NL_VAL(1),
+        condition_type: NL_VAL('new_new'),
+        purchasable_offer: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', audience: 'ALL', our_price: [{ schedule: [{ value_with_tax: price }] }], maximum_retail_price: [{ schedule: [{ value_with_tax: mrp }] }] }],
+        list_price: [{ marketplace_id: MARKETPLACE_ID, currency: 'INR', value_with_tax: mrp }],
+        fulfillment_availability: [{ fulfillment_channel_code: 'DEFAULT', quantity: qty }],
+      };
+      if (barcode) attributes.externally_assigned_product_identifier = [{ type: barcode.length === 12 ? 'upc' : 'ean', value: barcode, marketplace_id: MARKETPLACE_ID }];
+      else attributes.supplier_declared_has_product_identifier_exemption = NL_VAL(true);
+      if (r.image) attributes.main_product_image_locator = [{ media_location: String(r.image), marketplace_id: MARKETPLACE_ID }];
+      if (taxCode) attributes.product_tax_code = NL_VAL(taxCode);
+      if (r.hsn) attributes.hsn_code = NL_VAL(String(r.hsn).replace(/\D/g, ''));
+      Object.entries(r.extra || {}).forEach(([k, v]) => { if (k && v !== '' && v != null) attributes[k] = NL_TEXT(v); });
+      const put = (mode) => spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku },
+        query: Object.assign({ marketplaceIds: [MARKETPLACE_ID], issueLocale: 'en_US' }, mode ? { mode } : {}), body: { productType, requirements: 'LISTING', attributes } });
+      // drop attributes this product type does not know, then check again
+      let pre = await put('VALIDATION_PREVIEW');
+      const unknown = (pre.issues || []).filter((x) => /not (?:a )?valid|not allowed|unknown|not applicable|does not (?:belong|exist)/i.test(x.message || '')).flatMap((x) => x.attributeNames || []).filter((k) => attributes[k] && !['item_name', 'brand', 'purchasable_offer', 'fulfillment_availability'].includes(k));
+      if (unknown.length) { unknown.forEach((k) => delete attributes[k]); pre = await put('VALIDATION_PREVIEW'); }
+      const errs = (pre.issues || []).filter((x) => (x.severity || '').toUpperCase() === 'ERROR');
+      if (errs.length) {
+        await done({ status: 'needs_info', productType, sku, cost, profit, qtySent: qty, error: `Amazon needs ${errs.length} more detail${errs.length > 1 ? 's' : ''} before it can create this product.`,
+          issues: errs.map((x) => ({ attr: (x.attributeNames || []).join(', '), msg: x.message })).slice(0, 25) });
+        console.log(`New listing ${sku}: ${errs.length} issue(s) - asked the owner.`);
+        continue;
+      }
+      if (!r.create) { await done({ status: 'checked', productType, sku, cost, profit, qtySent: qty, error: null, issues: [], note: 'Amazon accepts these details. Press Create to list it.' }); continue; }
+      const res = await put(null);
+      assertListingsOk(res);
+      if (cost) await dbMain.collection('aikm_admin').doc('spapiManualCosts').set({ costs: { [sku]: cost } }, { merge: true }).catch(() => {});
+      await done({ status: 'submitted', productType, sku, cost, profit, qtySent: qty, submittedAt: Date.now(), submissionId: res.submissionId || null, error: null, issues: [],
+        note: 'Sent to Amazon. Amazon usually creates the product (ASIN) in 15 min - a few hours.' });
+      console.log(`New listing ${sku} (${productType}) sent to Amazon at ₹${price}, MRP ₹${mrp}, qty ${qty}.`);
     } catch (e) {
-      await doc.ref.update({ status: 'failed', error: e.message || String(e), failedAt: admin.firestore.FieldValue.serverTimestamp() });
-      console.warn(`New listing request FAILED for SKU ${sku}:`, e.message || e);
+      const error = (e.message || String(e)).slice(0, 400);
+      console.warn(`New listing FAILED for ${r.sku || r.title}:`, error);
+      await done({ status: 'failed', error });
     }
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((res) => setTimeout(res, 1200));
   }
 }
 

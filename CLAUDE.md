@@ -89,6 +89,12 @@
   INSIDE that row; Buy Box lost + OMS hints became (i) tooltips; OMS auto-map buttons moved into the OMS search row.
   Top search (owner 13 Nov 2026, block "Top search" — keep it): ONE search box `#apTopQ` in the header menu row types into the open tab's own
   (now hidden) `.ap-search input` and fires input/keyup/change. New tabs: keep a `.ap-search input` in `.ap-tools` and it works automatically.
+- **New listing = NEW product on Amazon** (owner 13 Nov 2026): header button "New listing" (`console/new-listing.js`, loader block `aikmNewListingJs`
+  at the end of `amazon-name-search.js` — keep it). Requests in SP-API `spapiNewListingRequests/<acct>_<id>` {v:2, title, brand, barcode, mrp, price,
+  cost, lotsCode, gst, hsn, qty, image, bullets, description, productType?, extra{}, create}. Robot `applyPendingNewListings`: barcode already on
+  Amazon -> 'exists' (create:true hands it to Add ASIN); else product type from searchDefinitionsProductTypes, full LISTING attributes,
+  VALIDATION_PREVIEW first -> 'needs_info' (Amazon's issue list, page asks per attribute -> `extra`) / 'checked' / 'submitted' -> later 'live'
+  (ASIN read back, mapped to the LOTS code in spapiAsinLotsMap). Same profit rule as Add ASIN. ~1 read per sync.
 - **Quota savers in `spapi-sync.js`** (owner 12 Nov 2026, "ensure all syncs work under free limits"):
   old per-item collections `spapiInventory` / `spapiOrders` / `spapiCompetitivePricing` are NOT written any more (nothing reads them —
   page + robots use the snapshot; `SPAPI_LEGACY_MIRROR=on` brings the writes back). Sent-price checks: max 150 per run, check counts in ONE doc
