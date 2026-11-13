@@ -19,6 +19,30 @@
 
   function f2(v) { return "₹" + (+v).toFixed(2); }
 
+  /* Cost of an order whose SKU no longer exists (relisted / deleted listing) (owner 13 Nov 2026): the page used to fall back to a
+     name guess WITHOUT the ASIN, so a "Pack of 12" mapped per ASIN was costed as 1 piece (Vim 12-pack ₹9, Papad pack of 10 ₹23.76).
+     Now the ASIN of that order item is used first, so the saved ASIN mapping (packs, combos, vendor) applies to old SKUs too. */
+  (function () {
+    var orig = window.getEffectiveSpapiUnitCost; if (typeof orig !== "function" || orig.__asinFix) return;
+    var skuAsin = null, forRaw = null;
+    function asinOf(sku) {
+      try { if (forRaw !== spapiOrdersRaw) { forRaw = spapiOrdersRaw; skuAsin = {}; (spapiOrdersRaw || []).forEach(function (o) { (o.items || []).forEach(function (it) { if (it.sku && it.asin) skuAsin[it.sku] = it.asin; }); }); } } catch (e) {}
+      return skuAsin && skuAsin[sku];
+    }
+    var fixed = function (title, sku) {
+      try {
+        if (sku && getSpapiManualCost(sku) == null && !(typeof invBySku !== "undefined" && invBySku.get(sku))) {
+          var a = asinOf(sku), m = a && STORE.asinLotsMap && STORE.asinLotsMap[a] ? resolveSpapiLotsMatch(title || "", a) : null;
+          var c = m && lotsPriceByCode[m.code], sl = c && c.slabs && c.slabs.length ? bestSlabFor(c.slabs) : null;
+          if (sl) return { value: sl.price, source: c.vendorName || "LOTS" };
+        }
+      } catch (e) {}
+      return orig.apply(this, arguments);
+    };
+    fixed.__asinFix = true; window.getEffectiveSpapiUnitCost = fixed;
+    try { getEffectiveSpapiUnitCost = fixed; } catch (e) {}
+  })();
+
   /* Amazon.in sends the item price WITHOUT GST (checked 13 Nov 2026 on 1,602 Praso orders: price + tax = item total; owner's order
      171-3657087-4585106: 63.56 + 11.44 = ₹75). The profit maths here expects the price WITH GST, so items are corrected once here
      (price + tax) - before, GST looked like 21.9% and the shipping charged looked bigger by the item's GST. Robot data is left as is. */
