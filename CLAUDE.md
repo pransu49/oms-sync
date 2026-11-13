@@ -84,6 +84,9 @@
   brand · account switch · sync + refresh; second row `.ap-act` = Add ASIN (gold) · Needs attention · Price suggestions · Robot changes, API pill right.
   Buttons are MOVED there by id (aaOpen/atOpen/psOpen/rlOpen/ahPill) and get SVG icons. New header buttons: insert next to a sibling's
   CURRENT parent (`ref.parentNode.insertBefore`), never assume they sit in `.ap-sync`.
+- **Tab toolbars** (owner 13 Nov 2026, block "Tab toolbars" at the end of `amazon-name-search.js` — keep it): every Amazon tab has ONE compact
+  row: search · filters/actions · count · export (36 px, same button style). Competitor Pricing's bulk-price bar (`#bpBar`, display:contents) is
+  INSIDE that row; Buy Box lost + OMS hints became (i) tooltips; OMS auto-map buttons moved into the OMS search row.
 - **Quota savers in `spapi-sync.js`** (owner 12 Nov 2026, "ensure all syncs work under free limits"):
   old per-item collections `spapiInventory` / `spapiOrders` / `spapiCompetitivePricing` are NOT written any more (nothing reads them —
   page + robots use the snapshot; `SPAPI_LEGACY_MIRROR=on` brings the writes back). Sent-price checks: max 150 per run, check counts in ONE doc

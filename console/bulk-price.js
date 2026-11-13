@@ -14,13 +14,16 @@
 
   var css = document.createElement("style");
   css.textContent =
-    "#bpBar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 14px;background:#FBF9F4;border-bottom:1px solid var(--line-2,#F0ECE2);font-size:12.5px}" +
-    "#bpBar label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:600;color:var(--ink,#14213D)}" +
-    "#bpBar .bp-n{color:var(--muted,#8B909B);margin-right:4px}#bpBar .bp-l{font-weight:600;color:var(--ink-2,#4A5468);margin-left:6px}" +
-    ".bp-b{all:unset;cursor:pointer;font-size:12px;font-weight:700;border:1px solid var(--line,#E7E1D3);border-radius:8px;padding:5px 11px;background:#fff;color:var(--navy,#0F1E35)}" +
-    ".bp-b:hover{background:var(--navy,#0F1E35);color:#fff;border-color:var(--navy,#0F1E35)}.bp-b.gold{background:var(--gold-soft,#F6EEDB);border-color:#E6D3A3}" +
-    ".bp-b.gold:hover{background:var(--navy,#0F1E35);color:#fff}.bp-b[disabled]{opacity:.45;pointer-events:none}" +
-    "#bpCustom{width:62px;border:1px solid var(--line,#E7E1D3);border-radius:8px;padding:5px 8px;font-size:12px}" +
+    "#bpBar{display:contents}#bpBar label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;font-weight:600;color:var(--ink,#14213D);order:1;height:36px;padding:0 4px}" +
+    "#bpBar .bp-n{font-weight:500;color:var(--muted,#8B909B)}#bpSelN{order:1;font-size:12px;font-weight:700;color:#B08A36}#bpSelN:empty{display:none}.bp-sep{order:1;width:1px;height:22px;background:var(--line,#E7E1D3);margin:0 2px}" +
+    ".bp-grp{order:1;display:inline-flex;align-items:center;height:36px;box-sizing:border-box;border:1px solid var(--line,#E7E1D3);border-radius:9px;background:#fff;overflow:hidden}" +
+    ".bp-grp .bp-l{font-size:12px;font-weight:600;color:var(--ink-2,#4A5468);padding:0 8px 0 11px;background:#FBF9F4;height:100%;display:inline-flex;align-items:center;border-right:1px solid var(--line-2,#F0ECE2)}" +
+    ".bp-grp>*{order:0!important}.bp-grp .bp-b{border:0;border-radius:0;height:100%;padding:0 11px;border-right:1px solid var(--line-2,#F0ECE2)}.bp-grp .bp-go{background:#FBF9F4}.bp-grp .bp-b:hover{background:var(--navy,#0F1E35);color:#fff}.bp-grp .bp-b:last-child{border-right:0}" +
+    ".bp-b{all:unset;box-sizing:border-box;cursor:pointer;order:1;height:36px;display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:600;border:1px solid var(--line,#E7E1D3);border-radius:9px;padding:0 12px;background:#fff;color:var(--navy,#0F1E35);white-space:nowrap}" +
+    ".bp-b:hover{background:var(--navy,#0F1E35);color:#fff;border-color:var(--navy,#0F1E35)}.bp-b.gold{background:var(--gold-soft,#F6EEDB);border-color:#E6D3A3;color:#6B5216}" +
+    ".bp-b.gold:hover{background:var(--navy,#0F1E35);color:#fff}.bp-b[disabled]{opacity:.45;pointer-events:none}.bp-b.bp-x{order:6}" +
+    "#spapiPricingTable_cards .ap-tools .ap-count{order:5}" +
+    "#bpCustom{all:unset;box-sizing:border-box;width:52px;height:100%;padding:0 8px;font-size:12.5px;border-right:1px solid var(--line-2,#F0ECE2);-moz-appearance:textfield}#bpCustom::-webkit-inner-spin-button{display:none}" +
     ".bpCk{width:17px;height:17px;flex:none;accent-color:#0F1E35;cursor:pointer}" +
     ".bp-ov{position:fixed;inset:0;background:rgba(15,30,53,.45);backdrop-filter:blur(3px);z-index:1600;display:flex;align-items:center;justify-content:center;padding:16px}" +
     ".bp-box{background:#fff;border-radius:16px;width:min(1100px,98vw);max-height:92vh;display:flex;flex-direction:column;overflow:hidden;border-top:3px solid #C9A24B;box-shadow:0 24px 70px rgba(15,30,53,.3);font-family:Inter,system-ui,sans-serif;color:#14213D}" +
@@ -73,23 +76,25 @@
     var tools = c.querySelector(".ap-tools"); if (!tools) return;
     var view = viewItems();
     if (!$("bpBar")) {
-      tools.insertAdjacentHTML("afterend", '<div id="bpBar"><label><input type="checkbox" class="bpCk" id="bpAll"> Select all in this view <span class="bp-n" id="bpViewN"></span></label>' +
-        '<span id="bpSelN" style="font-weight:700;color:#B08A36"></span><span class="bp-l">Drop price by</span>' +
-        [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" class="bp-b" data-drop="' + n + '">₹' + n + "</button>"; }).join("") +
-        '<input id="bpCustom" type="number" min="0.5" step="0.5" placeholder="₹ any"><button type="button" class="bp-b" data-drop="custom">Drop</button>' +
+      /* one compact row inside the search bar (owner 13 Nov 2026): Search | All · Drop ₹ [1 2 3 4 5 any] · Beat Buy Box · Clear | count · Copy · Excel */
+      tools.insertAdjacentHTML("beforeend", '<div id="bpBar"><span class="bp-sep"></span><label title="Select all rows in this view"><input type="checkbox" class="bpCk" id="bpAll"> All <span class="bp-n" id="bpViewN"></span></label>' +
+        '<span id="bpSelN"></span><span class="bp-grp"><span class="bp-l">Drop ₹</span>' +
+        [1, 2, 3, 4, 5].map(function (n) { return '<button type="button" class="bp-b" data-drop="' + n + '">' + n + "</button>"; }).join("") +
+        '<input id="bpCustom" type="number" min="0.5" step="0.5" placeholder="any"><button type="button" class="bp-b bp-go" data-drop="custom">Drop</button></span>' +
         '<button type="button" class="bp-b gold" data-drop="beat" title="New price = Buy Box (incl. shipping) − ₹1 − your shipping">Beat Buy Box by ₹1</button>' +
         '<button type="button" class="bp-b" id="bpClr">Clear</button>' +
-        '<span class="bp-l" style="margin-left:auto">ASINs</span><button type="button" class="bp-b" id="bpCopy" title="Copy ASINs (selected, or all in this view)">⧉ Copy</button>' +
-        '<button type="button" class="bp-b" id="bpCsv" title="Download Excel (CSV) with ASIN, SKU, prices and Buy Box">⬇ Excel</button></div>');
+        '<button type="button" class="bp-b bp-x" id="bpCopy" title="Copy ASINs (selected, or all in this view)">⧉ Copy</button>' +
+        '<button type="button" class="bp-b bp-x" id="bpCsv" title="Download Excel (CSV) with ASIN, SKU, prices and Buy Box">⬇ Excel</button></div>');
     }
-    $("bpViewN").textContent = "(" + view.length + ")";
+    $("bpViewN").textContent = view.length.toLocaleString("en-IN");
     $("bpAll").checked = view.length > 0 && view.every(function (p) { return sel.has(p.asin); });
     $("bpAll").indeterminate = !$("bpAll").checked && view.some(function (p) { return sel.has(p.asin); });
     $("bpSelN").textContent = sel.size ? sel.size + " selected" : "";
     $("bpCopy").textContent = "⧉ Copy " + (sel.size || view.length); $("bpCsv").textContent = "⬇ Excel " + (sel.size || view.length);
     sel.size ? $("bpClr").removeAttribute("disabled") : $("bpClr").setAttribute("disabled", "");
     c.querySelectorAll("#bpBar [data-drop]").forEach(function (b) { view.length || sel.size ? b.removeAttribute("disabled") : b.setAttribute("disabled", ""); });
-    $("bpSelN").textContent = sel.size ? sel.size + " selected" : view.length ? "No rows ticked — buttons apply to all " + view.length : "";
+    $("bpSelN").textContent = sel.size ? sel.size + " ticked" : "";
+    $("bpSelN").title = sel.size ? "" : "No rows ticked — buttons apply to all " + view.length;
     var P = byAsin();
     c.querySelectorAll("table.sp-tbl tbody tr").forEach(function (tr) {
       if (tr.querySelector(".bpCk")) { var x = tr.querySelector(".bpCk"); x.checked = sel.has(x.dataset.asin); return; }

@@ -936,3 +936,71 @@
     inner && mo.observe(inner, { childList: true, subtree: true, characterData: true });
   })(0);
 } catch (e) {} })();
+
+/* ===== Tab toolbars (owner 13 Nov 2026: "enhance and align category wise", one compact row per tab):
+   every tab = Search | filters / actions | count · export, same 36 px height, same buttons.
+   Orders / Inventory / Competitor Pricing (bulk-price.js puts its bar in the same row) / Buy Box lost / OMS inventory.
+   CSS + moving existing buttons only (ids and clicks unchanged). 0 Firebase reads. ===== */
+(function () { try {
+  if (window.__aikmTabBars) return; window.__aikmTabBars = true;
+  var SEARCH = "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238B909B' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E\")";
+  var css = document.createElement("style");
+  css.textContent =
+    ".ap-main .ap-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 16px;min-height:60px;box-sizing:border-box;background:#fff;border-bottom:1px solid var(--line-2)}" +
+    ".ap-main .ap-tools .ap-search{order:0;flex:0 1 300px;min-width:200px;height:36px;margin:0;box-sizing:border-box;display:flex;align-items:center;padding:0 12px 0 36px;" +
+      "background:var(--cream) " + SEARCH + " no-repeat 12px center;border:1px solid var(--line);border-radius:9px;transition:border-color .15s,box-shadow .15s,background-color .15s}" +
+    ".ap-main .ap-tools .ap-search i{display:none}.ap-main .ap-tools .ap-search input{all:unset;flex:1;min-width:0;height:100%;font-size:12.5px;color:var(--ink)}" +
+    ".ap-main .ap-tools .ap-search input::placeholder{color:var(--muted)}" +
+    ".ap-main .ap-tools .ap-search:focus-within{border-color:var(--gold);background-color:#fff;box-shadow:0 0 0 3px rgba(201,162,75,.15)}" +
+    ".ap-main .ap-tools .ap-count{order:5;margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap;padding-left:6px}" +
+    ".ap-main .ap-tools .ap-fixall,.ap-main .ap-tools .tbl-push,.ap-main .ap-tools .ap-tbtn{all:unset;box-sizing:border-box;order:1;cursor:pointer;height:36px;padding:0 13px;border-radius:9px;display:inline-flex;align-items:center;gap:6px;" +
+      "font:600 12.5px 'Inter',sans-serif;color:var(--navy);background:#fff;border:1px solid var(--line);white-space:nowrap;transition:background .15s,color .15s,border-color .15s}" +
+    ".ap-main .ap-tools .ap-fixall{background:var(--gold-soft);border-color:#E6D3A3;color:#6B5216}" +
+    ".ap-main .ap-tools .ap-fixall:hover,.ap-main .ap-tools .tbl-push:hover,.ap-main .ap-tools .ap-tbtn:hover{background:var(--navy);color:#fff;border-color:var(--navy)}" +
+    ".ap-main .ap-tools .ap-fixall i{display:none}" +
+    ".ap-main .ap-tools .tbl-push.on,.ap-main .ap-tools .tbl-push[aria-pressed=true]{background:var(--navy);color:#fff;border-color:var(--navy)}" +
+    ".ap-tsep{order:1;width:1px;height:22px;background:var(--line);margin:0 2px}" +
+    ".ap-tinfo{order:4;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;border:1px solid var(--line);color:var(--muted);font:600 11px 'Inter',sans-serif;cursor:help;flex:none}" +
+    ".ap-tinfo:hover{border-color:var(--gold);color:var(--gold-2)}" +
+    ".ap-tlbl{order:1;font-size:12px;font-weight:600;color:var(--ink-2);white-space:nowrap}" +
+    ".ap-main .ap-tools.ap-gone{display:none!important}";
+  document.head.appendChild(css);
+
+  function info(txt) { var i = document.createElement("span"); i.className = "ap-tinfo"; i.textContent = "i"; i.title = txt; return i; }
+  function sep() { var s = document.createElement("span"); s.className = "ap-tsep"; return s; }
+
+  /* Buy Box lost: the long "Sorted by…" sentence becomes an (i) next to the count */
+  function bbl() {
+    var body = document.getElementById("bblBody"); if (!body) return;
+    var t = body.querySelector(".ap-tools"); if (!t || t.dataset.tb) return; t.dataset.tb = "1";
+    var hint = t.querySelector(":scope > span.t-muted");
+    if (hint) { var txt = hint.textContent.trim(); hint.remove(); t.appendChild(info(txt)); }
+  }
+  /* OMS inventory: auto-map buttons move into the search row; the explanation becomes an (i) */
+  function omi() {
+    var body = document.getElementById("omiBody"); if (!body) return;
+    var tools = body.querySelectorAll(".ap-tools"); if (tools.length < 2) return;
+    var am = null, srch = null;
+    tools.forEach(function (t) { if (t.querySelector(".ap-search")) srch = srch || t; else if (t.querySelector('[data-of="am"],#omiVendBtn')) am = am || t; });
+    if (!am || !srch || am === srch) return;
+    if (!srch.querySelector(".ap-tlbl")) {
+      var hintEl = am.querySelector(":scope > span"), hint = hintEl ? hintEl.textContent.trim() : "";
+      srch.appendChild(sep());
+      var l = document.createElement("span"); l.className = "ap-tlbl"; l.textContent = "OMS auto-map"; srch.appendChild(l);
+      var hint2 = srch.querySelector(":scope > span.t-muted"); if (hint2) { hint = hint2.textContent.trim(); hint2.remove(); }
+      var i = info(hintEl ? hintEl.textContent.trim() : "OMS auto-map"); i.style.order = 1; srch.appendChild(i);
+    }
+    am.querySelectorAll("button").forEach(function (b) { srch.appendChild(b); });
+    am.classList.add("ap-gone");
+  }
+  /* Bulk-price bar now sits inside the Competitor Pricing search row: add a divider before Copy / Excel */
+  function pricing() {
+    var c = document.getElementById("spapiPricingTable_cards"); if (!c) return;
+    var t = c.querySelector(".ap-tools"); if (!t) return;
+    var hint = t.querySelector(":scope > span.t-muted"); if (hint && !t.querySelector(".ap-tinfo")) { var txt = hint.textContent.trim(); hint.remove(); t.appendChild(info(txt)); }
+  }
+  function all() { try { bbl(); } catch (e) {} try { omi(); } catch (e) {} try { pricing(); } catch (e) {} }
+  var main = document.querySelector(".ap-main") || document.body, q = false;
+  new MutationObserver(function () { if (q) return; q = true; setTimeout(function () { q = false; all(); }, 30); }).observe(main, { childList: true, subtree: true });
+  all();
+} catch (e) {} })();
