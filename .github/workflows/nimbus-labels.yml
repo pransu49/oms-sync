@@ -23,7 +23,7 @@ concurrency:
 jobs:
   labels:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60   # up to ~1,500 ProShip labels in one PDF
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

@@ -479,13 +479,13 @@
         if (!doc.exists) { try { localStorage.removeItem(LAST); } catch (e) {} return; }
         var j = doc.data(), st = j.status || "queued";
         var ts = (j.updatedAt || j.createdAt), age = ts && ts.toDate ? Date.now() - ts.toDate().getTime() : 0;
-        if ((st === "queued" || st === "running") && age > 40 * 60000) { st = "failed"; j.step = "The server did not finish this job. Check the rows below, then try again."; }
+        if ((st === "queued" || st === "running") && age > 150 * 60000) { st = "failed"; j.step = "The server did not finish this job. Check the rows below, then try again."; }
         else if (st !== "queued" && st !== "running" && age > 12 * 3600e3) { // yesterday's job: nothing to show
           try { localStorage.removeItem(LAST); } catch (e) {} busy = false; jobRes = {}; $("psStatus").style.display = "none"; if (unsub) { unsub(); unsub = null; } pickRows(); return;
         }
         if (st === "queued" || st === "running") {
           busy = true; jobRes = j.results || {};
-          show("psStatus", "<b>" + (j.total || j.count || "") + " orders</b> \u2014 " + esc(j.step || "Starting on the server\u2026") + ' <span class="nb-muted">(you can switch tabs \u2014 it keeps running)</span>', "run");
+          show("psStatus", "<b>" + (j.total || j.count || "") + " orders</b> \u2014 " + esc(j.step || "Starting on the server\u2026") + ' <span class="nb-muted">(about 1 minute per 100 orders \u2014 you can switch tabs or close this page, it keeps running)</span>', "run");
           render(); return;
         }
         var wasBusy = busy; busy = false; jobRes = j.results || {};
@@ -507,7 +507,7 @@
       if (miss.length) { $("psSetFold").open = true; alert("Fill the pickup address first:\n\u2022 " + miss.join("\n\u2022 ")); $("psName").focus(); return; }
       var rows = lastRows.filter(function (r) { return r.sel && r.state === "ok" && !r.ship; });
       if (!rows.length) return;
-      if (rows.length > 300) { alert("Please ship at most 300 orders at a time (" + rows.length + " ticked)."); return; }
+      if (rows.length > 2000) { alert("Please ship at most 2,000 orders at a time (" + rows.length + " ticked)."); return; }
       var L = rows.filter(function (r) { return r.loss; });
       if (L.length && !confirm("\u26a0 " + L.length + " LOSS order(s) selected:\n\n" + L.slice(0, 15).map(function (r) { return "\u2022 " + r.id + "  " + rs(r.profit); }).join("\n") + "\n\nShip these loss orders anyway?")) return;
       var again = rows.filter(function (r) { return inFile[r.id]; });

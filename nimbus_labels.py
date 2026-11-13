@@ -160,10 +160,14 @@ def proship_shipments(orders, ship):
     if not tok:
         raise RuntimeError(f'ProShip login failed (status {r.status_code})')
     h = {'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json'}
-    for k, v in want.items():
+    def link(item):
+        k, v = item
         url = ''
-        for t in range(3):
-            rr = requests.post(PS + '/api/tools/refresh/url', headers=h, json={'awbNumber': str(v['a']), 'docType': 'LABEL'}, timeout=60)
+        for t in range(4):
+            try:
+                rr = requests.post(PS + '/api/tools/refresh/url', headers=h, json={'awbNumber': str(v['a']), 'docType': 'LABEL'}, timeout=60)
+            except requests.RequestException:
+                time.sleep(2 * (t + 1)); continue
             if rr.status_code == 429 or rr.status_code >= 500:
                 time.sleep(2 * (t + 1)); continue
             try:
@@ -172,9 +176,13 @@ def proship_shipments(orders, ship):
             except (ValueError, AttributeError):
                 url = ''
             break
-        if not url:
-            print('ProShip gave no label link for', k, v['a'])
-        ship[k] = {'oid': '', 'awb': str(v['a']), 'courier': v.get('c') or '', 'label': url, 'created': '', 'status': 'proship'}
+        return k, v, url
+    # 8 at a time: ~1,500 label links in a few minutes (was one by one)
+    with ThreadPoolExecutor(8) as ex:
+        for k, v, url in ex.map(link, list(want.items())):
+            if not url:
+                print('ProShip gave no label link for', k, v['a'])
+            ship[k] = {'oid': '', 'awb': str(v['a']), 'courier': v.get('c') or '', 'label': url, 'created': '', 'status': 'proship'}
     return len(want)
 
 

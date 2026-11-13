@@ -28,7 +28,10 @@ const USER = (process.env.PROSHIP_USERNAME || '').trim();
 const PASS = process.env.PROSHIP_PASSWORD || '';
 const MODE = (process.env.MODE || 'check').trim().toLowerCase();
 const JOB_ID = (process.env.JOB_ID || '').trim();
-const KEEP_DAYS = 45;
+const KEEP_DAYS = 15;
+// proshipIndex is ONE Firestore doc (1 MB max, ~120 bytes per AWB). At ~1,500 orders/day keep only the newest MAX_IDX AWBs.
+const MAX_IDX = 6500;
+const SHIP_PARALLEL = 4;   // shipments created at the same time (owner 13 Nov 2026: 1,500 orders in one go)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const nid = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').replace(/\s+/g, '').trim();
@@ -138,7 +141,8 @@ async function readIndex() {
 }
 async function writeIndex(idx) {
   const cut = Date.now() - KEEP_DAYS * 864e5, next = {};
-  Object.keys(idx).forEach((k) => { if (idx[k] && idx[k].a && (idx[k].t || 0) > cut) next[k] = idx[k]; });
+  Object.keys(idx).filter((k) => idx[k] && idx[k].a && (idx[k].t || 0) > cut)
+    .sort((a, b) => (idx[b].t || 0) - (idx[a].t || 0)).slice(0, MAX_IDX).forEach((k) => { next[k] = idx[k]; });
   await idxRef().set({ data: JSON.stringify(next), count: Object.keys(next).length, updatedAt: now() });
   return next;
 }
@@ -262,9 +266,10 @@ async function modeShip() {
     const [idx, nimbus, zippy] = await Promise.all([readIndex(), readJsonDoc('nimbusIndex', 'byOrder'), readJsonDoc('aikm_admin', 'zippyIndex')]);
     const live = (m, id) => { const v = m[id] || m['#' + id]; return v && v.a && v.s !== 'cancelled' ? v : null; };
 
-    const results = {}; let made = 0, failed = 0, skipped = 0, n = 0;
-    for (const id of ids) {
-      n++;
+    const results = {}; let made = 0, failed = 0, skipped = 0, n = 0, unsaved = 0, saving = Promise.resolve();
+    // save new AWBs every 50 so a stopped run never loses them (a re-run then skips them instead of shipping twice)
+    const saveIdx = () => { unsaved = 0; saving = saving.then(() => writeIndex(idx)).catch((e) => console.log('  index save failed (retried later):', e.message)); return saving; };
+    async function one(id) {
       const lines = by[id] || [];
       let res;
       if (!lines.length) res = { e: 'Not found in OMS Guru data' };
@@ -303,11 +308,15 @@ async function modeShip() {
         }
       }
       results[id] = res;
-      if (res.a && !res.old) made++; else if (res.a) skipped++; else failed++;
+      n++;
+      if (res.a && !res.old) { made++; if (++unsaved >= 50) saveIdx(); } else if (res.a) skipped++; else failed++;
       console.log(`  ${n}/${ids.length} ${id} -> ${res.a ? res.a + ' (' + (res.c || '?') + ')' + (res.g ? ' ' + res.g + ' g' + (res.ats ? ' [ATS]' : '') : '') + (res.old ? ' [already shipped]' : '') : 'NOT SHIPPED: ' + res.e}${res.warn ? '  ⚠ ' + res.warn : ''}`);
-      if (n % 10 === 0 && n < ids.length) await note('running', { step: `Creating shipments… ${n} of ${ids.length}`, done: n, results });
+      if (n % 25 === 0 && n < ids.length) await note('running', { step: `Creating shipments… ${n} of ${ids.length}`, done: n, results });
     }
-    if (made) await writeIndex(idx);
+    let next = 0;
+    const worker = async () => { while (next < ids.length) { const id = ids[next++]; await one(id); } };
+    try { await Promise.all(Array.from({ length: Math.min(SHIP_PARALLEL, ids.length) }, worker)); }
+    finally { if (unsaved) await saveIdx(); else await saving; }
     await note('done', { step: `${made} shipped${skipped ? ' · ' + skipped + ' already shipped before' : ''}${failed ? ' · ' + failed + ' not shipped' : ''}`, done: ids.length, made, failed, results, pickup: admin.firestore.FieldValue.delete() });
     console.log(`SHIP DONE — ${made} shipped, ${skipped} already shipped, ${failed} not shipped.`);
     out('shipped', made);
