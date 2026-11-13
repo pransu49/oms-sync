@@ -101,6 +101,11 @@
   (title "Pack of N"/"x N" vs mapped units incl. LOTS "Pk6"/vendor qty), different product (word overlap < 0.34), size differs, cost above
   what the buyer paid incl. shipping. "Fix mapping" = page's openSpapiMatchModal(asin); "Looks right" = main `aikm_admin/costCheckOk.ok["acct|asin"]`
   (stamp = cost|issues, comes back if the cost changes). 1 read per page open.
+- **Bulk tick for LOSS orders** (`console/loss-bulk.js`, owner 13 Nov 2026 — one-by-one ticking too slow): one red bar above #cfTable
+  (Amazon confirmation), #psTable (ProShip), #nbTable (NimbusPost), #zpTable (Zippy): chips Loss up to ₹20/35/40 / Any, max ₹ box, product-name
+  words, account -> "Tick N loss orders" / "Untick all loss". Reads rows from the DOM (tr.nb-row-loss, "LOSS · ₹x") and clicks the table's own
+  checkboxes (change event), so each panel's own loss confirmation still runs. 0 Firebase. Loaded by the block at the end of `console/proship-tab.js`
+  (`aikmLossBulkJs`) — keep it. Only set text when it changed (body MutationObserver would loop).
 - Orders cost (`order-fees.js`): old/relisted SKUs (not in inventory) use the order item's ASIN mapping first (packs, combos, vendor).
 - **LOTS-62 stock for Sasta Store** (owner 13 Nov 2026): `spapi-sync-sastastore.yml` sets `LOTS62_STOCK=on` -> the out-of-stock rule and its restock use
   the HIGHER of LOTS-GN and LOTS-62 stock (main `aikm_admin/lots62Catalog`, read only when its savedAt changed; cached in `.cache/lots62-catalog.json`).
