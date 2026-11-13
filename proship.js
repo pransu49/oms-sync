@@ -146,6 +146,22 @@ async function writeIndex(idx) {
   await idxRef().set({ data: JSON.stringify(next), count: Object.keys(next).length, updatedAt: now() });
   return next;
 }
+// Change the index in a transaction on the FRESH copy, so a ship job, the 30-min status refresh and a cancel
+// running at the same time never overwrite each other's AWBs / statuses (owner 13 Nov 2026).
+async function mergeIndex(fn) {
+  let out = null;
+  await db.runTransaction(async (tx) => {
+    const d = await tx.get(idxRef());
+    let cur = {}; try { cur = d.exists && d.get('data') ? JSON.parse(d.get('data')) : {}; } catch (e) { cur = {}; }
+    fn(cur);
+    const cut = Date.now() - KEEP_DAYS * 864e5, next = {};
+    Object.keys(cur).filter((k) => cur[k] && cur[k].a && (cur[k].t || 0) > cut)
+      .sort((a, b) => (cur[b].t || 0) - (cur[a].t || 0)).slice(0, MAX_IDX).forEach((k) => { next[k] = cur[k]; });
+    tx.set(idxRef(), { data: JSON.stringify(next), count: Object.keys(next).length, updatedAt: now() });
+    out = next;
+  });
+  return out;
+}
 async function readJsonDoc(col, id) {
   const d = await db.collection(col).doc(id).get(); if (!d.exists) return {};
   try { return d.get('data') ? JSON.parse(d.get('data')) : (d.get('orders') || {}); } catch (e) { return d.get('orders') || {}; }
@@ -268,7 +284,14 @@ async function modeShip() {
 
     const results = {}; let made = 0, failed = 0, skipped = 0, n = 0, unsaved = 0, saving = Promise.resolve();
     // save new AWBs every 50 so a stopped run never loses them (a re-run then skips them instead of shipping twice)
-    const saveIdx = () => { unsaved = 0; saving = saving.then(() => writeIndex(idx)).catch((e) => console.log('  index save failed (retried later):', e.message)); return saving; };
+    const fresh = {}; // AWBs made by THIS job — only these are added to the index
+    const saveIdx = () => {
+      unsaved = 0;
+      const add = Object.assign({}, fresh);
+      saving = saving.then(() => mergeIndex((cur) => { Object.keys(add).forEach((k) => { if (!cur[k] || cur[k].t < add[k].t) cur[k] = add[k]; }); }))
+        .catch((e) => { unsaved = 1; console.log('  index save failed (retried later):', e.message); });
+      return saving;
+    };
     async function one(id) {
       const lines = by[id] || [];
       let res;
@@ -300,7 +323,7 @@ async function modeShip() {
               // ProShip chose differently from its own cheapest rate: flag it (weight may be wrong for that courier)
               if (courier && atsSent && !isAts(courier)) res.warn = `Sent at ${ATS_GRAMS} g for ATS, but ProShip gave ${courier} — real weight ${realG} g`;
               if (courier && !atsSent && isAts(courier)) res.warn = `ProShip gave ATS but the real weight ${realG} g was sent (not ${ATS_GRAMS} g)`;
-              idx[id] = { a: awb, c: courier, s: 'ok', st: clip(x.orderStatus || 'ORDER_PLACED', 40), t: Date.now(), ac: b.acct };
+              idx[id] = fresh[id] = { a: awb, c: courier, s: 'ok', st: clip(x.orderStatus || 'ORDER_PLACED', 40), t: Date.now(), ac: b.acct };
             }
             else res = { e: apiOk(r) ? 'ProShip accepted the order but gave no AWB yet — check ProShip → Unprocessed Shipments' : apiMsg(r) };
           } catch (e) { res = { e: clip(e.message, 200) }; }
@@ -316,7 +339,7 @@ async function modeShip() {
     let next = 0;
     const worker = async () => { while (next < ids.length) { const id = ids[next++]; await one(id); } };
     try { await Promise.all(Array.from({ length: Math.min(SHIP_PARALLEL, ids.length) }, worker)); }
-    finally { if (unsaved) await saveIdx(); else await saving; }
+    finally { await saving; if (unsaved) await saveIdx(); }
     await note('done', { step: `${made} shipped${skipped ? ' · ' + skipped + ' already shipped before' : ''}${failed ? ' · ' + failed + ' not shipped' : ''}`, done: ids.length, made, failed, results, pickup: admin.firestore.FieldValue.delete() });
     console.log(`SHIP DONE — ${made} shipped, ${skipped} already shipped, ${failed} not shipped.`);
     out('shipped', made);
@@ -326,30 +349,35 @@ async function modeShip() {
   }
 }
 
-// Status refresh from ProShip's order list (orders UPDATED in the last 15 days). Not from /api/order/track_waybill:
+// Status refresh from ProShip's order list (orders UPDATED in the last 6 days). Runs every 30 min (proship.yml schedule). Not from /api/order/track_waybill:
 // that call answered 404 on ProShip's sandbox (13 Nov 2026), the order list is proven there.
 async function modeSync() {
   fb();
   const idx = await readIndex();
   const open = Object.keys(idx).filter((k) => idx[k] && idx[k].a && !DONE[idx[k].s]);
-  if (!open.length) { console.log('SYNC — no live ProShip shipments.'); return; }
+  if (!open.length) { console.log('SYNC — no live ProShip shipments (nothing to check, 0 ProShip calls).'); return; }
   await signin();
   const byAwb = {}; open.forEach((k) => { byAwb[String(idx[k].a)] = k; });
   const day = (off) => new Date(Date.now() + 5.5 * 3600e3 + off * 864e5).toISOString().slice(0, 10);
-  let changed = 0, seen = 0;
-  for (let offset = 0; offset < 3000; offset += 50) {
-    const j = await getWithBody('/api/order/external/details', { updated_from: day(-15), updated_to: day(1), offset, limit: 50 });
+  let changed = 0, seen = 0; const upd = {};
+  // ~1,500 shipments a day: up to 20,000 rows (400 pages). Stops early once every open AWB has been seen.
+  for (let offset = 0; offset < 20000; offset += 50) {
+    const j = await getWithBody('/api/order/external/details', { updated_from: day(-6), updated_to: day(1), offset, limit: 50 });
     const rows = (j && j.data) || [];
     if (!rows.length && offset === 0 && j && j.message) throw new Error('ProShip order list: ' + clip(j.message, 200));
     rows.forEach((o) => {
       const k = byAwb[String(o.awbNumber || '')]; if (!k) return; seen++;
       const st = clip(o.orderStatus || '', 40), s = bucket(NaN, st), c = courierOf(o.courierDetail);
-      if (st && (idx[k].s !== s || idx[k].st !== st)) { idx[k].s = s; idx[k].st = st; if (c && !idx[k].c) idx[k].c = c; changed++; }
+      if (st && (idx[k].s !== s || idx[k].st !== st)) { upd[k] = { a: String(idx[k].a), s, st, c }; changed++; }
     });
-    if (rows.length < 50) break;
+    if (rows.length < 50 || seen >= open.length) break;
     await sleep(200);
   }
-  if (changed) await writeIndex(idx);
+  if (changed) await mergeIndex((cur) => {
+    Object.keys(upd).forEach((k) => { const v = cur[k], u = upd[k]; if (!v || String(v.a) !== u.a) return; // AWB replaced meanwhile: leave it
+      if (v.s === 'cancelled' && u.s !== 'cancelled') return;                                              // our own cancel wins
+      v.s = u.s; v.st = u.st; if (u.c && !v.c) v.c = u.c; });
+  });
   console.log(`SYNC DONE — ${open.length} live AWBs, ${seen} found in ProShip's list, ${changed} changed.`);
 }
 
@@ -366,7 +394,8 @@ async function modeCancel() {
     if (ok) { const k = Object.keys(idx).find((x) => String(idx[x].a) === awb); if (k) { idx[k].s = 'cancelled'; idx[k].st = 'CANCELLED_ORDER'; n++; } }
     await sleep(200);
   }
-  if (n) await writeIndex(idx);
+  if (n) await mergeIndex((cur) => { awbs.forEach((awb) => { const k = Object.keys(idx).find((x) => String(idx[x].a) === awb && idx[x].s === 'cancelled');
+    if (k && cur[k] && String(cur[k].a) === awb) { cur[k].s = 'cancelled'; cur[k].st = 'CANCELLED_ORDER'; } }); });
   console.log(`CANCEL DONE — ${n} of ${awbs.length} cancelled.`);
   if (n < awbs.length) process.exitCode = 1;
 }

@@ -4,6 +4,10 @@ name: ProShip
 #   check  = sign in + read live rates (creates nothing)      ship   = create the shipments of a console job
 #   sync   = refresh status of live ProShip AWBs              cancel = cancel the AWBs given
 on:
+  # status refresh (in transit / delivered / RTO) every 30 min, like NimbusPost (owner 13 Nov 2026).
+  # Finishes in seconds with 0 ProShip calls when there are no live ProShip shipments.
+  schedule:
+    - cron: '7,37 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -23,9 +27,10 @@ on:
         required: false
         default: ''
 
-# never two runs at once (two ship jobs must not overlap)
+# never two ship/cancel runs at once. The status refresh has its OWN queue, so a scheduled refresh can never
+# push a waiting ship job out of the queue (GitHub keeps only one waiting run per group). Index writes are transactions.
 concurrency:
-  group: proship
+  group: proship-${{ (github.event_name == 'schedule' || inputs.mode == 'sync') && 'sync' || 'main' }}
   cancel-in-progress: false
 
 permissions:
@@ -46,12 +51,12 @@ jobs:
         shell: bash
         run: set -o pipefail; node proship.js 2>&1 | tee run.log
         env:
-          MODE: ${{ inputs.mode || 'check' }}
+          MODE: ${{ github.event_name == 'schedule' && 'sync' || inputs.mode || 'check' }}
           JOB_ID: ${{ inputs.job_id }}
           AWBS: ${{ inputs.awbs }}
           FROM_PIN: ${{ inputs.from_pin }}
           # selftest runs on ProShip's sandbox with its own login; every other mode uses the live account
-          PROSHIP_BASE: ${{ inputs.mode == 'selftest' && 'https://proshipdev.prozo.com' || 'https://proship.prozo.com' }}
+          PROSHIP_BASE: ${{ github.event_name != 'schedule' && inputs.mode == 'selftest' && 'https://proshipdev.prozo.com' || 'https://proship.prozo.com' }}
           PROSHIP_USERNAME: ${{ inputs.mode == 'selftest' && secrets.PROSHIP_SANDBOX_USERNAME || secrets.PROSHIP_USERNAME }}
           PROSHIP_PASSWORD: ${{ inputs.mode == 'selftest' && secrets.PROSHIP_SANDBOX_PASSWORD || secrets.PROSHIP_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ inputs.mode != 'selftest' && secrets.FIREBASE_SERVICE_ACCOUNT || '' }}

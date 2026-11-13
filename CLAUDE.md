@@ -172,7 +172,12 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   BIG JOBS (owner 13 Nov 2026: ~1,500 orders a day in one go): console allows up to 2,000 per job; robot creates 4 shipments at a time
   (SHIP_PARALLEL), saves new AWBs to proshipIndex every 50 (a stopped run never loses AWBs -> no double shipping on re-run), job progress every 25;
   workflow timeout 120 min (nimbus-labels 60 min, ProShip label links fetched 8 at a time). proshipIndex is ONE doc (1 MB max, ~120 B per AWB):
-  kept to the newest 6,500 AWBs / 15 days (MAX_IDX, KEEP_DAYS) — don't raise. amazon-confirm still confirms 120 per account per run (every 10 min).
+  kept to the newest 6,500 AWBs / 15 days (MAX_IDX, KEEP_DAYS) — don't raise.
+  STATUS REFRESH every 30 min (owner 13 Nov 2026, like NimbusPost): `proship.yml` schedule `7,37 * * * *` runs mode `sync` (ProShip order list,
+  updated last 6 days, up to 20,000 rows, stops once all open AWBs are seen; 0 ProShip calls when nothing is live). Sync has its OWN concurrency
+  queue (`proship-sync`) so it can never push a waiting ship job out. ALL index writes go through `mergeIndex()` (Firestore transaction on the
+  fresh doc): ship adds only its own new AWBs, sync changes only statuses (never un-cancels), cancel marks only its AWBs — never write the
+  whole in-memory index back. Firebase: ~50 reads + ~100 writes/day (index + syncHealth), console re-reads proshipIndex once per change. amazon-confirm still confirms 120 per account per run (every 10 min).
   Firebase: +1 read per oms-push-tracking / amazon-confirm run (~190/day); per ship job ~4 reads + OMS chunks, ~3 + N/10 writes; console
   1 read per load (proshipIndex) + ~5 when the panel is opened. First real `check` run (13 Nov 2026): `/api/auth/signin` answered 200 "MFA required. OTP sent to registered email" — the user in the secrets has MFA on,
   so no robot login until ProShip switches MFA off for the API user (or the owner adds a user without it). Sandbox practice run (13 Nov 2026): login (no OTP there), pricing, create (awb_number + courier_id + label_url in the answer), find-by-reference,
