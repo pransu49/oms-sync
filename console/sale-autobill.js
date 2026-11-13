@@ -647,6 +647,28 @@
   #abBtn .c{font-family:var(--f-mono);font-size:11px;background:var(--gold);color:#0F1B33;border-radius:10px;padding:1px 7px;margin-left:6px}
   @media(max-width:700px){.ab-head{padding:12px 14px}.ab-body{padding:14px}.ab-foot{padding:10px 14px}.ab-foot .btn{flex:1}.ab-t .hm{display:none}}
   `;
+  /* ---------- purchase bill screen: make every box look editable + full product names (owner 13 Nov 2026) ---------- */
+  (function billEditLook() {
+    const st = document.createElement("style"); st.id = "abBillEdit";
+    st.textContent = `
+      #bf .items td.nm input{min-width:300px!important;width:300px}
+      #bf .items input{background:#fff!important;border:1px solid #E4DCCB!important;border-radius:7px}
+      #bf .items input:hover{border-color:#C9A227!important}
+      #bf .items input:focus{border-color:#C9A227!important;box-shadow:0 0 0 2px rgba(201,162,39,.35)!important}
+      #bf .abEditHint{display:flex;gap:8px;align-items:center;font-size:12.5px;color:#14284B;background:#F7EED2;border:1px solid rgba(201,162,39,.45);border-radius:10px;padding:8px 12px}
+      #bf .abEditHint b{font-weight:600}`;
+    document.head.append(st);
+    const addHint = () => {
+      const f = document.getElementById("bf"); if (!f || f.querySelector(".abEditHint")) return;
+      const sec = [...f.querySelectorAll(".sec")].find(x => /Products/i.test(x.textContent)); if (!sec) return;
+      const h = document.createElement("div"); h.className = "abEditHint";
+      h.innerHTML = `✏️ <span><b>AI read it wrong?</b> Click any box — product, HSN, qty, rate, GST %, totals — type the right value, then press <b>Save changes</b> (F10). Hover a product to see its full name.</span>`;
+      sec.parentNode.insertBefore(h, sec);
+      f.querySelectorAll('.items td.nm input').forEach(i => { i.title = i.value; i.addEventListener("input", () => { i.title = i.value; }); });
+    };
+    new MutationObserver(addHint).observe(document.body, { childList: true, subtree: true });
+  })();
+
   let S = { date: "", co: "praso", drafts: [], busy: false };
 
   function mount() {
