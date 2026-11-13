@@ -906,7 +906,7 @@
     "@media(max-width:760px){.ap-act{padding:0 16px 10px}.ap-act-in{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}.ap-act-in::-webkit-scrollbar{display:none}.ap-act-sp{display:none}#spapiAccountSwitcherWrap{max-width:100%;overflow-x:auto;scrollbar-width:none}#spapiAccountSwitcherWrap::-webkit-scrollbar{display:none}}";
   document.head.appendChild(css);
   var ICON = { nlOpen: "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14 3v4a1 1 0 0 0 1 1h4\"/><path d=\"M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z\"/><path d=\"M12 11v6M9 14h6\"/></svg>", aaOpen: "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 5v14M5 12h14\"/></svg>", atOpen: "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 9v4\"/><path d=\"M10.4 3.9 2.6 17.5A1.8 1.8 0 0 0 4.2 20h15.6a1.8 1.8 0 0 0 1.6-2.5L13.6 3.9a1.8 1.8 0 0 0-3.2 0z\"/><path d=\"M12 16.5h.01\"/></svg>", psOpen: "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9 18h6\"/><path d=\"M10 21h4\"/><path d=\"M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z\"/></svg>", rlOpen: "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"5\" y=\"8\" width=\"14\" height=\"11\" rx=\"3\"/><path d=\"M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5\"/></svg>" };
-  var ORDER = ["aaOpen", "nlOpen", "atOpen", "psOpen", "rlOpen"];
+  var ORDER = ["aaOpen", "nlOpen", "atOpen", "cfOpen", "psOpen", "rlOpen"];
   var EMO = /^[\s←-⯿☀-➿️‍＋+]|^\uD83C[\uDC00-\uDFFF]|^\uD83D[\uDC00-\uDFFF]|^\uD83E[\uDC00-\uDFFF]/;
   function clean(b) {
     var ic = ICON[b.id]; if (!ic) return;
@@ -1079,6 +1079,19 @@
     s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/new-listing.js"; document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/new-listing.js&per_page=1")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
+} catch (e) {} })();
+
+
+/* ===== DO NOT REMOVE — loads the "Fix costs" alert (wrong / missing product costs, console/cost-alerts.js, owner 13 Nov 2026). Keep this block when replacing amazon-name-search.js. ===== */
+(function () { try { if (document.getElementById("aikmCostAlertsJs")) return;
+  if (/[?&]app=meesho/.test(location.search)) return;
+  function add(ref) { if (document.getElementById("aikmCostAlertsJs")) return; var s = document.createElement("script"); s.id = "aikmCostAlertsJs"; s.defer = true;
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/cost-alerts.js"; document.head.appendChild(s); }
+  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
+  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/cost-alerts.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
     .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });

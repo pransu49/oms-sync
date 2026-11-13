@@ -96,6 +96,12 @@
   Amazon -> 'exists' (create:true hands it to Add ASIN); else product type from searchDefinitionsProductTypes, full LISTING attributes,
   VALIDATION_PREVIEW first -> 'needs_info' (Amazon's issue list, page asks per attribute -> `extra`) / 'checked' / 'submitted' -> later 'live'
   (ASIN read back, mapped to the LOTS code in spapiAsinLotsMap). Same profit rule as Add ASIN. ~1 read per sync.
+- **Fix costs alert** (owner 13 Nov 2026, `console/cost-alerts.js`, loader block `aikmCostAlertsJs` at the end of `amazon-name-search.js` — keep it):
+  header button "Fix costs · N" + pop-up once per visit. Checks products sold in 30 days (this account): no cost, pack not counted
+  (title "Pack of N"/"x N" vs mapped units incl. LOTS "Pk6"/vendor qty), different product (word overlap < 0.34), size differs, cost above
+  what the buyer paid incl. shipping. "Fix mapping" = page's openSpapiMatchModal(asin); "Looks right" = main `aikm_admin/costCheckOk.ok["acct|asin"]`
+  (stamp = cost|issues, comes back if the cost changes). 1 read per page open.
+- Orders cost (`order-fees.js`): old/relisted SKUs (not in inventory) use the order item's ASIN mapping first (packs, combos, vendor).
 - **Quota savers in `spapi-sync.js`** (owner 12 Nov 2026, "ensure all syncs work under free limits"):
   old per-item collections `spapiInventory` / `spapiOrders` / `spapiCompetitivePricing` are NOT written any more (nothing reads them —
   page + robots use the snapshot; `SPAPI_LEGACY_MIRROR=on` brings the writes back). Sent-price checks: max 150 per run, check counts in ONE doc
