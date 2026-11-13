@@ -353,10 +353,21 @@ async function modeSelftest() {
   if (url) { try { const f = await fetch(url); const buf = Buffer.from(await f.arrayBuffer()); const txt = buf.toString('latin1'), mb = (txt.match(/\/MediaBox\s*\[([^\]]+)\]/) || [])[1] || '?', pages = (txt.match(/\/Type\s*\/Page[^s]/g) || []).length;
       console.log(`   label file: status ${f.status}, ${buf.length} bytes, ${buf.slice(0, 4).toString() === '%PDF' ? 'PDF' : 'NOT a PDF (' + (f.headers.get('content-type') || '') + ')'}, page box [${mb}] points, pages ${pages || '?'}`); } catch (e) { console.log('   label download failed:', e.message); } }
   let tr = await api('GET', '/api/order/track_waybill?waybills=' + encodeURIComponent(awb));
-  for (let i = 0; i < 3 && tr.status === 404; i++) { console.log(`   track said 404 (too fresh?) — waiting 20 s, try ${i + 2}`); await sleep(20000); tr = await api('GET', '/api/order/track_waybill?waybills=' + awb); }
+  for (let i = 0; i < 1 && tr.status === 404; i++) { console.log(`   track said 404 (too fresh?) — waiting 15 s, try ${i + 2}`); await sleep(15000); tr = await api('GET', '/api/order/track_waybill?waybills=' + awb); }
   for (const [label, q] of [['two older AWBs, comma', '14408950426088,14408950144081'], ['two older AWBs, %2C', encodeURIComponent('14408950426088,14408950144081')], ['one older AWB', '14408950144081']]) {
     const t = await api('GET', '/api/order/track_waybill?waybills=' + q);
     console.log(`   track test (${label}): status ${t.status} ${clip(t.text, 160)} -> ${((t.json && t.json.waybillDetails) || []).map((d) => d.waybill + '=' + d.currentStatus).join(' | ')}`);
+  }
+  try { // same call with ONLY the Authorization header (as in ProShip's docs)
+    const t2 = await fetch(BASE + '/api/order/track_waybill?waybills=' + awb, { headers: { Authorization: 'Bearer ' + token } });
+    const tx = await t2.text(); console.log(`   track test (auth header only): status ${t2.status} ${clip(tx, 300)}`);
+    if (t2.status === 200) { try { tr = { status: 200, json: JSON.parse(tx), text: tx }; } catch (e) {} }
+  } catch (e) { console.log('   track test (auth header only) failed:', e.message); }
+  const day = (off) => new Date(Date.now() + 5.5 * 3600e3 + off * 864e5).toISOString().slice(0, 10);
+  for (const [label, body] of [['by awb_number', { awb_number: awb, offset: 0, limit: 5 }], ['by awb_number as number', { awb_number: Number(awb), offset: 0, limit: 5 }], ['updated today', { updated_from: day(-1), updated_to: day(1), offset: 0, limit: 50 }], ['created today', { created_from: day(-1), created_to: day(1), offset: 0, limit: 50 }]]) {
+    try { const j = await getWithBody('/api/order/external/details', body); const rows = (j && j.data) || []; const mine = rows.find((o) => String(o.awbNumber) === awb);
+      console.log(`   order list (${label}): ${rows.length} rows, total ${j && j.pagination ? j.pagination.totalCount : '?'}, ours ${mine ? 'found, orderStatus ' + mine.orderStatus + ', lastStatusUpdateTime ' + mine.lastStatusUpdateTime : 'not in page'}${rows.length ? '' : ' ' + clip(JSON.stringify(j), 200)}`);
+    } catch (e) { console.log(`   order list (${label}) failed: ${e.message}`); }
   }
   const w = ((tr.json && tr.json.waybillDetails) || [])[0];
   console.log(`6. TRACK: status ${tr.status} ${w ? w.currentStatus + ' (code ' + w.currentStatusCode + ') courier ' + w.courierPartner + ' -> bucket ' + bucket(w.currentStatusCode, w.currentStatus) : clip(tr.text, 300)}`);
