@@ -1153,7 +1153,7 @@
     o.onclick = e => { if (e.target === o) close(); };
     document.body.append(o);
   }
-  let payOpen = new Set();
+  let payOpen = new Set(); const payTick = new Map();   // vendor name -> Set of ticked bill ids
   async function payRender(reload) {
     const sec = $("#p-pay"); if (!sec) return;
     if (reload || !PAY.rows) { sec.innerHTML = `<div class="ab-load">Working out what you owe…</div>`; try { await loadPay(); } catch (e) { sec.innerHTML = `<div class="ab-load">Could not load: ${esc(e.message)}</div>`; return; } }
@@ -1168,9 +1168,12 @@
       ${R.list.map((v, i) => `<tr data-v="${i}"><td><span class="pn">${esc(v.name)}</span><div class="sub">${v.bills.length} unpaid bill${v.bills.length > 1 ? "s" : ""}</div></td>
         <td>${v.sup ? `<input class="payCd" data-v="${i}" value="${v.cd ?? ""}" inputmode="numeric" placeholder="Set" style="width:60px;text-align:center"> <span class="sub">days</span> <button class="btn small payAdv" data-id="${esc(v.sup.id)}" title="Paid in advance — mark all its bills paid">Advance</button>` : '<span class="sub">add in Parties</span>'}</td>
         <td class="r num">${inr(v.total, 2)}</td><td class="r num" style="color:${v.due > 0 ? "#B42318" : "inherit"};font-weight:${v.due > 0 ? 600 : 400}">${inr(v.due, 2)}</td><td class="r num">${v.soon ? inr(v.soon, 2) : "—"}</td>
-        <td>${v.oldest ? `<span class="pill bad">${fmtD(v.oldest)}</span>` : "—"}</td><td class="r"><button class="btn small payTg" data-v="${i}">${payOpen.has(v.name) ? "Hide" : "Bills"}</button></td></tr>
-        ${payOpen.has(v.name) ? `<tr><td colspan="7" style="background:#FBF9F4;padding:8px 14px"><table class="ab-t" style="background:#fff"><thead><tr><th>Bill</th><th>Bill date</th><th>Due date</th><th class="r">Amount</th><th>Status</th><th></th></tr></thead><tbody>
-          ${v.bills.map(x => `<tr><td class="mono">${esc(x.b.billNo || "—")}${x.credit ? ' <span class="pill">credit note</span>' : ""}</td><td class="num">${fmtD(x.b.billDate || "")}</td><td class="num">${fmtD(x.due)}</td><td class="r num">${x.amt < 0 ? "− " + inr(-x.amt, 2) : inr(x.amt, 2)}</td>
+        <td>${v.oldest ? `<span class="pill bad">${fmtD(v.oldest)}</span>` : "—"}</td><td class="r" style="white-space:nowrap"><button class="btn small payDue" data-v="${i}" title="Tick this vendor's due bills and mark them paid">Mark paid</button> <button class="btn small payTg" data-v="${i}">${payOpen.has(v.name) ? "Hide" : "Bills"}</button></td></tr>
+        ${payOpen.has(v.name) ? `<tr><td colspan="7" style="background:#FBF9F4;padding:8px 14px">
+          <div class="row payBar" data-v="${i}" style="gap:10px;align-items:center;margin-bottom:8px;flex-wrap:wrap"><label class="sub" style="display:flex;align-items:center;gap:6px">Paid on <input type="date" class="payDate" value="${R.today}" max="${R.today}"></label>
+            <span class="sub paySum"></span><button class="btn small primary payMany" data-v="${i}" style="margin-left:auto">Mark ticked paid</button></div>
+          <table class="ab-t" style="background:#fff"><thead><tr><th style="width:36px"><input type="checkbox" class="payAll" data-v="${i}" title="Tick all"></th><th>Bill</th><th>Bill date</th><th>Due date</th><th class="r">Amount</th><th>Status</th><th></th></tr></thead><tbody>
+          ${v.bills.map(x => `<tr><td><input type="checkbox" class="payCk" data-v="${i}" data-id="${esc(x.id)}" ${(payTick.get(v.name) || new Set()).has(x.id) ? "checked" : ""}></td><td class="mono">${esc(x.b.billNo || "—")}${x.credit ? ' <span class="pill">credit note</span>' : ""}</td><td class="num">${fmtD(x.b.billDate || "")}</td><td class="num">${fmtD(x.due)}</td><td class="r num">${x.amt < 0 ? "− " + inr(-x.amt, 2) : inr(x.amt, 2)}</td>
             <td>${x.credit ? "—" : x.late > 0 ? `<span class="pill bad">${x.late} day${x.late > 1 ? "s" : ""} overdue</span>` : x.late === 0 ? '<span class="pill bad">Due today</span>' : `<span class="pill">in ${-x.late} day${x.late < -1 ? "s" : ""}</span>`}</td>
             <td class="r"><button class="btn small payPaid" data-id="${esc(x.id)}">Mark paid</button></td></tr>`).join("")}</tbody></table></td></tr>` : ""}`).join("")}
       </tbody></table></div>
@@ -1184,6 +1187,46 @@
     sec.querySelectorAll(".payAdv").forEach(b => b.onclick = () => setAdv(b.dataset.id, true).catch(e => toast("Not saved: " + e.message, 5000)));
     sec.querySelectorAll(".payUnadv").forEach(a => a.onclick = e => { e.preventDefault(); setAdv(a.dataset.id, false).catch(er => toast("Not saved: " + er.message, 5000)); });
     sec.querySelectorAll(".payTg").forEach(b => b.onclick = () => { const v = R.list[+b.dataset.v]; payOpen.has(v.name) ? payOpen.delete(v.name) : payOpen.add(v.name); payRender(false); });
+    /* tick bills -> one "Mark ticked paid" with a paid date */
+    sec.querySelectorAll(".payDue").forEach(b => b.onclick = () => {
+      const v = R.list[+b.dataset.v];
+      payTick.set(v.name, new Set(v.bills.filter(x => x.credit || x.due <= R.today).map(x => x.id)));
+      if (!payTick.get(v.name).size) payTick.set(v.name, new Set(v.bills.map(x => x.id)));
+      payOpen.add(v.name); payRender(false);
+      setTimeout(() => sec.querySelector(`.payBar[data-v="${b.dataset.v}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" }), 50);
+    });
+    const paySum = vi => {
+      const v = R.list[vi], set = payTick.get(v.name) || new Set(), bar = sec.querySelector(`.payBar[data-v="${vi}"]`); if (!bar) return;
+      const pick = v.bills.filter(x => set.has(x.id)), amt = pick.reduce((a, x) => a + x.amt, 0);
+      bar.querySelector(".paySum").innerHTML = pick.length ? `<b>${pick.length}</b> bill${pick.length > 1 ? "s" : ""} ticked · <b>${inr(amt, 2)}</b>` : "Tick the bills you paid";
+      bar.querySelector(".payMany").disabled = !pick.length;
+      const all = sec.querySelector(`.payAll[data-v="${vi}"]`); if (all) all.checked = pick.length === v.bills.length;
+    };
+    sec.querySelectorAll(".payBar").forEach(bar => paySum(+bar.dataset.v));
+    sec.querySelectorAll(".payCk").forEach(c => c.onchange = () => {
+      const v = R.list[+c.dataset.v], set = payTick.get(v.name) || new Set(); c.checked ? set.add(c.dataset.id) : set.delete(c.dataset.id); payTick.set(v.name, set); paySum(+c.dataset.v);
+    });
+    sec.querySelectorAll(".payAll").forEach(c => c.onchange = () => {
+      const v = R.list[+c.dataset.v]; payTick.set(v.name, new Set(c.checked ? v.bills.map(x => x.id) : []));
+      sec.querySelectorAll(`.payCk[data-v="${c.dataset.v}"]`).forEach(k => k.checked = c.checked); paySum(+c.dataset.v);
+    });
+    sec.querySelectorAll(".payMany").forEach(b => b.onclick = async () => {
+      const vi = +b.dataset.v, v = R.list[vi], set = payTick.get(v.name) || new Set(), pick = v.bills.filter(x => set.has(x.id));
+      const dt = sec.querySelector(`.payBar[data-v="${vi}"] .payDate`).value || R.today;
+      if (!pick.length) return;
+      if (dt > R.today) return toast("Paid date can't be in the future.");
+      const amt = pick.reduce((a, x) => a + x.amt, 0);
+      if (!(await askYes(`Mark ${pick.length} bill${pick.length > 1 ? "s" : ""} of ${v.name} (${inr(amt, 2)}) as paid on ${fmtD(dt)}?`, "Mark paid"))) return;
+      b.disabled = true; b.textContent = "Saving…";
+      try {
+        const ids = pick.map(x => x.id), cur = [];
+        for (let k = 0; k < ids.length; k += 60) cur.push(...await sb("GET", `docs?kind=eq.bill&id=in.(${ids.slice(k, k + 60).map(x => '"' + String(x).replace(/"/g, '\\"') + '"').map(encodeURIComponent).join(",")})&select=id,fy,data`));
+        const rows = cur.map(r => ({ kind: "bill", id: r.id, fy: r.fy, data: { ...r.data, paymentStatus: "Paid", paidDate: dt, updatedAt: nowIso() } }));
+        for (let k = 0; k < rows.length; k += 50) await sbPut(rows.slice(k, k + 50));
+        payTick.delete(v.name);
+        toast(`${rows.length} bill${rows.length > 1 ? "s" : ""} of ${v.name} marked paid (${inr(amt, 2)}).`, 5000); payRender(true);
+      } catch (e) { b.disabled = false; b.textContent = "Mark ticked paid"; toast("Not saved: " + e.message, 6000); }
+    });
     sec.querySelectorAll(".payCd").forEach(inp => {
       inp.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); inp.blur(); } };
       inp.onchange = async () => {
