@@ -350,8 +350,14 @@ async function modeSelftest() {
   const lb = await api('POST', '/api/tools/refresh/url', { awbNumber: awb, docType: 'LABEL' });
   const url = (lb.json && (lb.json.LABEL || (lb.json.result || {}).LABEL)) || '';
   console.log(`5. LABEL: status ${lb.status} keys ${lb.json ? Object.keys(lb.json).join(',') : '-'} link ${url ? 'yes' : 'NO — ' + clip(lb.text, 300)}`);
-  if (url) { try { const f = await fetch(url); const buf = Buffer.from(await f.arrayBuffer()); console.log(`   label file: status ${f.status}, ${buf.length} bytes, ${buf.slice(0, 4).toString() === '%PDF' ? 'PDF' : 'NOT a PDF (' + (f.headers.get('content-type') || '') + ')'}`); } catch (e) { console.log('   label download failed:', e.message); } }
-  const tr = await api('GET', '/api/order/track_waybill?waybills=' + encodeURIComponent(awb));
+  if (url) { try { const f = await fetch(url); const buf = Buffer.from(await f.arrayBuffer()); const txt = buf.toString('latin1'), mb = (txt.match(/\/MediaBox\s*\[([^\]]+)\]/) || [])[1] || '?', pages = (txt.match(/\/Type\s*\/Page[^s]/g) || []).length;
+      console.log(`   label file: status ${f.status}, ${buf.length} bytes, ${buf.slice(0, 4).toString() === '%PDF' ? 'PDF' : 'NOT a PDF (' + (f.headers.get('content-type') || '') + ')'}, page box [${mb}] points, pages ${pages || '?'}`); } catch (e) { console.log('   label download failed:', e.message); } }
+  let tr = await api('GET', '/api/order/track_waybill?waybills=' + encodeURIComponent(awb));
+  for (let i = 0; i < 3 && tr.status === 404; i++) { console.log(`   track said 404 (too fresh?) — waiting 20 s, try ${i + 2}`); await sleep(20000); tr = await api('GET', '/api/order/track_waybill?waybills=' + awb); }
+  for (const [label, q] of [['two older AWBs, comma', '14408950426088,14408950144081'], ['two older AWBs, %2C', encodeURIComponent('14408950426088,14408950144081')], ['one older AWB', '14408950144081']]) {
+    const t = await api('GET', '/api/order/track_waybill?waybills=' + q);
+    console.log(`   track test (${label}): status ${t.status} ${clip(t.text, 160)} -> ${((t.json && t.json.waybillDetails) || []).map((d) => d.waybill + '=' + d.currentStatus).join(' | ')}`);
+  }
   const w = ((tr.json && tr.json.waybillDetails) || [])[0];
   console.log(`6. TRACK: status ${tr.status} ${w ? w.currentStatus + ' (code ' + w.currentStatusCode + ') courier ' + w.courierPartner + ' -> bucket ' + bucket(w.currentStatusCode, w.currentStatus) : clip(tr.text, 300)}`);
   const cn = await api('POST', '/api/order/cancel_order', { waybill: awb });
