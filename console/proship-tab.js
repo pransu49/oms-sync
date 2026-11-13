@@ -517,13 +517,19 @@
       busy = true; jobRes = {}; render();
       show("psStatus", "<b>" + rows.length + " orders</b> \u2014 starting on the server\u2026", "run");
       var ref = d.collection("proshipJobs").doc();
-      ref.set({ status: "queued", step: "Waiting for the server\u2026", ids: ids, count: rows.length, sla: selDate,
+      // a console tab left open for long can lose its Firebase connection: then the save waits for ever and the
+      // button stays on "Shipping\u2026" (owner 13 Nov 2026). Wake the connection after 15 s, give up after 60 s.
+      var saved = false, nudge = setTimeout(function () { if (!saved) { show("psStatus", "<b>" + rows.length + " orders</b> \u2014 reconnecting to the server\u2026", "run"); try { d.enableNetwork(); } catch (e) {} } }, 15000);
+      var giveUp = new Promise(function (_, rej) { setTimeout(function () { if (!saved) rej(new Error("No connection to the server. Press Ctrl + Shift + R to reload the page, then click Ship again \u2014 nothing was shipped.")); }, 60000); });
+      Promise.race([ref.set({ status: "queued", step: "Waiting for the server\u2026", ids: ids, count: rows.length, sla: selDate,
         box: { l: num(settings.l) || DEF.l, b: num(settings.b) || DEF.b, h: num(settings.h) || DEF.h },
         pickup: { name: settings.name, phone: phone10(settings.phone), email: settings.email, address: settings.address, city: settings.city, state: settings.state, pin: String(settings.pin).trim(), gstin: settings.gstin || "" },
-        createdAt: firebase.firestore.FieldValue.serverTimestamp() })
-        .then(function () { try { localStorage.setItem(LAST, ref.id); } catch (e) {} watch(ref.id); return dispatch({ mode: "ship", job_id: ref.id }); })
+        createdAt: firebase.firestore.FieldValue.serverTimestamp() }), giveUp])
+        .then(function () { saved = true; clearTimeout(nudge); try { localStorage.setItem(LAST, ref.id); } catch (e) {} watch(ref.id); return dispatch({ mode: "ship", job_id: ref.id }); })
         .catch(function (e) {
+          clearTimeout(nudge);
           busy = false; show("psStatus", "Could not start: " + esc(e.message || e), "bad"); render();
+          if (!saved) { ref.delete().catch(function () {}); return; } // a late save must not leave a job behind
           ref.set({ status: "failed", step: "Could not start: " + String(e.message || e).slice(0, 200) }, { merge: true }).catch(function () {});
         });
     }
