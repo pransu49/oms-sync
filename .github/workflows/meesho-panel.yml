@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'login, check (read only) or process (accept + labels)'
+        description: 'login, check (read only), inventory (read only) or process (accept + labels)'
         default: 'check'
       account:
         description: 'Meesho account short name'

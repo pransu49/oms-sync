@@ -109,6 +109,25 @@ async function tgDoc(file, caption) {
   fd.append('document', new Blob([fs.readFileSync(file)]), path.basename(file));
   await fetch(`https://api.telegram.org/bot${tok}/sendDocument`, { method: 'POST', body: fd }).catch(e => console.log('tg doc failed', e.message));
 }
+// MODE=inventory (read only, first step): open the Inventory page, log what Meesho shows and which data calls it makes
+async function inventoryLook(p, ctx) {
+  if (!loggedIn(p.url())) { await tg('⚠️ Meesho (' + ACCT + '): not signed in on the office PC. Run "Meesho login setup".'); throw new Error('not logged in'); }
+  const calls = [];
+  ctx.on('response', async (res) => { try { const u = res.url(), ct = res.headers()['content-type'] || '';
+    if (/json/i.test(ct) && /inventor|catalog|stock|product|sku|listing/i.test(u) && calls.length < 40) { const t = await res.text(); calls.push(res.request().method() + ' ' + u.slice(0, 200) + '\n    ' + t.slice(0, 700).replace(/\s+/g, ' ')); } } catch (_) {} });
+  await p.waitForTimeout(6000); await closePopups(p);
+  const links = await p.locator('a, [role=menuitem], nav *').evaluateAll(els => [...new Set(els.map(e => (e.innerText || '').trim() + ' -> ' + (e.getAttribute('href') || '')).filter(t => /inventor|catalog|stock/i.test(t)))].slice(0, 30));
+  console.log('NAV:\n  ' + links.join('\n  '));
+  const nav = p.getByText(/^Inventory$/i).first();
+  if (await nav.count()) { await nav.click().catch(() => {}); } else { const l = links.find(x => /inventor/i.test(x) && /->\s*\//.test(x)); if (l) await p.goto(new URL(l.split('->')[1].trim(), p.url()).href); }
+  await p.waitForTimeout(9000); await closePopups(p);
+  console.log('INVENTORY URL:', p.url());
+  console.log('PAGE TEXT:\n' + (await p.locator('body').innerText()).slice(0, 5000));
+  console.log('DATA CALLS:\n  ' + calls.join('\n  '));
+  await p.screenshot({ path: 'meesho-inventory.png' });
+  await tg('🟣 Meesho (' + ACCT + '): inventory page test (read only)', 'meesho-inventory.png');
+  await ctx.close();
+}
 const loggedIn = (u) => /supplier\.meesho\.com\/panel/.test(u) && !/login/i.test(u);
 
 (async () => {
@@ -137,6 +156,7 @@ const loggedIn = (u) => /supplier\.meesho\.com\/panel/.test(u) && !/login/i.test
   }
 
   if (MODE === 'process') return await processOrders(p, ctx);
+  if (MODE === 'inventory') return await inventoryLook(p, ctx);
   // MODE=check
   if (!loggedIn(p.url())) { await tg('⚠️ Meesho (' + ACCT + '): not signed in on the office PC. Run "Meesho login setup".'); throw new Error('not logged in'); }
   await p.getByText(/Pending Orders/i).first().waitFor({ timeout: 45000 }).catch(() => {});
