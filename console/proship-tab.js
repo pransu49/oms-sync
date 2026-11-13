@@ -189,7 +189,7 @@
       '<div class="card nb-card">' +
         '<div class="nb-head"><div><div class="nb-kicker">PROSHIP \u00b7 DIRECT SHIPPING</div>' +
         '<div class="nb-title">Ship Amazon self-ship orders through ProShip</div>' +
-        '<div class="nb-sub">Pick an SLA date \u2192 tick the orders \u2192 <b>Ship via ProShip</b>. No file to upload: the shipments are created on the server, the AWBs go to OMS Guru and Amazon by themselves. Only Amazon self-ship orders that are still <b>New</b> (no AWB yet) are listed.</div></div>' +
+        '<div class="nb-sub">Pick an SLA date \u2192 tick the orders \u2192 <b>Ship via ProShip</b>. No file to upload: the shipments are created on the server, the AWBs go to OMS Guru and Amazon by themselves. Orders ProShip sends by ATS go at <b>450 g</b>; all others at the weight below. Only Amazon self-ship orders that are still <b>New</b> (no AWB yet) are listed.</div></div>' +
         '<div class="ps-conn" id="psConn"><i class="dot"></i><span id="psConnTxt">Not tested yet</span><button type="button" id="psTest">Test connection</button></div></div>' +
 
         '<details class="ps-fold" id="psSetFold"><summary><i class="ti ti-building-warehouse"></i>Pickup address &amp; default box <span class="nb-muted" id="psSetNote"></span><span id="psSetSaved" class="nb-muted"></span></summary><div>' +
@@ -402,7 +402,11 @@
         var o = r.o, ok = r.state === "ok", sh = r.ship, f = inFile[r.id], err = jobRes[r.id] && jobRes[r.id].e;
         var tag = sh ? "nb-tag-ok" : !ok || err || r.loss ? "nb-tag-bad" : f ? "nb-tag-warn" : "nb-tag-ok";
         var note = sh ? "Shipped \u00b7 " + (sh.c || "ProShip") : !ok ? r.note : err ? "Not shipped" : r.loss ? "Loss \u2014 tick to ship" : f ? "In " + f.w + " file " + when(f.t) : "Ready";
-        var under = sh ? '<div class="cx-awb" style="margin-top:5px;">' + esc(sh.a) + '</div><button type="button" class="ps-x" data-awb="' + esc(sh.a) + '" data-id="' + esc(r.id) + '">Cancel shipment</button>'
+        var jr = jobRes[r.id] || {};
+        var under = sh ? '<div class="cx-awb" style="margin-top:5px;">' + esc(sh.a) + "</div>" +
+          (jr.g ? '<div class="nb-muted nb-small">' + (jr.ats ? "ATS \u00b7 " : "") + "sent " + jr.g + " g</div>" : "") +
+          (jr.warn ? '<div class="nb-small" style="color:var(--x-red);max-width:240px;white-space:normal;margin-top:3px;">\u26a0 ' + esc(jr.warn) + "</div>" : "") +
+          '<button type="button" class="ps-x" data-awb="' + esc(sh.a) + '" data-id="' + esc(r.id) + '">Cancel shipment</button>'
           : err ? '<div class="nb-muted nb-small" style="margin-top:5px;max-width:220px;white-space:normal;">' + esc(err) + "</div>" : "";
         return '<tr class="' + (r.sel || sh ? "" : "nb-row-out") + (r.loss && !sh ? " nb-row-loss" : "") + '">' +
           '<td><input type="checkbox" class="ps-sel" data-i="' + i + '"' + (r.sel ? " checked" : "") + (ok && !sh ? "" : " disabled") + "></td>" +

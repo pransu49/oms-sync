@@ -170,6 +170,9 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   label PDF (298 x 420 pt, 1 page) and cancel all work; `/api/order/track_waybill` answers 404, so `sync` reads statuses from the order list
   (`/api/order/external/details`, a GET with the filters in the BODY; a date range is required). LIVE login works since 13 Nov 2026 ~13:50 IST (ProShip switched OTP off for the API user); first live `check` gave NO rates from 206001:
   "No Serviceable Courier Found as per RuleMapping" (no couriers / rate card / pickup set up on the account yet). Shipping untested.
+  ATS weight rule (owner 13 Nov 2026): before each create the robot asks ProShip's rates with the real weight; cheapest courier = ATS / Amazon
+  -> order sent at 450 g, else the real weight. If ProShip then assigns a different courier the job result gets a `warn` (shown on the row).
+  (NimbusPost / Zippy files: courier is picked inside those apps after upload, so the rule can't be applied there before the file is made.)
   Practice run: `proship.yml` mode `selftest` = ProShip's SANDBOX only (proshipdev.prozo.com, secrets `PROSHIP_SANDBOX_USERNAME` + `PROSHIP_SANDBOX_PASSWORD`): one dummy
   order -> label -> track -> cancel, prints ProShip's real answers, touches no Firebase. Never send real buyer data to the sandbox (shared test login);
   every other mode is refused on the sandbox so fake AWBs can't reach proshipIndex / OMS / Amazon.

@@ -106,6 +106,22 @@ function bucket(code, name) {
 }
 const DONE = { cancelled: 1, rto_delivered: 1, delivered: 1, lost: 1 };
 
+// ATS rule (owner 13 Nov 2026): an order that goes by ATS (Amazon Shipping) is sent at 450 g, every other courier gets the real weight.
+// ProShip picks the courier itself, so we ask ProShip's rates first (with the real weight): if the cheapest courier is ATS -> 450 g.
+const ATS_GRAMS = 450;
+const isAts = (name) => /amazon|\bats\b/i.test(String(name || ''));
+async function cheapestCourier(body) {
+  const sd = body.shipment_detail[0];
+  const r = await api('POST', '/api/tools/list/ext/pricing', { from: Number(body.pickup_details.from_pincode), to: Number(body.delivery_details.to_pincode),
+    paymentType: body.payment_mode, length: sd.item_length, breadth: sd.item_breadth, height: sd.item_height, weight: String(sd.item_weight),
+    dispatchMode: 'SURFACE', codAmount: body.cod_amount, orderType: 'FORWARD' });
+  const rows = Array.isArray(r.json) ? r.json : (r.json && (r.json.result || r.json.data)) || [];
+  if (!Array.isArray(rows) || !rows.length) return null;
+  rows.sort((a, b) => num(a.priceAfterTax) - num(b.priceAfterTax));
+  const p = rows[0].provider || {};
+  return { name: String(p.parent || p.id || ''), price: r2(num(rows[0].priceAfterTax)) };
+}
+
 /* ---------------------------------------------------------------- Firebase */
 let db = null, omsDb = null;
 function fb() {
@@ -262,6 +278,10 @@ async function modeShip() {
         const b = buildOrder(id, lines, num(want[id]), box, pk);
         if (b.error) res = { e: b.error };
         else {
+          // ATS rule: ask ProShip's cheapest courier with the real weight; ATS -> send 450 g
+          const realG = b.body.shipment_detail[0].item_weight; let atsSent = false, guess = null;
+          try { guess = await cheapestCourier(b.body); } catch (e) { console.log('  rate check failed, real weight kept:', e.message); }
+          if (guess && isAts(guess.name)) { b.body.shipment_detail[0].item_weight = ATS_GRAMS; atsSent = true; }
           try {
             const r = await api('POST', '/api/order/create', b.body);
             const x = (r.json && r.json.result) || {};
@@ -269,7 +289,14 @@ async function modeShip() {
             if (!awb && (apiOk(r) || /already|duplicate|exist/i.test(apiMsg(r)))) { // created but no AWB in the answer (or made by an earlier try): look it up
               try { const f = await findByReference(id); if (f) { awb = String(f.awbNumber); courier = courierOf(f.courierDetail) || courier; } } catch (e) { console.log('  lookup failed:', e.message); }
             }
-            if (awb) { res = { a: awb, c: courier }; idx[id] = { a: awb, c: courier, s: 'ok', st: clip(x.orderStatus || 'ORDER_PLACED', 40), t: Date.now(), ac: b.acct }; }
+            if (awb) {
+              res = { a: awb, c: courier, g: b.body.shipment_detail[0].item_weight };
+              if (atsSent) res.ats = 1;
+              // ProShip chose differently from its own cheapest rate: flag it (weight may be wrong for that courier)
+              if (courier && atsSent && !isAts(courier)) res.warn = `Sent at ${ATS_GRAMS} g for ATS, but ProShip gave ${courier} — real weight ${realG} g`;
+              if (courier && !atsSent && isAts(courier)) res.warn = `ProShip gave ATS but the real weight ${realG} g was sent (not ${ATS_GRAMS} g)`;
+              idx[id] = { a: awb, c: courier, s: 'ok', st: clip(x.orderStatus || 'ORDER_PLACED', 40), t: Date.now(), ac: b.acct };
+            }
             else res = { e: apiOk(r) ? 'ProShip accepted the order but gave no AWB yet — check ProShip → Unprocessed Shipments' : apiMsg(r) };
           } catch (e) { res = { e: clip(e.message, 200) }; }
           await sleep(150);
@@ -277,7 +304,7 @@ async function modeShip() {
       }
       results[id] = res;
       if (res.a && !res.old) made++; else if (res.a) skipped++; else failed++;
-      console.log(`  ${n}/${ids.length} ${id} -> ${res.a ? res.a + ' (' + (res.c || '?') + ')' + (res.old ? ' [already shipped]' : '') : 'NOT SHIPPED: ' + res.e}`);
+      console.log(`  ${n}/${ids.length} ${id} -> ${res.a ? res.a + ' (' + (res.c || '?') + ')' + (res.g ? ' ' + res.g + ' g' + (res.ats ? ' [ATS]' : '') : '') + (res.old ? ' [already shipped]' : '') : 'NOT SHIPPED: ' + res.e}${res.warn ? '  ⚠ ' + res.warn : ''}`);
       if (n % 10 === 0 && n < ids.length) await note('running', { step: `Creating shipments… ${n} of ${ids.length}`, done: n, results });
     }
     if (made) await writeIndex(idx);
@@ -378,4 +405,4 @@ if (require.main === module) {
     .then(() => process.exit(process.exitCode || 0))
     .catch((e) => { console.error('FAILED:', e.message); process.exit(1); });
 }
-module.exports = { buildOrder, bucket, courierOf, checkPickup };
+module.exports = { buildOrder, bucket, courierOf, checkPickup, isAts };
