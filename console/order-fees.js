@@ -31,6 +31,19 @@
       if (nearStd(t / p) && !nearStd(t / (p - t))) { it.priceExGst = p; it.price = Math.round((p + t) * 100) / 100; it.taxPercent = Math.round(t / p * 1000) / 10; }
     });
   }
+  /* Closing fee estimate (owner 13 Nov 2026) = what Amazon really charged on 8,318 Sasta orders: PER UNIT, by the unit price incl. GST.
+     Self ship: up to ₹250 → ₹20 · ₹250–500 → ₹26 · ₹500–1000 → ₹51. Easy Ship: up to ₹250 → ₹1 · ₹250–500 → ₹22. (Amounts before 18% GST.)
+     Before, the whole order total (with shipping) was used once, which put many orders in a higher band. */
+  function closingEst(e) {
+    var c = 0;
+    (e.items || []).forEach(function (it) {
+      var q = +it.qty || 1, unit = ((+it.price || 0)) / q, per;
+      if (e.isEasyShip) per = unit <= 250 ? 1 : unit <= 500 ? 22 : (typeof calcClosingFee === "function" ? calcClosingFee(unit, true) : 30);
+      else per = unit <= 250 ? 20 : unit <= 500 ? 26 : unit <= 1000 ? 51 : (typeof calcClosingFee === "function" ? calcClosingFee(unit, false) : 61);
+      c += per * q;
+    });
+    return c;
+  }
   /* Same estimate the page already used, so we can swap it for Amazon's real numbers */
   function estimate(e, r) {
     fixItems(e);
@@ -39,7 +52,7 @@
       var i = r.find(it.sku, it.asin, it.title);
       if (i) { inv = true; ref += calcReferralFee(i.amazonProductType, it.price); var f = calcEasyShipWeightFee(i.weightKg, e.isEasyShip); if (f != null) ship += f; }
     });
-    return { inv: inv, ref: ref, ship: ship, close: inv ? calcClosingFee(e.total || 0, e.isEasyShip) : 0 };
+    return { inv: inv, ref: ref, ship: ship, close: inv ? closingEst(e) : 0 };
   }
 
   /* Totals from Amazon's raw fee events (robot saves only fees.ev since 8 Nov 2026; older orders may carry totals already).
