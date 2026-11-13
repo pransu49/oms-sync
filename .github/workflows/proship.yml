@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'check | ship | sync | cancel'
+        description: 'check | ship | sync | cancel | selftest (selftest = practice run on the ProShip sandbox, dummy order only)'
         required: false
         default: 'check'
       job_id:
@@ -45,10 +45,12 @@ jobs:
           MODE: ${{ inputs.mode || 'check' }}
           JOB_ID: ${{ inputs.job_id }}
           AWBS: ${{ inputs.awbs }}
-          PROSHIP_USERNAME: ${{ secrets.PROSHIP_USERNAME }}
-          PROSHIP_PASSWORD: ${{ secrets.PROSHIP_PASSWORD }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          # selftest runs on ProShip's sandbox with its own login; every other mode uses the live account
+          PROSHIP_BASE: ${{ inputs.mode == 'selftest' && 'https://proshipdev.prozo.com' || 'https://proship.prozo.com' }}
+          PROSHIP_USERNAME: ${{ inputs.mode == 'selftest' && secrets.PROSHIP_SANDBOX_USERNAME || secrets.PROSHIP_USERNAME }}
+          PROSHIP_PASSWORD: ${{ inputs.mode == 'selftest' && secrets.PROSHIP_SANDBOX_PASSWORD || secrets.PROSHIP_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ inputs.mode != 'selftest' && secrets.FIREBASE_SERVICE_ACCOUNT || '' }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ inputs.mode != 'selftest' && secrets.FIREBASE_SERVICE_ACCOUNT_OMS || '' }}
 
       # new AWBs -> OMS Guru right away (Amazon is confirmed after the next OMS sync), same as NimbusPost / Zippy
       - name: Push tracking to OMS Guru
@@ -59,7 +61,7 @@ jobs:
         run: gh workflow run oms-push-tracking.yml --repo ${{ github.repository }} --ref main -f dry_run=false || true
 
       - name: Report health to console
-        if: always()
+        if: ${{ always() && inputs.mode != 'selftest' }}
         shell: bash
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}

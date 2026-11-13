@@ -6,6 +6,8 @@ try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only
 //   ship   : JOB_ID = proshipJobs/<id> { ids:{orderId:weightKg}, box:{l,b,h}, pickup:{...} } -> creates the shipments
 //   sync   : refresh the status of live ProShip AWBs (delivered / RTO / cancelled)
 //   cancel : AWBS = "awb1,awb2" -> cancels those shipments
+//   selftest : ONLY on ProShip's sandbox (proshipdev.prozo.com, secrets PROSHIP_SANDBOX_*): creates ONE dummy order (made-up buyer),
+//              reads its label + tracking, cancels it and prints ProShip's real answers. Touches no Firebase data and no real order.
 //
 // Auth: PROSHIP_USERNAME + PROSHIP_PASSWORD (GitHub secrets) — an API user made in ProShip -> Settings -> Manage Users.
 // API docs: https://documenter.getpostman.com/view/27749698/2s93mBwyZ1
@@ -327,8 +329,42 @@ async function modeCancel() {
   if (n < awbs.length) process.exitCode = 1;
 }
 
+// practice run on ProShip's shared sandbox — dummy data only (never real buyers: other companies use the same test login)
+async function modeSelftest() {
+  const show = (label, r) => console.log(`${label}: status ${r.status} ${clip(r.text, 1400)}`);
+  await signin();
+  console.log('1. LOGIN ok');
+  const pr = await api('POST', '/api/tools/list/ext/pricing', { from: 110001, to: 110009, paymentType: 'PREPAID', length: 20, breadth: 15, height: 10, weight: '500', dispatchMode: 'SURFACE', codAmount: 0, orderType: 'FORWARD' });
+  show('2. PRICING', pr);
+  const ref = 'AIKMTEST' + Date.now();
+  const line = { channel: 'Test - Amazon', buyerName: 'Test Buyer', buyerPhone: '9999999999', buyerEmail: '', buyerAddress1: 'Test order - do not ship', buyerAddress2: 'Block A', buyerCity: 'Delhi', buyerState: 'Delhi', buyerPincode: '110009', sku: 'TEST-SKU', productName: 'Test item', qty: 1, price: 100, shippingCharge: 0, codCollectible: 0, orderType: 'Prepaid', hsn: '0713', taxRate: 5 };
+  const b = buildOrder(ref, [line], 0.5, { l: 20, b: 15, h: 10 }, { name: 'AIKM Test Warehouse', phone: '9999999999', email: 'test@example.com', address: 'Test pickup address', city: 'Delhi', state: 'Delhi', pin: '110001', gstin: '' });
+  if (b.error) throw new Error('test order could not be built: ' + b.error);
+  const cr = await api('POST', '/api/order/create', b.body);
+  show('3. CREATE', cr);
+  const x = (cr.json && cr.json.result) || {};
+  let awb = String(x.awb_number || x.awbNumber || '').trim();
+  console.log(`   parsed -> ok=${apiOk(cr)} awb=${awb || '(none)'} courier=${courierOf(x.courier_id || x.courierDetail) || '(none)'} status=${x.orderStatus || ''} result keys: ${Object.keys(x).join(',')}`);
+  try { const f = await findByReference(ref); console.log(`4. FIND BY REFERENCE: ${f ? 'found, awb ' + f.awbNumber + ', courier ' + courierOf(f.courierDetail) : 'not found'}`); if (f && !awb) awb = String(f.awbNumber || ''); } catch (e) { console.log('4. FIND BY REFERENCE failed:', e.message); }
+  if (!awb) { console.log('SELFTEST STOPPED — no AWB came back, so label / tracking / cancel could not be tried.'); process.exitCode = 1; return; }
+  const lb = await api('POST', '/api/tools/refresh/url', { awbNumber: awb, docType: 'LABEL' });
+  const url = (lb.json && (lb.json.LABEL || (lb.json.result || {}).LABEL)) || '';
+  console.log(`5. LABEL: status ${lb.status} keys ${lb.json ? Object.keys(lb.json).join(',') : '-'} link ${url ? 'yes' : 'NO — ' + clip(lb.text, 300)}`);
+  if (url) { try { const f = await fetch(url); const buf = Buffer.from(await f.arrayBuffer()); console.log(`   label file: status ${f.status}, ${buf.length} bytes, ${buf.slice(0, 4).toString() === '%PDF' ? 'PDF' : 'NOT a PDF (' + (f.headers.get('content-type') || '') + ')'}`); } catch (e) { console.log('   label download failed:', e.message); } }
+  const tr = await api('GET', '/api/order/track_waybill?waybills=' + encodeURIComponent(awb));
+  const w = ((tr.json && tr.json.waybillDetails) || [])[0];
+  console.log(`6. TRACK: status ${tr.status} ${w ? w.currentStatus + ' (code ' + w.currentStatusCode + ') courier ' + w.courierPartner + ' -> bucket ' + bucket(w.currentStatusCode, w.currentStatus) : clip(tr.text, 300)}`);
+  const cn = await api('POST', '/api/order/cancel_order', { waybill: awb });
+  show('7. CANCEL', cn);
+  console.log(`SELFTEST DONE — create ${awb ? 'OK' : 'FAILED'}, label ${url ? 'OK' : 'FAILED'}, track ${w ? 'OK' : 'FAILED'}, cancel ${apiOk(cn) ? 'OK' : 'FAILED'}.`);
+  if (!url || !w || !apiOk(cn)) process.exitCode = 1;
+}
+
 if (require.main === module) {
-  ({ check: modeCheck, ship: modeShip, sync: modeSync, cancel: modeCancel }[MODE] || (async () => { throw new Error('Unknown MODE ' + MODE); }))()
+  // the sandbox is for the practice run only: its fake AWBs must never reach the real index / OMS Guru / Amazon
+  const prod = /^https:\/\/proship\.prozo\.com$/i.test(BASE), sandbox = /^https:\/\/proshipdev\.prozo\.com$/i.test(BASE);
+  if (MODE === 'selftest' ? !sandbox : !prod) { console.error(`FAILED: mode "${MODE}" is not allowed on ${BASE}`); process.exit(1); }
+  ({ check: modeCheck, ship: modeShip, sync: modeSync, cancel: modeCancel, selftest: modeSelftest }[MODE] || (async () => { throw new Error('Unknown MODE ' + MODE); }))()
     .then(() => process.exit(process.exitCode || 0))
     .catch((e) => { console.error('FAILED:', e.message); process.exit(1); });
 }
