@@ -95,7 +95,13 @@
       var free = u.plan === "free" || (u.projects && Object.keys(u.projects).length && Object.keys(u.projects).every(function (k) { return u.projects[k].freePlan; }));
       var kick = box.querySelector(".fb-kick");
       var rb = u.realBill;
-      if (rb && rb.ok && !box.querySelector(".aikm-real-bill")) {
+      if (rb && rb.ok && !rb.exportedAt && !box.querySelector(".aikm-real-bill")) {
+        var wb = document.createElement("div"); wb.className = "aikm-real-bill";
+        wb.style.cssText = "margin:10px 0;padding:10px 12px;border-radius:10px;background:#E7F4EC;color:#1E5B3B;font-size:12.5px";
+        wb.textContent = "Real Google bill connected ✓ — waiting for Google's first bill data (Google sends it a few times a day; the first can take up to 24 hours). Figures below are only an estimate until then.";
+        var hw = kick && kick.closest(".fb-head"); (hw || box.firstChild).insertAdjacentElement("afterend", wb);
+      }
+      if (rb && rb.ok && rb.exportedAt && !box.querySelector(".aikm-real-bill")) {
         var R = function (n) { n = Number(n) || 0; return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: n < 100 ? 2 : 0, maximumFractionDigits: 2 }); };
         var ago = rb.exportedAt ? Math.max(0, Math.round((Date.now() - Date.parse(rb.exportedAt)) / 36e5)) : null;
         var esc2 = function (t) { return String(t || "").replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
