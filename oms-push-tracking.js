@@ -79,6 +79,19 @@ async function main() {
     if (n && n.a && n.s !== 'cancelled') return;                      // NimbusPost already has a live AWB for this order
     nimbus[id] = { a: String(v.a), c: v.c || '', s: 'zippy' }; fromZippy++;
   });
+  // ProShip AWBs (made by proship.js from the console: Self-Ship -> ProShip) fill in the same way
+  let fromProship = 0;
+  try {
+    const psDoc = await db.collection('aikm_admin').doc('proshipIndex').get();
+    const psAll = psDoc.exists && psDoc.get('data') ? JSON.parse(psDoc.get('data')) : {};
+    Object.entries(psAll).forEach(([k, v]) => {
+      const id = nid(k), n = nimbus[id];
+      if (!v || !v.a || v.s === 'cancelled') return;
+      if (n && n.a && n.s !== 'cancelled') return;                    // NimbusPost / Zippy already has a live AWB for this order
+      nimbus[id] = { a: String(v.a), c: v.c || '', s: 'proship' }; fromProship++;
+    });
+  } catch (e) { console.log('ProShip AWBs skipped:', e.message); }
+  if (fromProship) console.log(`ProShip AWBs added: ${fromProship}`);
   const logRef = db.collection('aikm_admin').doc('omsTrackingPush');
   const logDoc = await logRef.get();
   // the pushed list is kept as JSON text: a big map field hits Firestore's "too many index entries" limit

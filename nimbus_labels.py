@@ -140,6 +140,44 @@ def nimbus_shipments(wanted, sla):
     return found
 
 
+# ---------------------------------------------------------------- 2b. shipments from ProShip (proship.js)
+PS = (os.environ.get('PROSHIP_BASE') or 'https://proship.prozo.com').rstrip('/')
+
+
+def proship_shipments(orders, ship):
+    """Orders of this date that NimbusPost has NOT shipped but ProShip has (aikm_admin/proshipIndex): adds them to `ship`
+    with ProShip's own label link. Any problem here is skipped — NimbusPost labels are never affected."""
+    d = db.collection('aikm_admin').document('proshipIndex').get()
+    idx = json.loads((d.to_dict() or {}).get('data') or '{}') if d.exists else {}
+    want = {nid(k): v for k, v in idx.items() if nid(k) in orders and nid(k) not in ship and (v or {}).get('a') and v.get('s') != 'cancelled'}
+    if not want:
+        return 0
+    user, pw = (os.environ.get('PROSHIP_USERNAME') or '').strip(), os.environ.get('PROSHIP_PASSWORD') or ''
+    if not user or not pw:
+        print(f'{len(want)} ProShip shipment(s) found but PROSHIP_USERNAME / PROSHIP_PASSWORD are not set — skipped'); return 0
+    r = requests.post(PS + '/api/auth/signin', json={'username': user, 'password': pw}, timeout=60)
+    tok = (r.json() or {}).get('accessToken')
+    if not tok:
+        raise RuntimeError(f'ProShip login failed (status {r.status_code})')
+    h = {'Authorization': 'Bearer ' + tok, 'Content-Type': 'application/json'}
+    for k, v in want.items():
+        url = ''
+        for t in range(3):
+            rr = requests.post(PS + '/api/tools/refresh/url', headers=h, json={'awbNumber': str(v['a']), 'docType': 'LABEL'}, timeout=60)
+            if rr.status_code == 429 or rr.status_code >= 500:
+                time.sleep(2 * (t + 1)); continue
+            try:
+                j = rr.json() or {}
+                url = j.get('LABEL') or (j.get('result') or {}).get('LABEL') or ''
+            except (ValueError, AttributeError):
+                url = ''
+            break
+        if not url:
+            print('ProShip gave no label link for', k, v['a'])
+        ship[k] = {'oid': '', 'awb': str(v['a']), 'courier': v.get('c') or '', 'label': url, 'created': '', 'status': 'proship'}
+    return len(want)
+
+
 # ---------------------------------------------------------------- 3. label PDFs
 def fetch(url):
     for i in range(4):
@@ -315,6 +353,13 @@ def main():
     note('running', step=f'{len(orders)} orders · finding their NimbusPost shipments…')
     ship = nimbus_shipments(set(orders), sla)
     print(f'{len(orders)} OMS orders, {len(ship)} shipped in NimbusPost')
+    ps_count = 0
+    try:
+        ps_count = proship_shipments(orders, ship)
+        if ps_count:
+            print(f'+ {ps_count} shipped in ProShip')
+    except Exception as e:
+        print('ProShip labels skipped:', e)
     missing = sorted(set(orders) - set(ship))
 
     printed_ref = db.collection('aikm_admin').document('labelPrinted')
@@ -328,10 +373,10 @@ def main():
         return (1 if len(it) > 1 else 0, names, sum(q for _, q in it), oid)
     ids.sort(key=key)
     if not ids:
-        note('done', step='Nothing new to print.' if skipped_old else 'None of these orders are shipped in NimbusPost yet.', count=0, url='',
+        note('done', step='Nothing new to print.' if skipped_old else 'None of these orders are shipped in NimbusPost or ProShip yet.', count=0, url='',
              missing=missing[:300], missingCount=len(missing), skippedPrinted=skipped_old); return
 
-    note('running', step=f'Downloading {len(ids)} labels from NimbusPost…')
+    note('running', step=f'Downloading {len(ids)} labels…')
     srcs = {}
     direct = [k for k in ids if ship[k]['label']]
     with ThreadPoolExecutor(8) as ex:
@@ -366,7 +411,7 @@ def main():
     blob.upload_from_string(data, content_type='application/pdf')
     stamp_ist = dt.datetime.now(IST).strftime('%d-%m-%Y %H%M')
     url = blob.generate_signed_url(version='v4', expiration=dt.timedelta(hours=24), method='GET',
-                                   response_disposition=f'attachment; filename="NimbusPost Labels SLA {sla} ({stamp_ist}).pdf"')
+                                   response_disposition=f'attachment; filename="{'Self-Ship' if ps_count else 'NimbusPost'} Labels SLA {sla} ({stamp_ist}).pdf"')
     now = int(time.time() * 1000)
     keep = {k: v for k, v in printed.items() if now - int(v) < 20 * 864e5}
     for k in final:

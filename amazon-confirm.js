@@ -100,6 +100,17 @@ async function main() {
     if (n && n.a && n.s !== 'cancelled') return;
     nimbus[id] = { a: String(v.a), c: v.c || '', s: 'zippy' };
   });
+  // ProShip AWBs (proship.js, console: Self-Ship -> ProShip) count the same way
+  try {
+    const psDoc = await db.collection('aikm_admin').doc('proshipIndex').get();
+    const psAll = psDoc.exists && psDoc.get('data') ? JSON.parse(psDoc.get('data')) : {};
+    Object.entries(psAll).forEach(([k, v]) => {
+      const id = nid(k), n = nimbus[id];
+      if (!v || !v.a || v.s === 'cancelled') return;
+      if (n && n.a && n.s !== 'cancelled') return;
+      nimbus[id] = { a: String(v.a), c: v.c || '', s: 'proship' };
+    });
+  } catch (e) { console.log('ProShip AWBs skipped:', e.message); }
   const logRef = db.collection('aikm_admin').doc('amazonConfirm');
   const logDoc = await logRef.get();
   // full confirmed list = JSON text (a big map field hits Firestore's "too many index entries" limit);

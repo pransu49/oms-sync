@@ -1,0 +1,69 @@
+name: ProShip
+
+# ProShip (Prozo) courier robot for Amazon self-ship orders — started by the console (Self-Ship -> ProShip). No schedule.
+#   check  = sign in + read live rates (creates nothing)      ship   = create the shipments of a console job
+#   sync   = refresh status of live ProShip AWBs              cancel = cancel the AWBs given
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check | ship | sync | cancel'
+        required: false
+        default: 'check'
+      job_id:
+        description: 'ship: console job (proshipJobs/<id>) — set by the console'
+        required: false
+        default: ''
+      awbs:
+        description: 'cancel: AWB numbers, comma separated'
+        required: false
+        default: ''
+
+# never two runs at once (two ship jobs must not overlap)
+concurrency:
+  group: proship
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write   # to start "Push tracking to OMS Guru" after shipments are made
+
+jobs:
+  proship:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install firebase-admin
+      - id: run
+        shell: bash
+        run: set -o pipefail; node proship.js 2>&1 | tee run.log
+        env:
+          MODE: ${{ inputs.mode || 'check' }}
+          JOB_ID: ${{ inputs.job_id }}
+          AWBS: ${{ inputs.awbs }}
+          PROSHIP_USERNAME: ${{ secrets.PROSHIP_USERNAME }}
+          PROSHIP_PASSWORD: ${{ secrets.PROSHIP_PASSWORD }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+
+      # new AWBs -> OMS Guru right away (Amazon is confirmed after the next OMS sync), same as NimbusPost / Zippy
+      - name: Push tracking to OMS Guru
+        if: ${{ steps.run.outputs.shipped != '' && steps.run.outputs.shipped != '0' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run oms-push-tracking.yml --repo ${{ github.repository }} --ref main -f dry_run=false || true
+
+      - name: Report health to console
+        if: always()
+        shell: bash
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          JOB_STATUS: ${{ job.status }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node report-health.js proship "ProShip" run.log || true

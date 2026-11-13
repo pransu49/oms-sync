@@ -154,3 +154,15 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   { o orders, r revenue, u units, c cancelled, s status groups, p top-40 ASINs [units, revenue] } + `names` + `open` { toShip, late, pending }.
   1 write per run (~384 writes/day for 4 accounts). The dashboard (`/pages/aikm`, Shopify template `page.aikm.liquid`) reads only these
   4 docs for Amazon (4 reads per open); non-Amazon channels still come from OMS until it is off. Keep the doc small (top 40 products/day).
+
+- **ProShip (Prozo) courier for Amazon self-ship** (owner 13 Nov 2026): robot `proship.js`, workflow `proship.yml` (on command only, modes
+  check / ship / sync / cancel; secrets `PROSHIP_USERNAME` + `PROSHIP_PASSWORD` = an API user from ProShip -> Settings -> Manage Users).
+  Console panel `console/proship-tab.js` (Self-Ship -> "ProShip" pill): tick orders -> job doc main `proshipJobs/<id>` {ids:{orderId:weightKg}, box, pickup}
+  -> robot reads the orders FRESH from OMS chunks, skips cancelled / already-AWB (OMS, nimbusIndex, zippyIndex, proshipIndex) and creates the
+  shipments (reference = Amazon order id). AWBs live in ONE doc main `aikm_admin/proshipIndex` {data: JSON {orderId:{a,c,s,st,t}}} — same shape as
+  zippyIndex; `oms-push-tracking.js` + `amazon-confirm.js` read it (ProShip fills in only where NimbusPost / Zippy have no live AWB) and
+  `nimbus_labels.py` adds ProShip labels of the SLA date (ProShip `/api/tools/refresh/url`). Settings `aikm_admin/proshipSettings`, last
+  connection test + rates `aikm_admin/proshipCheck`. The panel is NOT loaded until the owner approves the preview: the loader block
+  (`aikmProshipJs`, end of `console/refund-tab.js`) is added then — keep it once added.
+  Firebase: +1 read per oms-push-tracking / amazon-confirm run (~190/day); per ship job ~4 reads + OMS chunks, ~3 + N/10 writes; console
+  1 read per load (proshipIndex) + ~5 when the panel is opened. Not tested against the real ProShip API yet — first live order is the test.
