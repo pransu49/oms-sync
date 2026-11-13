@@ -18,6 +18,10 @@ on:
         description: 'cancel: AWB numbers, comma separated'
         required: false
         default: ''
+      from_pin:
+        description: 'check: pickup pincode to test rates from (blank = the one saved in the console)'
+        required: false
+        default: ''
 
 # never two runs at once (two ship jobs must not overlap)
 concurrency:
@@ -45,6 +49,7 @@ jobs:
           MODE: ${{ inputs.mode || 'check' }}
           JOB_ID: ${{ inputs.job_id }}
           AWBS: ${{ inputs.awbs }}
+          FROM_PIN: ${{ inputs.from_pin }}
           # selftest runs on ProShip's sandbox with its own login; every other mode uses the live account
           PROSHIP_BASE: ${{ inputs.mode == 'selftest' && 'https://proshipdev.prozo.com' || 'https://proship.prozo.com' }}
           PROSHIP_USERNAME: ${{ inputs.mode == 'selftest' && secrets.PROSHIP_SANDBOX_USERNAME || secrets.PROSHIP_USERNAME }}
