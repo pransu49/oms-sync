@@ -381,6 +381,14 @@ async function modeSync() {
   console.log(`SYNC DONE — ${open.length} live AWBs, ${seen} found in ProShip's list, ${changed} changed.`);
 }
 
+// read-only look at the newest console ship jobs (to see why a job did not start): 6 reads
+async function modeJobs() {
+  fb();
+  const q = await db.collection('proshipJobs').orderBy('createdAt', 'desc').limit(6).get();
+  q.forEach((d) => { const j = d.data(), t = j.createdAt && j.createdAt.toDate ? j.createdAt.toDate().toISOString() : '-';
+    console.log(`JOB ${d.id}  created ${t}  status ${j.status}  orders ${j.count || Object.keys(j.ids || {}).length}  step: ${clip(j.step, 160)}`); });
+}
+
 async function modeCancel() {
   fb();
   const awbs = String(process.env.AWBS || '').split(/[,\s]+/).map((x) => x.trim()).filter(Boolean);
@@ -439,7 +447,7 @@ if (require.main === module) {
   // the sandbox is for the practice run only: its fake AWBs must never reach the real index / OMS Guru / Amazon
   const prod = /^https:\/\/proship\.prozo\.com$/i.test(BASE), sandbox = /^https:\/\/proshipdev\.prozo\.com$/i.test(BASE);
   if (MODE === 'selftest' ? !sandbox : !prod) { console.error(`FAILED: mode "${MODE}" is not allowed on ${BASE}`); process.exit(1); }
-  ({ check: modeCheck, ship: modeShip, sync: modeSync, cancel: modeCancel, selftest: modeSelftest }[MODE] || (async () => { throw new Error('Unknown MODE ' + MODE); }))()
+  ({ check: modeCheck, ship: modeShip, sync: modeSync, jobs: modeJobs, cancel: modeCancel, selftest: modeSelftest }[MODE] || (async () => { throw new Error('Unknown MODE ' + MODE); }))()
     .then(() => process.exit(process.exitCode || 0))
     .catch((e) => { console.error('FAILED:', e.message); process.exit(1); });
 }
