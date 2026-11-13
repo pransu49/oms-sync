@@ -179,7 +179,7 @@ function lotsFor(asin, L) {
   // any robot workflow whose last 2 runs failed
   try {
     const H = { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json' }, repo = process.env.GITHUB_REPOSITORY;
-    const flows = { 'spapi-sync.yml': 'Amazon robot (Praso)', 'spapi-sync-sastastore.yml': 'Amazon robot (Sasta Store)', 'oms-inventory-push.yml': 'OMS stock robot', 'sync-workflow.yml': 'OMS Guru order sync', 'nimbus-sync.yml': 'NimbusPost sync' };
+    const flows = { 'spapi-sync.yml': 'Amazon robot (Praso)', 'spapi-sync-sastastore.yml': 'Amazon robot (Sasta Store)', 'oms-inventory-push.yml': 'OMS stock robot', 'sync-workflow.yml': 'OMS Guru order sync', 'proship.yml': 'ProShip robot' };
     for (const [f, name] of Object.entries(flows)) {
       const r = await (await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${f}/runs?branch=main&status=completed&per_page=6`, { headers: H })).json();
       const runs = (r.workflow_runs || []).filter((x) => x.conclusion !== 'cancelled' && x.conclusion !== 'skipped');

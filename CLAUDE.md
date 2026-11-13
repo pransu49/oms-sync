@@ -201,3 +201,9 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Practice run: `proship.yml` mode `selftest` = ProShip's SANDBOX only (proshipdev.prozo.com, secrets `PROSHIP_SANDBOX_USERNAME` + `PROSHIP_SANDBOX_PASSWORD`): one dummy
   order -> label -> track -> cancel, prints ProShip's real answers, touches no Firebase. Never send real buyer data to the sandbox (shared test login);
   every other mode is refused on the sandbox so fake AWBs can't reach proshipIndex / OMS / Amazon.
+
+- **NimbusPost + Zippy switched OFF** (owner 13 Nov 2026 — ProShip ships everything): `nimbus-sync.yml` runs only by hand (no schedule / workflow_run);
+  `oms-push-tracking.yml` now follows ProShip's scheduled status refresh (workflow_run on 'ProShip', gate = upstream event `schedule`);
+  NimbusPost / Zippy pills, panels and the "Upload NimbusPost export" button are hidden by CSS in `console/proship-tab.js` (`aikm-ship-off-css`).
+  Their code is still loaded (weight settings are shared) and `nimbus-labels.yml` stays — it is the label robot for ProShip too.
+  Owner's choice: orders ProShip can't serve (pincode not served) and non-Amazon orders are shipped by hand outside the console.

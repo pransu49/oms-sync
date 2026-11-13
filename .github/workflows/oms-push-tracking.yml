@@ -2,8 +2,9 @@ name: Push NimbusPost tracking to OMS Guru
 
 on:
   # runs by itself every time the NimbusPost sync finishes
+  # after ProShip's 30-min status refresh (NimbusPost sync switched off 13 Nov 2026). Ship jobs start it by themselves.
   workflow_run:
-    workflows: ['NimbusPost Sync']
+    workflows: ['ProShip']
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -21,8 +22,7 @@ permissions:
   actions: read
 
 jobs:
-  # NimbusPost Sync now fires after every OMS run but only really syncs every ~30 min —
-  # push only when its sync job actually ran (not when it was skipped)
+  # ProShip finishes many kinds of runs — push only after its scheduled status refresh (ship jobs start this workflow themselves)
   gate:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
@@ -35,9 +35,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ github.event_name }}" != "workflow_run" ]; then echo "go=1" >> $GITHUB_OUTPUT; exit 0; fi
-          c=$(gh api repos/${{ github.repository }}/actions/runs/${{ github.event.workflow_run.id }}/jobs --jq '.jobs[] | select(.name=="sync") | .conclusion')
-          echo "NimbusPost sync job: $c"
-          if [ "$c" = "success" ]; then echo "go=1" >> $GITHUB_OUTPUT; else echo "go=0" >> $GITHUB_OUTPUT; fi
+          ev="${{ github.event.workflow_run.event }}"
+          echo "ProShip run started by: $ev"
+          if [ "$ev" = "schedule" ]; then echo "go=1" >> $GITHUB_OUTPUT; else echo "go=0" >> $GITHUB_OUTPUT; fi
 
   push:
     needs: gate
