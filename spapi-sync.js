@@ -2495,14 +2495,39 @@ const STOCK_GUARD_MAX_ZERO = 100;          // most listings set to 0 in one run 
 const STOCK_GUARD_BROKEN_SHARE = 0.6;      // if 60%+ of LOTS-linked in-stock listings would go to 0, LOTS data looks broken - stop
 function normalizeName(e) { return String(e).toLowerCase().replace(/[|/,_\-()]/g, ' ').replace(/[^a-z0-9. ]/g, ' ').replace(/\s+/g, ' ').trim(); }
 
+// LOTS-62 stock counts for this account too (owner 13 Nov 2026: "for Sasta Store, if LOTS-62 has stock it should not go out of
+// stock"). Workflow env LOTS62_STOCK=on. The LOTS-62 price list (aikm_admin/lots62Catalog, daily sync) is read only when its
+// savedAt changed (saved copy in .cache/lots62-catalog.json, kept by the workflow) — ~1 read per run, 19 when it changed.
+const LOTS62_STOCK = String(process.env.LOTS62_STOCK || 'off').toLowerCase() === 'on';
+const LOTS62_CACHE_FILE = '.cache/lots62-catalog.json';
+async function loadLots62() {
+  const fs = require('fs'), A = dbMain.collection('aikm_admin');
+  const parent = await A.doc('lots62Catalog').get();
+  const stamp = parent.exists ? JSON.stringify(parent.get('savedAt') ?? null) : null;
+  let cached = null; try { cached = JSON.parse(fs.readFileSync(LOTS62_CACHE_FILE, 'utf8')); } catch (e) {}
+  if (cached && stamp && stamp !== 'null' && cached.stamp === stamp && cached.qty) { console.log(`LOTS-62: unchanged - saved copy used (${Object.keys(cached.qty).length} products).`); return cached.qty; }
+  const chunks = await A.doc('lots62Catalog').collection('chunks').get(), qty = {};
+  chunks.docs.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code != null) qty[String(p.code)] = parseFloat(p.qty); }));
+  console.log(`LOTS-62: read fresh (${chunks.size} document(s), ${Object.keys(qty).length} products).`);
+  try { fs.mkdirSync('.cache', { recursive: true }); fs.writeFileSync(LOTS62_CACHE_FILE, JSON.stringify({ stamp, qty })); } catch (e) {}
+  return qty;
+}
 async function loadLotsForGuard() {
-  const [lotsSnap, mapSnap, asinDoc] = await Promise.all([
-    dbMain.collection('aikm_admin').doc('lotsCatalog').collection('chunks').get(),
-    dbMain.collection('aikm_admin').doc('masterMapping').collection('chunks').get(),
-    Promise.resolve(null),
-  ]);
-  const lotsByCode = {};
-  lotsSnap.forEach((d) => (d.data().products || []).forEach((p) => { if (p && p.code != null) lotsByCode[String(p.code)] = p; }));
+  // quota (13 Nov 2026): the LOTS catalogue comes from the cached copy (loadCostData) instead of ~25 fresh reads every run
+  const [cd, mapSnap] = await Promise.all([loadCostData(), dbMain.collection('aikm_admin').doc('masterMapping').collection('chunks').get()]);
+  let lotsByCode = cd.lots;
+  if (LOTS62_STOCK) {
+    try {
+      const q62 = await loadLots62(); let raised = 0;
+      lotsByCode = {};
+      Object.entries(cd.lots).forEach(([code, p]) => {
+        const gn = parseFloat(p.qty), x = q62[code];
+        if (Number.isFinite(x) && x > (Number.isFinite(gn) ? gn : -1)) { lotsByCode[code] = { ...p, qty: x, qtyGN: Number.isFinite(gn) ? gn : null, qty62: x, from62: true }; raised++; }
+        else lotsByCode[code] = p;
+      });
+      console.log(`LOTS-62 stock rule on: ${raised} products use LOTS-62 stock (more than LOTS-GN).`);
+    } catch (e) { console.warn('LOTS-62 stock not read - LOTS-GN only this run:', e.message || e); lotsByCode = cd.lots; }
+  }
   const nameMap = {};
   mapSnap.forEach((d) => Object.assign(nameMap, d.data().map || {}));
   const asinMap = (await loadCostData()).map;   // main + overflow mapping records (same as the price robot)
@@ -2607,7 +2632,7 @@ async function runStockGuard(sellerId) {
     try {
       await setAmazonQuantity(sellerId, z.item.sku, 0);
       snapPatch('inventory', docId, { quantity: 0, lastStockPush: { status: 'applied', at: Date.now(), qty: 0,
-        reason: `LOTS stock ${z.lotsQty} is below ${OOS_LOTS_BELOW} - marked out of stock (Amazon had ${z.amzQty}). OMS Guru restocks it.` } });
+        reason: `LOTS stock ${z.lotsQty}${LOTS62_STOCK ? ' (LOTS-GN and LOTS-62)' : ''} is below ${OOS_LOTS_BELOW} - marked out of stock (Amazon had ${z.amzQty}). OMS Guru restocks it.` } });
       await db.collection('spapiInventory').doc(docId).set({ quantity: 0 }, { merge: true });
       zeroed++;
     } catch (e) {

@@ -44,6 +44,14 @@ jobs:
           key: lots-catalog-${{ github.run_id }}
           restore-keys: lots-catalog-
 
+      - name: Restore saved LOTS-62 stock list
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/lots62-catalog.json
+          key: lots62-catalog-${{ github.run_id }}
+          restore-keys: lots62-catalog-
+
       - name: Run SP-API sync
         env:
           # Same Amazon developer app as Praso - only the refresh token and seller ID differ per account.
@@ -57,6 +65,8 @@ jobs:
           # Quick sync on the 15-minute schedules, full sync otherwise (incl. manual / code updates).
           SYNC_MODE: ${{ (github.event_name == 'workflow_dispatch' && inputs.mode) || (github.event_name == 'schedule' && github.event.schedule != '40 */2 * * *' && 'fast') || 'full' }}
           ACCOUNT_LABEL: sastastore
+          # owner 13 Nov 2026: Sasta Store also sells LOTS-62 stock - a listing is not marked out of stock while LOTS-62 has 10+.
+          LOTS62_STOCK: 'on'
         shell: bash
         run: node spapi-sync.js 2>&1 | tee run.log
 
@@ -67,6 +77,14 @@ jobs:
         with:
           path: .cache/lots-catalog.json
           key: lots-catalog-${{ hashFiles('.cache/lots-catalog.json') }}
+
+      - name: Keep LOTS-62 stock list for the next run
+        if: always() && hashFiles('.cache/lots62-catalog.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/lots62-catalog.json
+          key: lots62-catalog-${{ hashFiles('.cache/lots62-catalog.json') }}
 
       - name: Report sync health to console
         if: always()

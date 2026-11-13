@@ -102,6 +102,10 @@
   what the buyer paid incl. shipping. "Fix mapping" = page's openSpapiMatchModal(asin); "Looks right" = main `aikm_admin/costCheckOk.ok["acct|asin"]`
   (stamp = cost|issues, comes back if the cost changes). 1 read per page open.
 - Orders cost (`order-fees.js`): old/relisted SKUs (not in inventory) use the order item's ASIN mapping first (packs, combos, vendor).
+- **LOTS-62 stock for Sasta Store** (owner 13 Nov 2026): `spapi-sync-sastastore.yml` sets `LOTS62_STOCK=on` -> the out-of-stock rule and its restock use
+  the HIGHER of LOTS-GN and LOTS-62 stock (main `aikm_admin/lots62Catalog`, read only when its savedAt changed; cached in `.cache/lots62-catalog.json`).
+  Other accounts stay LOTS-GN only. `loadLotsForGuard` now uses the cached LOTS catalogue (was ~25 fresh reads every run).
+  OMS Guru's stock push is shared by all accounts and still uses LOTS-GN only.
 - **Quota savers in `spapi-sync.js`** (owner 12 Nov 2026, "ensure all syncs work under free limits"):
   old per-item collections `spapiInventory` / `spapiOrders` / `spapiCompetitivePricing` are NOT written any more (nothing reads them —
   page + robots use the snapshot; `SPAPI_LEGACY_MIRROR=on` brings the writes back). Sent-price checks: max 150 per run, check counts in ONE doc
