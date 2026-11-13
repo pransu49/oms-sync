@@ -178,6 +178,15 @@
     } catch (e) { toast("⚠ Not saved: " + (e.message || e), true); }
   }
 
+  function hintFor(a) {
+    if (/length_width|dimensions/.test(a)) return "L x W x H in cm, e.g. 10 x 8 x 2";
+    if (/contact|address|manufacturer|packer|importer/.test(a)) return "Name, full address, phone (saved for next products)";
+    if (/weight/.test(a)) return "Weight in grams, e.g. 250";
+    if (/color|colour/.test(a)) return "e.g. Multicolor, Green";
+    if (/size/.test(a)) return "e.g. Standard, 3 x 3 inch, 200 ml";
+    if (/material/.test(a)) return "e.g. Plastic, Steel";
+    return "Value for " + a.replace(/_/g, " ");
+  }
   var ST = { pending: "Waiting for robot", checked: "Amazon OK — ready", submitted: "Sent · Amazon creating", live: "Live on Amazon", needs_info: "Needs details", failed: "Failed", exists: "Already on Amazon" };
   function drawReq() {
     var m = ov && ov.querySelector(".nl-main"); if (!m) return;
@@ -193,7 +202,7 @@
         (r.note ? '<div class="m">' + esc(r.note) + "</div>" : "") +
         (r.status === "needs_info" && iss.length ? '<div class="nl-iss">' + iss.map(function (x, k) {
           var a = String(x.attr || "").split(",")[0].trim();
-          return '<div class="nl-is"><div>' + (a ? "<b>" + esc(a) + "</b> — " : "") + esc(x.msg || "") + "</div>" + (a ? '<input data-a="' + esc(a) + '" placeholder="Value for ' + esc(a) + '" value="' + esc((r.extra || {})[a] || "") + '">' : "<span></span>") + "</div>";
+          return '<div class="nl-is"><div>' + (a ? "<b>" + esc(a) + "</b> — " : "") + esc(x.msg || "") + "</div>" + (a ? '<input data-a="' + esc(a) + '" placeholder="' + esc(hintFor(a)) + '" value="' + esc((r.extra || {})[a] || "") + '">' : "<span></span>") + "</div>";
         }).join("") + "</div>" : "") +
         '<div class="nl-acts">' +
         (r.status === "needs_info" ? '<button type="button" class="nl-b pri" data-act="retry">Save details & check again</button>' : "") +

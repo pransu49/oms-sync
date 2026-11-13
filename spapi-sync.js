@@ -2319,7 +2319,33 @@ async function applyPendingNewListings(sellerId) {
       if (r.image) attributes.main_product_image_locator = [{ media_location: String(r.image), marketplace_id: MARKETPLACE_ID }];
       if (taxCode) attributes.product_tax_code = NL_VAL(taxCode);
       if (r.hsn) attributes.hsn_code = NL_VAL(String(r.hsn).replace(/\D/g, ''));
-      Object.entries(r.extra || {}).forEach(([k, v]) => { if (k && v !== '' && v != null) attributes[k] = NL_TEXT(v); });
+      // details Amazon asks for on most product types - filled automatically (owner types only what the robot cannot know)
+      const grams = Math.round((Number(r.weightKg) || 0.25) * 1000);
+      Object.assign(attributes, {
+        number_of_items: NL_VAL(1), unit_count: [{ value: 1, type: { value: 'count', language_tag: 'en_IN' }, marketplace_id: MARKETPLACE_ID }],
+        part_number: NL_VAL(sku), model_number: NL_VAL(sku), model_name: NL_TEXT(title.slice(0, 60)),
+        supplier_declared_dg_hz_regulation: NL_VAL('not_applicable'),
+        item_type_name: NL_TEXT(productType.toLowerCase().replace(/_/g, ' ')),
+        item_weight: [{ value: grams, unit: 'grams', marketplace_id: MARKETPLACE_ID }],
+        item_package_weight: [{ value: grams, unit: 'grams', marketplace_id: MARKETPLACE_ID }],
+      });
+      if (r.hsn) attributes.external_product_information = [{ entity: 'HSN Code', value: String(r.hsn).replace(/\D/g, ''), marketplace_id: MARKETPLACE_ID }];
+      // saved answers of this account (manufacturer / packer address, …) + this request's answers
+      let defs = {}; try { const dd = await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_nlDefaults`).get(); defs = (dd.exists && dd.data().extra) || {}; } catch (e) {}
+      const extra = { ...defs, ...(r.extra || {}) };
+      const dims = (v) => { const n = String(v).match(/[\d.]+/g) || []; return n.length >= 3 ? n.slice(0, 3).map(Number) : null; };
+      Object.entries(extra).forEach(([k, v]) => {
+        if (!k || v === '' || v == null) return;
+        const t = String(v).trim();
+        if (/^[\[{]/.test(t)) { try { const j = JSON.parse(t); attributes[k] = Array.isArray(j) ? j : [{ ...j, marketplace_id: MARKETPLACE_ID }]; return; } catch (e) {} }
+        if (/length_width|dimensions/.test(k) && dims(t)) { const [l, w, h] = dims(t); attributes[k] = [{ length: { value: l, unit: 'centimeters' }, width: { value: w, unit: 'centimeters' }, [/thickness/.test(k) ? 'thickness' : 'height']: { value: h, unit: 'centimeters' }, marketplace_id: MARKETPLACE_ID }]; return; }
+        if (/weight/.test(k) && /^[\d.]+$/.test(t)) { attributes[k] = [{ value: Number(t), unit: 'grams', marketplace_id: MARKETPLACE_ID }]; return; }
+        attributes[k] = NL_TEXT(t);
+      });
+      if (r.extra && Object.keys(r.extra).length) {   // remember contact / address answers for this account's next products
+        const keep = {}; Object.entries(r.extra).forEach(([k, v]) => { if (/contact|address|manufacturer|packer|importer/.test(k) && v) keep[k] = v; });
+        if (Object.keys(keep).length) await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_nlDefaults`).set({ extra: keep, at: Date.now() }, { merge: true }).catch(() => {});
+      }
       const put = (mode) => spClient.callAPI({ operation: 'putListingsItem', endpoint: 'listingsItems', options: { version: '2021-08-01' }, path: { sellerId, sku },
         query: Object.assign({ marketplaceIds: [MARKETPLACE_ID], issueLocale: 'en_US' }, mode ? { mode } : {}), body: { productType, requirements: 'LISTING', attributes } });
       // drop attributes this product type does not know, then check again
