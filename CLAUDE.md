@@ -102,8 +102,9 @@
   what the buyer paid incl. shipping. "Fix mapping" = page's openSpapiMatchModal(asin); "Looks right" = main `aikm_admin/costCheckOk.ok["acct|asin"]`
   (stamp = cost|issues, comes back if the cost changes). 1 read per page open.
 - **Loss-order rule bar** (`console/loss-bulk.js`, owner 13 Nov 2026): ONE small red bar above #cfTable (Amazon confirmation), #psTable (ProShip),
-  #nbTable (NimbusPost), #zpTable (Zippy): "Ship loss orders with loss ABOVE ₹[40]" — loss orders above the amount are ticked automatically,
-  at/below it unticked. Amount always editable, saved per computer (localStorage `aikm_loss_above`, default 40, empty = off). Each order is set
+  #nbTable (NimbusPost), #zpTable (Zippy): "Ship them only when profit is above ₹[40]". The "LOSS · ₹x" tag shows PROFIT (isLossEntry also
+  flags low-profit orders): "₹42" = +42, "₹-43" = real loss. Flagged orders with profit ABOVE the amount are ticked, the rest (incl. every minus)
+  unticked (owner 13 Nov 2026 — a first version ignored the minus sign and ticked real losses). Amount always editable, saved per computer (localStorage `aikm_loss_above`, default 40, empty = off). Each order is set
   once per amount (manual tick/untick stays; changing the amount re-applies). Owner asked to REMOVE the extra chips / product-name / account /
   untick buttons — keep it to this one rule. Reads rows from the DOM (tr.nb-row-loss, "LOSS · ₹x") and clicks the table's own checkboxes, so each
   panel's own loss confirmation still runs. FAST: the panel's `<x>Kpis` box is renamed while ticking so each per-tick redraw stops at its first line,

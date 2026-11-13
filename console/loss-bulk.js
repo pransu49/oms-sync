@@ -33,10 +33,11 @@
     table.querySelectorAll("tbody tr.nb-row-loss").forEach(function (tr) {
       var cb = tr.querySelector('input[type="checkbox"][data-i]');
       if (!cb || cb.disabled) return;
-      var m = (tr.textContent || "").match(/LOSS\s*[\u00b7.:-]?\s*-?\s*\u20b9?\s*-?\s*([\d,]+(?:\.\d+)?)/i);
+      // the tag shows PROFIT: "LOSS \u00b7 \u20b942" = +42 (low profit), "LOSS \u00b7 \u20b9-43" = a real loss of 43
+      var m = (tr.textContent || "").match(/LOSS\s*\u00b7?\s*(-?)\s*\u20b9\s*(-?)\s*([\d,]+(?:\.\d+)?)/i);
       var x = tr.querySelector(".cx-awb");
       out.push({ i: cb.getAttribute("data-i"), cls: cb.className.split(" ")[0], on: cb.checked,
-        loss: m ? parseFloat(m[1].replace(/,/g, "")) : 0, id: x ? x.textContent.trim() : "i" + cb.getAttribute("data-i") });
+        profit: m ? (m[1] || m[2] ? -1 : 1) * parseFloat(m[3].replace(/,/g, "")) : -Infinity, id: x ? x.textContent.trim() : "i" + cb.getAttribute("data-i") });
     });
     return out;
   }
@@ -64,7 +65,7 @@
     var max = getMax(), list = [];
     if (max !== "") rowsOf(table).forEach(function (r) {
       var k = id + "|" + r.id; if (done[k] === max) return; done[k] = max; // set once per amount
-      var want = r.loss > +max;
+      var want = r.profit > +max; // minus (real loss) is never above the amount -> never ticked
       if (r.on !== want) list.push({ row: r, on: want });
     });
     setBoxes(table, list);
@@ -80,8 +81,8 @@
       if (!table.querySelector("tbody tr.nb-row-loss")) return;
       var anchor = table.closest(".table-scroll") || table;
       bar = document.createElement("div"); bar.className = "lb-bar no-print";
-      bar.innerHTML = '<b>Loss orders</b><span>Ship loss orders with loss above \u20b9</span>' +
-        '<input type="number" class="lb-max" min="0" step="1" title="Loss orders above this amount are ticked to ship. Empty = tick by hand.">' +
+      bar.innerHTML = '<b>Loss orders</b><span>Ship them only when profit is above \u20b9</span>' +
+        '<input type="number" class="lb-max" min="0" step="1" title="Flagged orders with profit above this amount are ticked to ship. Minus amounts (real loss) are never ticked. Empty = tick by hand.">' +
         '<span class="lb-n"></span>';
       anchor.parentNode.insertBefore(bar, anchor);
       var inp = bar.querySelector(".lb-max"), t;
@@ -102,7 +103,7 @@
     var rows = rowsOf(table);
     bar.style.display = rows.length ? "" : "none";
     var on = rows.filter(function (r) { return r.on; }).length;
-    setText(bar.querySelector(".lb-n"), rows.length + " loss orders \u00b7 " + on + " ticked to ship");
+    setText(bar.querySelector(".lb-n"), rows.length + " flagged \u00b7 " + on + " ticked to ship \u00b7 " + rows.filter(function (r) { return r.profit < 0; }).length + " real loss (minus)");
   }
 
   var pending = false;
