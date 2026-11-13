@@ -106,7 +106,8 @@
   flags low-profit orders): "₹42" = +42, "₹-43" = real loss. Flagged orders with profit ABOVE the amount are ticked, the rest (incl. every minus)
   unticked (owner 13 Nov 2026 — a first version ignored the minus sign and ticked real losses). Amount always editable, saved per computer (localStorage `aikm_loss_above`, default 40, empty = off). Each order is set
   once per amount (manual tick/untick stays; changing the amount re-applies). Owner asked to REMOVE the extra chips / product-name / account /
-  untick buttons — keep it to this one rule. Reads rows from the DOM (tr.nb-row-loss, "LOSS · ₹x") and clicks the table's own checkboxes, so each
+  untick buttons — keep it to this one rule. Then (owner 13 Nov 2026, later) asked for a second row back: "Product [name] · Tick N · Untick N"
+  (ALL rows whose items text has every typed word, loss or not) + counts "Ship N · Not shipped N" (ticked vs unticked enabled rows). Reads rows from the DOM (tr.nb-row-loss, "LOSS · ₹x") and clicks the table's own checkboxes, so each
   panel's own loss confirmation still runs. FAST: the panel's `<x>Kpis` box is renamed while ticking so each per-tick redraw stops at its first line,
   then ONE normal redraw (if a panel's render() stops starting with its Kpis box, fix the KPI map). Only set text when it changed (body
   MutationObserver would loop). 0 Firebase. Loaded by the block at the end of `console/proship-tab.js` (`aikmLossBulkJs`) — keep it.

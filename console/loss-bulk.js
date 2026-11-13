@@ -24,6 +24,13 @@
     ".lb-bar b{color:var(--x-red,#c0392b);}" +
     ".lb-bar input.lb-max{width:84px !important;height:32px !important;min-height:32px !important;padding:0 10px !important;border-radius:8px !important;" +
     "font-size:13px !important;font-weight:700 !important;box-sizing:border-box;}" +
+    ".lb-bar .lb-row2{flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;}" +
+    ".lb-bar .lb-row2 b{color:var(--x-text,#0F1E35);}" +
+    ".lb-bar input.lb-q{width:280px !important;height:32px !important;min-height:32px !important;padding:0 10px !important;border-radius:8px !important;font-size:13px !important;box-sizing:border-box;}" +
+    ".lb-bar button.lb-tick,.lb-bar button.lb-untick{all:unset;cursor:pointer;padding:7px 14px;border-radius:8px;font-weight:700;font-size:12.5px;white-space:nowrap;}" +
+    ".lb-bar button.lb-tick{background:#D4AF37;color:#1A1405;}.lb-bar button.lb-untick{background:var(--x-surface,#fff);border:1px solid var(--x-line,#e7e2d3);}" +
+    ".lb-bar .lb-ship{margin-left:auto;white-space:nowrap;font-weight:600;}.lb-bar .lb-ok{color:var(--x-green,#1f8a4c);}.lb-bar .lb-no{color:var(--x-red,#c0392b);}" +
+    ".lb-bar .lb-mt{color:var(--x-text-2,#3b4659);font-weight:500;}" +
     ".lb-bar .lb-n{color:var(--x-text-2,#3b4659);margin-left:auto;white-space:nowrap;}";
   document.head.appendChild(css);
 
@@ -41,6 +48,19 @@
     });
     return out;
   }
+
+  /* ---- every order row (for the product search + the ship / not-shipped counts) ---- */
+  function allRows(table) {
+    var out = [];
+    table.querySelectorAll('tbody input[type="checkbox"][data-i]').forEach(function (cb) {
+      if (cb.disabled) return;
+      var tr = cb.closest("tr"), it = tr && tr.querySelector(".nb-items, .ps-items, .zp-items");
+      out.push({ i: cb.getAttribute("data-i"), cls: cb.className.split(" ")[0], on: cb.checked,
+        items: ((it || tr || {}).textContent || "").toLowerCase() });
+    });
+    return out;
+  }
+  function hit(r, q) { var w = q.toLowerCase().split(/\s+/).filter(Boolean); return w.length && w.every(function (x) { return r.items.indexOf(x) >= 0; }); }
 
   /* ---- set checkboxes fast ---- */
   var muting = false;
@@ -78,13 +98,22 @@
     var table = document.getElementById(id); if (!table) return;
     var bar = barOf(table);
     if (!bar) {
-      if (!table.querySelector("tbody tr.nb-row-loss")) return;
+      if (!table.querySelector('tbody input[type="checkbox"][data-i]')) return;
       var anchor = table.closest(".table-scroll") || table;
       bar = document.createElement("div"); bar.className = "lb-bar no-print";
-      bar.innerHTML = '<b>Loss orders</b><span>Ship them only when profit is above \u20b9</span>' +
-        '<input type="number" class="lb-max" min="0" step="1" title="Flagged orders with profit above this amount are ticked to ship. Minus amounts (real loss) are never ticked. Empty = tick by hand.">' +
-        '<span class="lb-n"></span>';
+      bar.innerHTML = '<b class="lb-loss">Loss orders</b><span class="lb-loss">Ship them only when profit is above \u20b9</span>' +
+        '<input type="number" class="lb-max lb-loss" min="0" step="1" title="Flagged orders with profit above this amount are ticked to ship. Minus amounts (real loss) are never ticked. Empty = tick by hand.">' +
+        '<span class="lb-n lb-loss"></span>' +
+        '<div class="lb-row2"><b>Product</b><input type="text" class="lb-q" placeholder="Product name, e.g. exo dishwash" autocomplete="off">' +
+        '<button type="button" class="lb-tick">Tick</button><button type="button" class="lb-untick">Untick</button>' +
+        '<span class="lb-ship"></span></div>';
       anchor.parentNode.insertBefore(bar, anchor);
+      var q = bar.querySelector(".lb-q");
+      q.addEventListener("input", function () { paint(id); });
+      function bulk(on) { var v = q.value.trim(); if (!v) { q.focus(); return; }
+        setBoxes(table, allRows(table).filter(function (r) { return r.on !== on && hit(r, v); }).map(function (r) { return { row: r, on: on }; })); paint(id); }
+      bar.querySelector(".lb-tick").addEventListener("click", function () { bulk(true); });
+      bar.querySelector(".lb-untick").addEventListener("click", function () { bulk(false); });
       var inp = bar.querySelector(".lb-max"), t;
       inp.value = getMax();
       inp.addEventListener("input", function () {
@@ -100,9 +129,17 @@
   }
   function paint(id) {
     var table = document.getElementById(id), bar = table && barOf(table); if (!bar) return;
-    var rows = rowsOf(table);
-    bar.style.display = rows.length ? "" : "none";
-    var on = rows.filter(function (r) { return r.on; }).length;
+    var rows = rowsOf(table), all = allRows(table);
+    bar.style.display = all.length ? "" : "none";
+    bar.querySelectorAll(".lb-loss").forEach(function (x) { x.style.display = rows.length ? "" : "none"; });
+    var on = rows.filter(function (r) { return r.on; }).length, ship = all.filter(function (r) { return r.on; }).length;
+    var q = bar.querySelector(".lb-q").value.trim(), m = q ? all.filter(function (r) { return hit(r, q); }) : [];
+    var mOn = m.filter(function (r) { return r.on; }).length;
+    setText(bar.querySelector(".lb-tick"), q ? "Tick " + (m.length - mOn) : "Tick");
+    setText(bar.querySelector(".lb-untick"), q ? "Untick " + mOn : "Untick");
+    var html = (q ? '<span class="lb-mt">' + m.length + " match \u00b7 </span>" : "") +
+      '<span class="lb-ok">Ship ' + ship + '</span> \u00b7 <span class="lb-no">Not shipped ' + (all.length - ship) + "</span>";
+    var sh = bar.querySelector(".lb-ship"); if (sh.innerHTML !== html) sh.innerHTML = html;
     setText(bar.querySelector(".lb-n"), rows.length + " flagged \u00b7 " + on + " ticked to ship \u00b7 " + rows.filter(function (r) { return r.profit < 0; }).length + " real loss (minus)");
   }
 
