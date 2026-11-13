@@ -77,6 +77,8 @@
   `amazon-name-search.js` (keep it). "Duplicate ASINs" tile shows listings grouped by ASIN with one KEEP (most sold 30d, then stock, then oldest);
   ticked SKUs are queued in main `spapiListingDeletions` (`<acct>_<sku with / as %2F>`); `applyPendingListingDeletions` deletes max 200 per run.
   Listing date = `openDate` from the listings report, saved in the snapshot only.
+  "All 4 accounts" switch (owner 13 Nov 2026): same ASIN in stock on 2+ of our accounts, one KEEP (Buy Box holder via `ourSellers`, else lowest
+  price); nothing pre-ticked ("Tick all except KEEP" button); queued per account (source `duplicate-cross-account`). ~25 reads per open, cached 5 min.
 
 - **Quota savers in `spapi-sync.js`** (owner 12 Nov 2026, "ensure all syncs work under free limits"):
   old per-item collections `spapiInventory` / `spapiOrders` / `spapiCompetitivePricing` are NOT written any more (nothing reads them —
