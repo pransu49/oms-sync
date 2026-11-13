@@ -209,6 +209,51 @@ async function writeSnapshot() {
   console.log(`Snapshot written: ${JSON.stringify(counts)} in ${JSON.stringify(chunks)} chunk(s)`);
 }
 
+// ── AIKM dashboard summary (owner 13 Nov 2026: dashboard shows Amazon orders from SP-API, not OMS Guru) ──
+// ONE small doc per account, spapiSnapshots/<account>_dash, rewritten each run (1 write/run, ~384 writes/day for 4 accounts).
+// The dashboard (/pages/aikm) reads only these 4 docs (4 reads per open) instead of the big order chunks.
+//   days.<YYYY-MM-DD IST> = { o: orders, r: revenue (₹, cancelled excluded), u: units, c: cancelled, s: {status group: n}, p: {ASIN: [units, revenue]} }
+//   names.<ASIN> = product title · open = { toShip, late, pending } for self-ship / Easy Ship orders still to be shipped
+async function writeDashSummary() {
+  const IST = 5.5 * 3600e3, now = Date.now(), dk = (ms) => new Date(ms + IST).toISOString().slice(0, 10);
+  const from = dk(now - 31 * 864e5), days = {}, names = {}, open = { toShip: 0, late: 0, pending: 0 };
+  const grp = (st) => /cancel/i.test(st) ? 'Cancelled' : /^shipped$/i.test(st) ? 'Shipped' : /unshipped|partially/i.test(st) ? 'To ship'
+    : /pending|invoiceunconfirmed/i.test(st) ? 'Pending' : 'Other';
+  for (const o of Object.values(SNAP.orders)) {
+    const t = Date.parse(o.purchaseDate); if (isNaN(t)) continue;
+    const st = String(o.status || ''), g = o.isCanceled ? 'Cancelled' : grp(st);
+    if (g === 'To ship' && o.fulfillmentChannel !== 'AFN') { open.toShip++; const ls = Date.parse(o.latestShipDate); if (!isNaN(ls) && ls < now) open.late++; }
+    if (g === 'Pending') open.pending++;
+    const k = dk(t); if (k < from) continue;
+    const d = days[k] || (days[k] = { o: 0, r: 0, u: 0, c: 0, s: {}, p: {} });
+    d.s[g] = (d.s[g] || 0) + 1;
+    if (g === 'Cancelled') { d.c++; continue; }
+    const items = Array.isArray(o.items) ? o.items : [];
+    const itemSum = items.reduce((a, it) => a + (Number(it.price) || 0), 0);
+    const rev = parseFloat(o.total) || itemSum;
+    d.o++; d.r += rev;
+    items.forEach((it) => {
+      const key = it.asin || it.sku || it.title; if (!key) return;
+      const q = Number(it.qty) || 1; d.u += q;
+      const pr = d.p[key] || (d.p[key] = [0, 0]); pr[0] += q; pr[1] += Number(it.price) || (itemSum ? 0 : rev / items.length);
+      if (!names[key] && it.title) names[key] = String(it.title).slice(0, 90);
+    });
+  }
+  Object.values(days).forEach((d) => {   // keep the doc small: top 40 products per day
+    d.r = Math.round(d.r);
+    const keep = Object.entries(d.p).sort((a, b) => b[1][0] - a[1][0]).slice(0, 40);
+    d.p = {}; keep.forEach(([k, v]) => { d.p[k] = [v[0], Math.round(v[1])]; });
+  });
+  const used = new Set(); Object.values(days).forEach((d) => Object.keys(d.p).forEach((k) => used.add(k)));
+  Object.keys(names).forEach((k) => { if (!used.has(k)) delete names[k]; });
+  await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_dash`).set({
+    account: ACCOUNT_LABEL, name: process.env.ACCOUNT_NAME || ACCOUNT_LABEL, at: now,
+    ordersSyncedAt: ordersSyncedOk ? RUN_STARTED : ((prevSnapMeta && prevSnapMeta.ordersSyncedAt) || null),
+    days, names, open,
+  });
+  console.log(`Dashboard summary written: ${Object.keys(days).length} days, ${used.size} products, open ${JSON.stringify(open)}`);
+}
+
 async function loadProductTypeCache() {
   await loadSnapshot();
   Object.values(SNAP.inventory).forEach((data) => {
@@ -2847,6 +2892,7 @@ async function runSync() {
 
   console.log('Step 3b: saving compact snapshot for the Amazon page...');
   await writeSnapshot();
+  await writeDashSummary().catch((e) => console.warn('Dashboard summary skipped (sync continues):', e.message || e));
   await publishDeliverByIndex().catch((e) => console.warn('Deliver-by index skipped (sync continues):', e.message || e));
   await publishListingIndex().catch((e) => console.warn('Listing index skipped (sync continues):', e.message || e));
 

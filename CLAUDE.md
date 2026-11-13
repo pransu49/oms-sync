@@ -148,3 +148,9 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   newest "Save my final cart"; older re-sent copies ignored; a batch already on an earlier bill = duplicate-bill alert), compares
   (barcode via lots-price-sync's `lots-item-master.json`, then name), and sends Telegram text + PDF. State: ONE doc `aikm_admin/lotsBillCheck`
   (1 read per run; ~40 reads + 1 write per new bill). Read-only on LOTS — never touches the cart.
+
+- **AIKM dashboard summary** (owner 13 Nov 2026 — OMS Guru will be switched off): every SP-API sync run writes ONE small doc
+  `spapiSnapshots/<acct>_dash` (`writeDashSummary()` in `spapi-sync.js`, right after `writeSnapshot`): last 31 days per IST day
+  { o orders, r revenue, u units, c cancelled, s status groups, p top-40 ASINs [units, revenue] } + `names` + `open` { toShip, late, pending }.
+  1 write per run (~384 writes/day for 4 accounts). The dashboard (`/pages/aikm`, Shopify template `page.aikm.liquid`) reads only these
+  4 docs for Amazon (4 reads per open); non-Amazon channels still come from OMS until it is off. Keep the doc small (top 40 products/day).
