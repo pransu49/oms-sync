@@ -166,7 +166,9 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   (`aikmProshipJs`, end of `console/refund-tab.js`) is added then — keep it once added.
   Firebase: +1 read per oms-push-tracking / amazon-confirm run (~190/day); per ship job ~4 reads + OMS chunks, ~3 + N/10 writes; console
   1 read per load (proshipIndex) + ~5 when the panel is opened. First real `check` run (13 Nov 2026): `/api/auth/signin` answered 200 "MFA required. OTP sent to registered email" — the user in the secrets has MFA on,
-  so no robot login until ProShip switches MFA off for the API user (or the owner adds a user without it). Create / label / track calls are still untested.
+  so no robot login until ProShip switches MFA off for the API user (or the owner adds a user without it). Sandbox practice run (13 Nov 2026): login (no OTP there), pricing, create (awb_number + courier_id + label_url in the answer), find-by-reference,
+  label PDF (298 x 420 pt, 1 page) and cancel all work; `/api/order/track_waybill` answers 404, so `sync` reads statuses from the order list
+  (`/api/order/external/details`, a GET with the filters in the BODY; a date range is required). The LIVE account is still untested.
   Practice run: `proship.yml` mode `selftest` = ProShip's SANDBOX only (proshipdev.prozo.com, secrets `PROSHIP_SANDBOX_USERNAME` + `PROSHIP_SANDBOX_PASSWORD`): one dummy
   order -> label -> track -> cancel, prints ProShip's real answers, touches no Firebase. Never send real buyer data to the sandbox (shared test login);
   every other mode is refused on the sandbox so fake AWBs can't reach proshipIndex / OMS / Amazon.

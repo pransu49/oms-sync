@@ -101,7 +101,7 @@ function bucket(code, name) {
   if (code === 14 || s === 'RTO_DELIVERED') return 'rto_delivered';
   if ((code >= 11 && code <= 15) || /^RTO/.test(s)) return 'rto';
   if (code === 8 || s === 'DELIVERED') return 'delivered';
-  if (code === 16 || code === 17) return 'lost';
+  if (code === 16 || code === 17 || /^(LOST|DAMAGED)$/.test(s)) return 'lost';
   return 'ok';
 }
 const DONE = { cancelled: 1, rto_delivered: 1, delivered: 1, lost: 1 };
@@ -290,6 +290,8 @@ async function modeShip() {
   }
 }
 
+// Status refresh from ProShip's order list (orders UPDATED in the last 15 days). Not from /api/order/track_waybill:
+// that call answered 404 on ProShip's sandbox (13 Nov 2026), the order list is proven there.
 async function modeSync() {
   fb();
   const idx = await readIndex();
@@ -297,18 +299,22 @@ async function modeSync() {
   if (!open.length) { console.log('SYNC — no live ProShip shipments.'); return; }
   await signin();
   const byAwb = {}; open.forEach((k) => { byAwb[String(idx[k].a)] = k; });
-  const awbs = Object.keys(byAwb); let changed = 0;
-  for (let i = 0; i < awbs.length; i += 40) {
-    const r = await api('GET', '/api/order/track_waybill?waybills=' + encodeURIComponent(awbs.slice(i, i + 40).join(',')));
-    ((r.json && r.json.waybillDetails) || []).forEach((w) => {
-      const k = byAwb[String(w.waybill)]; if (!k) return;
-      const s = bucket(w.currentStatusCode, w.currentStatus), st = clip(w.currentStatus, 40), c = clip(w.courierPartner, 40);
-      if (idx[k].s !== s || idx[k].st !== st) { idx[k].s = s; idx[k].st = st; if (c && !idx[k].c) idx[k].c = c; changed++; }
+  const day = (off) => new Date(Date.now() + 5.5 * 3600e3 + off * 864e5).toISOString().slice(0, 10);
+  let changed = 0, seen = 0;
+  for (let offset = 0; offset < 3000; offset += 50) {
+    const j = await getWithBody('/api/order/external/details', { updated_from: day(-15), updated_to: day(1), offset, limit: 50 });
+    const rows = (j && j.data) || [];
+    if (!rows.length && offset === 0 && j && j.message) throw new Error('ProShip order list: ' + clip(j.message, 200));
+    rows.forEach((o) => {
+      const k = byAwb[String(o.awbNumber || '')]; if (!k) return; seen++;
+      const st = clip(o.orderStatus || '', 40), s = bucket(NaN, st), c = courierOf(o.courierDetail);
+      if (st && (idx[k].s !== s || idx[k].st !== st)) { idx[k].s = s; idx[k].st = st; if (c && !idx[k].c) idx[k].c = c; changed++; }
     });
-    await sleep(300);
+    if (rows.length < 50) break;
+    await sleep(200);
   }
   if (changed) await writeIndex(idx);
-  console.log(`SYNC DONE — ${awbs.length} live AWBs checked, ${changed} changed.`);
+  console.log(`SYNC DONE — ${open.length} live AWBs, ${seen} found in ProShip's list, ${changed} changed.`);
 }
 
 async function modeCancel() {
@@ -350,30 +356,17 @@ async function modeSelftest() {
   const lb = await api('POST', '/api/tools/refresh/url', { awbNumber: awb, docType: 'LABEL' });
   const url = (lb.json && (lb.json.LABEL || (lb.json.result || {}).LABEL)) || '';
   console.log(`5. LABEL: status ${lb.status} keys ${lb.json ? Object.keys(lb.json).join(',') : '-'} link ${url ? 'yes' : 'NO — ' + clip(lb.text, 300)}`);
+  if (url) console.log('   LABELURL ' + url); // sandbox dummy label only (selftest never runs on the live account)
   if (url) { try { const f = await fetch(url); const buf = Buffer.from(await f.arrayBuffer()); const txt = buf.toString('latin1'), mb = (txt.match(/\/MediaBox\s*\[([^\]]+)\]/) || [])[1] || '?', pages = (txt.match(/\/Type\s*\/Page[^s]/g) || []).length;
       console.log(`   label file: status ${f.status}, ${buf.length} bytes, ${buf.slice(0, 4).toString() === '%PDF' ? 'PDF' : 'NOT a PDF (' + (f.headers.get('content-type') || '') + ')'}, page box [${mb}] points, pages ${pages || '?'}`); } catch (e) { console.log('   label download failed:', e.message); } }
-  let tr = await api('GET', '/api/order/track_waybill?waybills=' + encodeURIComponent(awb));
-  for (let i = 0; i < 1 && tr.status === 404; i++) { console.log(`   track said 404 (too fresh?) — waiting 15 s, try ${i + 2}`); await sleep(15000); tr = await api('GET', '/api/order/track_waybill?waybills=' + awb); }
-  for (const [label, q] of [['two older AWBs, comma', '14408950426088,14408950144081'], ['two older AWBs, %2C', encodeURIComponent('14408950426088,14408950144081')], ['one older AWB', '14408950144081']]) {
-    const t = await api('GET', '/api/order/track_waybill?waybills=' + q);
-    console.log(`   track test (${label}): status ${t.status} ${clip(t.text, 160)} -> ${((t.json && t.json.waybillDetails) || []).map((d) => d.waybill + '=' + d.currentStatus).join(' | ')}`);
-  }
-  try { // same call with ONLY the Authorization header (as in ProShip's docs)
-    const t2 = await fetch(BASE + '/api/order/track_waybill?waybills=' + awb, { headers: { Authorization: 'Bearer ' + token } });
-    const tx = await t2.text(); console.log(`   track test (auth header only): status ${t2.status} ${clip(tx, 300)}`);
-    if (t2.status === 200) { try { tr = { status: 200, json: JSON.parse(tx), text: tx }; } catch (e) {} }
-  } catch (e) { console.log('   track test (auth header only) failed:', e.message); }
   const day = (off) => new Date(Date.now() + 5.5 * 3600e3 + off * 864e5).toISOString().slice(0, 10);
-  for (const [label, body] of [['by awb_number', { awb_number: awb, offset: 0, limit: 5 }], ['by awb_number as number', { awb_number: Number(awb), offset: 0, limit: 5 }], ['updated today', { updated_from: day(-1), updated_to: day(1), offset: 0, limit: 50 }], ['created today', { created_from: day(-1), created_to: day(1), offset: 0, limit: 50 }]]) {
-    try { const j = await getWithBody('/api/order/external/details', body); const rows = (j && j.data) || []; const mine = rows.find((o) => String(o.awbNumber) === awb);
-      console.log(`   order list (${label}): ${rows.length} rows, total ${j && j.pagination ? j.pagination.totalCount : '?'}, ours ${mine ? 'found, orderStatus ' + mine.orderStatus + ', lastStatusUpdateTime ' + mine.lastStatusUpdateTime : 'not in page'}${rows.length ? '' : ' ' + clip(JSON.stringify(j), 200)}`);
-    } catch (e) { console.log(`   order list (${label}) failed: ${e.message}`); }
-  }
-  const w = ((tr.json && tr.json.waybillDetails) || [])[0];
-  console.log(`6. TRACK: status ${tr.status} ${w ? w.currentStatus + ' (code ' + w.currentStatusCode + ') courier ' + w.courierPartner + ' -> bucket ' + bucket(w.currentStatusCode, w.currentStatus) : clip(tr.text, 300)}`);
+  let mine = null;
+  try { const j = await getWithBody('/api/order/external/details', { updated_from: day(-1), updated_to: day(1), offset: 0, limit: 50 }); mine = ((j && j.data) || []).find((o) => String(o.awbNumber) === awb) || null; } catch (e) { console.log('   order list failed:', e.message); }
+  console.log(`6. STATUS (order list): ${mine ? mine.orderStatus + ' -> ' + bucket(NaN, mine.orderStatus) : 'not found'}`);
+  const w = mine;
   const cn = await api('POST', '/api/order/cancel_order', { waybill: awb });
   show('7. CANCEL', cn);
-  console.log(`SELFTEST DONE — create ${awb ? 'OK' : 'FAILED'}, label ${url ? 'OK' : 'FAILED'}, track ${w ? 'OK' : 'FAILED'}, cancel ${apiOk(cn) ? 'OK' : 'FAILED'}.`);
+  console.log(`SELFTEST DONE — create ${awb ? 'OK' : 'FAILED'}, label ${url ? 'OK' : 'FAILED'}, status ${w ? 'OK' : 'FAILED'}, cancel ${apiOk(cn) ? 'OK' : 'FAILED'}.`);
   if (!url || !w || !apiOk(cn)) process.exitCode = 1;
 }
 
