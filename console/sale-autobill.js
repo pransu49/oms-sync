@@ -1118,6 +1118,47 @@
     draw();
   }
 
+  /* ---------- bill copy viewer (photos / PDF saved with the purchase bill, from Google Drive) ---------- */
+  const COPY = {};
+  async function copyUrl(img) {
+    if (COPY[img.id]) return COPY[img.id];
+    const res = await (await fetch(GAS_URL, { method: "POST", headers: { "Content-Type": "text/plain;charset=utf-8" }, body: JSON.stringify({ token: GAS_KEY, action: "photo", data: { id: img.id } }) })).json();
+    if (!res.ok) throw new Error(res.error || "Could not load the bill copy");
+    const bin = atob(res.data.b64), u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return (COPY[img.id] = { url: URL.createObjectURL(new Blob([u8], { type: res.data.mime })), pdf: /pdf/i.test(res.data.mime) });
+  }
+  function billCopy(b) {
+    const imgs = b.images || [], links = b.photoLinks || [];
+    if (!imgs.length && !links.length) return toast("No bill copy saved for this bill. Open it in All bills to add a photo.", 5000);
+    if (!imgs.length) { window.open(links[0], "_blank", "noopener"); return; }
+    const o = document.createElement("div");
+    o.style.cssText = "position:fixed;inset:0;z-index:2147483001;background:rgba(10,18,36,.72);display:flex;flex-direction:column";
+    o.innerHTML = `<div style="display:flex;align-items:center;gap:10px;padding:12px 18px;background:linear-gradient(135deg,#0F1B33,#14284B);color:#fff;border-bottom:3px solid #C9A227;font:600 15px Lexend,Inter,sans-serif">
+        <span style="margin-right:auto">${esc(b.supplier || "")} · ${esc(b.billNo || "")} · ${esc(fmtD(b.billDate || ""))} · ${inr(num(b.total), 2)}</span>
+        <span data-pages style="display:flex;gap:6px"></span><a data-open target="_blank" rel="noopener" style="color:#C9A227;font-size:13px;text-decoration:none">Open in new tab ↗</a>
+        <button type="button" data-x style="cursor:pointer;border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.1);color:#fff;border-radius:8px;padding:6px 14px;font-weight:600">Close</button></div>
+      <div data-body style="flex:1;overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding:16px"><div style="color:#fff;margin-top:60px">Loading bill copy…</div></div>`;
+    document.body.append(o);
+    const close = () => { o.remove(); document.removeEventListener("keydown", key, true); };
+    const key = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } };
+    document.addEventListener("keydown", key, true);
+    o.querySelector("[data-x]").onclick = close;
+    o.addEventListener("click", e => { if (e.target === o || e.target === o.querySelector("[data-body]")) close(); });
+    const show = async i => {
+      const body = o.querySelector("[data-body]"), pg = o.querySelector("[data-pages]");
+      pg.innerHTML = imgs.length > 1 ? imgs.map((_, k) => `<button type="button" data-p="${k}" style="cursor:pointer;border:1px solid ${k === i ? "#C9A227" : "rgba(255,255,255,.25)"};background:${k === i ? "#C9A227" : "transparent"};color:${k === i ? "#0F1B33" : "#fff"};border-radius:7px;padding:3px 10px;font-weight:600">${k + 1}</button>`).join("") : "";
+      pg.querySelectorAll("[data-p]").forEach(x => x.onclick = () => show(+x.dataset.p));
+      body.innerHTML = `<div style="color:#fff;margin-top:60px">Loading bill copy…</div>`;
+      try {
+        const c = await copyUrl(imgs[i]);
+        o.querySelector("[data-open]").href = c.url;
+        body.innerHTML = c.pdf ? `<iframe src="${c.url}" style="width:min(1000px,100%);height:100%;min-height:80vh;border:0;border-radius:10px;background:#fff"></iframe>`
+          : `<img src="${c.url}" alt="Bill copy" style="max-width:min(1000px,100%);border-radius:10px;background:#fff;box-shadow:0 20px 60px rgba(0,0,0,.5)">`;
+      } catch (e) { body.innerHTML = `<div style="color:#fff;margin-top:60px">Could not load: ${esc(e.message)}</div>`; }
+    };
+    show(0);
+  }
+
   /* =====================================================================
      PAYABLES — purchase bill due dates from each vendor's credit days, total + due outstanding,
      reminder pop-up when the tool opens. Credit days are saved on the supplier (same field as Parties).
@@ -1197,7 +1238,7 @@
           <table class="ab-t" style="background:#fff"><thead><tr><th style="width:36px"><input type="checkbox" class="payAll" data-v="${i}" title="Tick all"></th><th>Bill</th><th>Bill date</th><th>Due date</th><th class="r">Amount</th><th>Status</th><th></th></tr></thead><tbody>
           ${v.bills.map(x => `<tr><td><input type="checkbox" class="payCk" data-v="${i}" data-id="${esc(x.id)}" ${(payTick.get(v.name) || new Set()).has(x.id) ? "checked" : ""}></td><td class="mono">${esc(x.b.billNo || "—")}${x.credit ? ' <span class="pill">credit note</span>' : ""}</td><td class="num">${fmtD(x.b.billDate || "")}</td><td class="num">${fmtD(x.due)}</td><td class="r num">${x.amt < 0 ? "− " + inr(-x.amt, 2) : inr(x.amt, 2)}</td>
             <td>${x.credit ? "—" : x.late > 0 ? `<span class="pill bad">${x.late} day${x.late > 1 ? "s" : ""} overdue</span>` : x.late === 0 ? '<span class="pill bad">Due today</span>' : `<span class="pill">in ${-x.late} day${x.late < -1 ? "s" : ""}</span>`}</td>
-            <td class="r"><button class="btn small payPaid" data-id="${esc(x.id)}">Mark paid</button></td></tr>`).join("")}</tbody></table></td></tr>` : ""}`).join("")}
+            <td class="r" style="white-space:nowrap"><button class="btn small payView" data-id="${esc(x.id)}" title="See the bill copy">${((x.b.images || []).length || (x.b.photoLinks || []).length) ? "📄 View bill" : "No copy"}</button> <button class="btn small payPaid" data-id="${esc(x.id)}">Mark paid</button></td></tr>`).join("")}</tbody></table></td></tr>` : ""}`).join("")}
       </tbody></table></div>
       ${(PAY.adv || []).length ? `<div class="banner" style="margin-top:12px"><b>Advance payment vendors</b> — bills always marked paid on the bill date: ${PAY.adv.map(x => `<span class="pill" style="margin:2px">${esc(x.name)} <a href="#" class="payUnadv" data-id="${esc(x.id)}" title="Stop treating as advance" style="margin-left:4px;color:#B42318;text-decoration:none">×</a></span>`).join("")}</div>` : ""}`;
     const setAdv = async (id, on) => {
@@ -1259,6 +1300,7 @@
         catch (e) { toast("Not saved: " + e.message, 5000); }
       };
     });
+    sec.querySelectorAll(".payView").forEach(b => b.onclick = () => { const x = R.list.flatMap(v => v.bills).find(y => y.id === b.dataset.id); if (x) billCopy(x.b); });
     sec.querySelectorAll(".payPaid").forEach(b => b.onclick = async () => {
       const x = R.list.flatMap(v => v.bills).find(y => y.id === b.dataset.id); if (!x) return;
       if (!(await askYes(`Mark bill ${x.b.billNo || ""} of ${x.b.supplier} (${inr(x.amt, 2)}) as paid today?`, "Mark paid"))) return;
