@@ -19,8 +19,21 @@
 
   function f2(v) { return "₹" + (+v).toFixed(2); }
 
+  /* Amazon.in sends the item price WITHOUT GST (checked 13 Nov 2026 on 1,602 Praso orders: price + tax = item total; owner's order
+     171-3657087-4585106: 63.56 + 11.44 = ₹75). The profit maths here expects the price WITH GST, so items are corrected once here
+     (price + tax) - before, GST looked like 21.9% and the shipping charged looked bigger by the item's GST. Robot data is left as is. */
+  var STD = [0.03, 0.05, 0.12, 0.18, 0.28, 0.4];
+  function nearStd(r) { return STD.some(function (s) { return Math.abs(r - s) < 0.0025; }); }
+  function fixItems(e) {
+    (e.items || []).forEach(function (it) {
+      if (it._gstFix) return; it._gstFix = 1;
+      var p = +it.price || 0, t = +it.tax || 0; if (!(p > 0 && t > 0 && p > t)) return;
+      if (nearStd(t / p) && !nearStd(t / (p - t))) { it.priceExGst = p; it.price = Math.round((p + t) * 100) / 100; it.taxPercent = Math.round(t / p * 1000) / 10; }
+    });
+  }
   /* Same estimate the page already used, so we can swap it for Amazon's real numbers */
   function estimate(e, r) {
+    fixItems(e);
     var ref = 0, ship = 0, inv = false;
     (e.items || []).forEach(function (it) {
       var i = r.find(it.sku, it.asin, it.title);
@@ -79,6 +92,7 @@
     }
     function courier(kg) { var n = Math.max(+kg || .5, .5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
     function net(e, r, x, f, est) {
+      fixItems(e);
       var total = parseFloat(e.total), items = e.items || [];
       if (isNaN(total) || !items.length || x.v.cost == null || x.missingCost) return null;
       var itemSum = 0, outGst = 0, base = 0, kg = 0;
