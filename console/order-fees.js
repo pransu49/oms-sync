@@ -107,14 +107,19 @@
       var gstOut = (outGst + shipGst) * keep, gstIn = x.v.cost * g / (1 + g), gstPay = Math.max(0, gstOut - gstIn);
       var ref = f ? f.ref : est.ref, close = f ? f.close : est.close, other = f ? (f.other || 0) : 0;
       var cour = e.isEasyShip ? (f && f.ship ? f.ship : (est.ship || 55)) : courier(kg), courSrc = e.isEasyShip ? (f && f.ship ? "Amazon Easy Ship fee" : "Easy Ship fee (estimate)") : "courier (estimate ₹40/kg)";
-      var value = total - refund - gstPay - x.v.cost - ref - close - other - (f && !e.isEasyShip ? (f.ship || 0) : 0) - cour - 3;
+      /* GST on Amazon's fees (owner 13 Nov 2026: "we don't claim" it back) = a real cost. Amazon's real fee amounts (Finance API)
+         already include it (closing fee ₹20 shows as ₹23.60), so 18% is added only to ESTIMATED Amazon fees. */
+      var estAmz = (f ? 0 : ref + close) + (e.isEasyShip && !(f && f.ship) ? cour : 0), feeGst = Math.round(estAmz * 0.18 * 100) / 100;
+      var value = total - refund - gstPay - x.v.cost - ref - close - other - (f && !e.isEasyShip ? (f.ship || 0) : 0) - cour - feeGst - 3;
       var L = [["Order total (incl. GST & shipping)", total]];
       if (refund) L.push(["Refunded to buyer", -refund]);
       L.push(["GST payable (₹" + gstOut.toFixed(2) + " collected − ₹" + gstIn.toFixed(2) + " paid on purchase)", -gstPay],
         ["Product cost", -x.v.cost], ["Referral fee" + (f ? "" : " (estimate)"), -ref], ["Closing fee" + (f ? "" : " (estimate)"), -close]);
       if (other) L.push(["Other Amazon fees", -other]);
       if (f && !e.isEasyShip && f.ship) L.push(["Amazon shipping fees", -f.ship]);
-      L.push([courSrc.charAt(0).toUpperCase() + courSrc.slice(1), -cour], ["Return buffer", -3]);
+      L.push([courSrc.charAt(0).toUpperCase() + courSrc.slice(1), -cour]);
+      if (feeGst) L.push(["GST 18% on Amazon fees (not claimed)", -feeGst]);
+      L.push(["Return buffer", -3]);
       x.v.ship = cour;   /* Shipping column = the courier cost used here */
       return { value: Math.round(value * 100) / 100, lines: L, real: !!f, refunded: !!(f && f.refunded) };
     }
