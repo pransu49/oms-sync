@@ -80,6 +80,10 @@
   "All 4 accounts" switch (owner 13 Nov 2026): same ASIN in stock on 2+ of our accounts, one KEEP (Buy Box holder via `ourSellers`, else lowest
   price); nothing pre-ticked ("Tick all except KEEP" button); queued per account (source `duplicate-cross-account`). ~25 reads per open, cached 5 min.
 
+- **Amazon page header menu** (owner 13 Nov 2026, block "Premium header menu" at the end of `amazon-name-search.js` — keep it): top row =
+  brand · account switch · sync + refresh; second row `.ap-act` = Add ASIN (gold) · Needs attention · Price suggestions · Robot changes, API pill right.
+  Buttons are MOVED there by id (aaOpen/atOpen/psOpen/rlOpen/ahPill) and get SVG icons. New header buttons: insert next to a sibling's
+  CURRENT parent (`ref.parentNode.insertBefore`), never assume they sit in `.ap-sync`.
 - **Quota savers in `spapi-sync.js`** (owner 12 Nov 2026, "ensure all syncs work under free limits"):
   old per-item collections `spapiInventory` / `spapiOrders` / `spapiCompetitivePricing` are NOT written any more (nothing reads them —
   page + robots use the snapshot; `SPAPI_LEGACY_MIRROR=on` brings the writes back). Sent-price checks: max 150 per run, check counts in ONE doc

@@ -836,7 +836,7 @@
   var EXTRA = [{ label: "vishal", name: "Vishal E-Commerce" }, { label: "munda", name: "Ecommerce Munda" }];
   /* 4 account buttons: keep the title readable (it was overlapped) */
   var st = document.createElement("style");
-  st.textContent = ".ap-brand{flex:none}.ap-top-in{gap:14px}#spapiAccountSwitcherWrap button{padding:7px 11px;font-size:12px}@media(max-width:1350px){#spapiAccountSwitcherWrap button{padding:6px 8px;font-size:11.5px}}";
+  st.textContent = ".ap-brand{flex:none}.ap-top-in{gap:14px}@media(max-width:1180px){#spapiAccountSwitcherWrap button{padding:6px 9px;font-size:11.5px}}";
   document.head.appendChild(st);
   function go() {
     if (typeof SPAPI_ACCOUNTS === "undefined" || typeof populateSpapiAccountSwitcher !== "function") return false;
@@ -876,4 +876,63 @@
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
     .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
+} catch (e) {} })();
+
+
+/* ===== Premium header menu (owner 13 Nov 2026: "make menu section more premium and aligned").
+   Top row: brand · account switch · last sync + refresh. Second row: the tool buttons in one aligned group
+   (＋ Add ASIN in gold, then Needs attention · Price suggestions · Robot changes) and the API health pill on the right.
+   Buttons keep their ids/clicks - they are only moved and restyled. 0 Firebase reads. ===== */
+(function () { try {
+  if (window.__aikmHdrMenu) return; window.__aikmHdrMenu = true;
+  var css = document.createElement("style");
+  css.textContent =
+    ".ap-act{display:flex;align-items:center;gap:8px;padding:0 28px 12px;margin-top:-2px}" +
+    ".ap-act-in{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:12px;border-top:1px solid rgba(255,255,255,.08);flex:1;min-width:0}" +
+    ".ap-act-sp{flex:1}" +
+    ".ap-act .aa-open,.ap-act .ps-open,.ap-act .rl-open,.ap-act .ah-pill{all:unset;box-sizing:border-box;cursor:pointer;height:34px;padding:0 14px;border-radius:9px;display:inline-flex;align-items:center;gap:7px;" +
+      "font:500 12.5px 'Inter',sans-serif;color:rgba(255,255,255,.88);background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.13);white-space:nowrap;transition:background .15s,border-color .15s,color .15s}" +
+    ".ap-act .aa-open:hover,.ap-act .ps-open:hover,.ap-act .rl-open:hover,.ap-act .ah-pill:hover{background:rgba(201,162,75,.16);border-color:rgba(201,162,75,.55);color:#fff}" +
+    ".ap-act .ap-ic{display:inline-flex;opacity:.9}.ap-act .ap-ic svg{display:block}" +
+    ".ap-act #aaOpen{background:linear-gradient(135deg,#E3C47A,var(--gold) 55%,var(--gold-2));border-color:transparent;color:var(--navy);font-weight:600;box-shadow:inset 0 1px 0 rgba(255,255,255,.35),0 2px 8px rgba(0,0,0,.18)}" +
+    ".ap-act #aaOpen:hover{filter:brightness(1.05);color:var(--navy)}" +
+    ".ap-act b{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--gold);color:var(--navy);font:700 11px 'Inter',sans-serif}" +
+    ".ap-act .ah-pill{font-size:12px;color:rgba(255,255,255,.75)}" +
+    ".ap-act-div{width:1px;height:22px;background:rgba(255,255,255,.12);margin:0 4px}" +
+    "@media(max-width:760px){.ap-act{padding:0 16px 10px}.ap-act-in{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}.ap-act-in::-webkit-scrollbar{display:none}.ap-act-sp{display:none}#spapiAccountSwitcherWrap{max-width:100%;overflow-x:auto;scrollbar-width:none}#spapiAccountSwitcherWrap::-webkit-scrollbar{display:none}}";
+  document.head.appendChild(css);
+  var ICON = { aaOpen: "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 5v14M5 12h14\"/></svg>", atOpen: "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 9v4\"/><path d=\"M10.4 3.9 2.6 17.5A1.8 1.8 0 0 0 4.2 20h15.6a1.8 1.8 0 0 0 1.6-2.5L13.6 3.9a1.8 1.8 0 0 0-3.2 0z\"/><path d=\"M12 16.5h.01\"/></svg>", psOpen: "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M9 18h6\"/><path d=\"M10 21h4\"/><path d=\"M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z\"/></svg>", rlOpen: "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"5\" y=\"8\" width=\"14\" height=\"11\" rx=\"3\"/><path d=\"M12 4v4M9 13h.01M15 13h.01M9.5 16.5h5\"/></svg>" };
+  var ORDER = ["aaOpen", "atOpen", "psOpen", "rlOpen"];
+  var EMO = /^[\s←-⯿☀-➿️‍＋+]|^\uD83C[\uDC00-\uDFFF]|^\uD83D[\uDC00-\uDFFF]|^\uD83E[\uDC00-\uDFFF]/;
+  function clean(b) {
+    var ic = ICON[b.id]; if (!ic) return;
+    var first = b.firstChild;
+    if (first && first.nodeType === 1 && first.classList.contains("ap-ic")) return;   // already done
+    if (first && first.nodeType === 3) { var t = first.nodeValue, n = 0; while (n < 8 && EMO.test(t)) { t = t.replace(EMO, ""); n++; } first.nodeValue = t.replace(/^\s+/, ""); }
+    var i = document.createElement("span"); i.className = "ap-ic"; i.innerHTML = ic; b.insertBefore(i, b.firstChild);
+  }
+  var act, inner, sp;
+  function build() {
+    var top = document.querySelector(".ap-top"), tin = document.querySelector(".ap-top-in"); if (!top || !tin) return false;
+    if (!act) {
+      act = document.createElement("div"); act.className = "ap-act";
+      inner = document.createElement("div"); inner.className = "ap-act-in"; act.appendChild(inner);
+      sp = document.createElement("span"); sp.className = "ap-act-sp"; inner.appendChild(sp);
+      tin.insertAdjacentElement("afterend", act);
+    }
+    ORDER.forEach(function (id) { var b = document.getElementById(id); if (b && b.parentNode && b.parentNode !== inner) inner.insertBefore(b, sp); });
+    // keep the fixed order even when buttons arrive late
+    var prev = null; ORDER.forEach(function (id) { var b = document.getElementById(id); if (!b || b.parentNode !== inner) return; if (prev ? prev.nextSibling !== b : inner.firstChild !== b) inner.insertBefore(b, prev ? prev.nextSibling : inner.firstChild); prev = b; });
+    var ah = document.getElementById("ahPill"); if (ah && ah.parentNode !== inner) inner.appendChild(ah);
+    ORDER.forEach(function (id) { var b = document.getElementById(id); b && clean(b); });
+    act.style.display = inner.querySelector("button") ? "" : "none";
+    return true;
+  }
+  var busy = false;
+  function run() { if (busy) return; busy = true; try { build(); } catch (e) {} busy = false; }
+  (function wait(i) { if (!build() && i < 80) return setTimeout(function () { wait(i + 1); }, 250);
+    var mo = new MutationObserver(function () { setTimeout(run, 0); });
+    var sync = document.querySelector(".ap-sync"); sync && mo.observe(sync, { childList: true, subtree: true });
+    inner && mo.observe(inner, { childList: true, subtree: true, characterData: true });
+  })(0);
 } catch (e) {} })();

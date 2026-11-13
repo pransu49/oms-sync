@@ -102,7 +102,7 @@
   function addBtn() {
     var r = $("spRefreshBtn"); if (!r || $("psOpen")) return !!$("psOpen");
     var b = document.createElement("button"); b.type = "button"; b.id = "psOpen"; b.className = "ps-open"; b.title = "Price changes the robot suggests — you decide"; b.innerHTML = "💡 Price suggestions"; b.onclick = open;
-    r.parentNode.insertBefore(b, $("rlOpen") || r); return true;
+    var rl = $("rlOpen"); if (rl && rl.parentNode) rl.parentNode.insertBefore(b, rl); else r.parentNode.insertBefore(b, r); return true;   /* rlOpen may sit in the header menu row */
   }
   var n = 0, t = setInterval(function () { if ((addBtn() && db()) || ++n > 60) { clearInterval(t); if (db()) setTimeout(function () { sref().get().then(function (d) { var it = (d.exists && d.data().items) || {}, c = Object.keys(it).filter(function (k) { return it[k].status === "open"; }).length; rows = new Array(c); count(); rows = []; }).catch(function () {}); }, 3000); } }, 500);
   document.addEventListener("click", function (e) { if (e.target.closest("#spapiAccountSwitcherWrap button[data-acct]")) setTimeout(function () { if (ov.style.display === "flex") load(); }, 300); }, true);
