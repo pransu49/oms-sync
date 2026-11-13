@@ -83,6 +83,7 @@
     }).sort(function (x, y) { return y.units - x.units || x.name.localeCompare(y.name); });
   }
 
+  function setDelBtn(n) { var d = document.getElementById("dpaDel"); if (!d) return; d.disabled = !n; d.innerHTML = '<i class="ti ti-trash"></i>Delete ' + n + " ticked from Amazon"; }
   function drawDup() {
     var c = document.getElementById("spapiInventoryTable_cards"); if (!c) return;
     var G = groups(), all = [];
@@ -118,7 +119,10 @@
     bindSeg(c);
     var qi = document.getElementById("dpaQ");
     qi.oninput = function (ev) { q = ev.target.value.toLowerCase(); drawDup(); var x = document.getElementById("dpaQ"); x.focus(); x.setSelectionRange(x.value.length, x.value.length); };
-    c.onchange = function (ev) { var b = ev.target.closest("[data-dpa]"); if (!b) return; ticked[b.dataset.dpa] = b.checked; drawDup(); };
+    /* tick/untick in place - no redraw, so the list stays where you are (owner 13 Nov 2026) */
+    c.onchange = function (ev) { var b = ev.target.closest("[data-dpa]"); if (!b) return; ticked[b.dataset.dpa] = b.checked;
+      var tr = b.closest("tr"); tr && tr.classList.toggle("del", b.checked);
+      setDelBtn(all.filter(function (r) { return ticked[r.e.sku] && !queued[r.e.sku]; }).length); };
     document.getElementById("dpaDel").onclick = function () { del(all.filter(function (r) { return ticked[r.e.sku] && !queued[r.e.sku]; })); };
   }
 
@@ -238,8 +242,12 @@
     bindSeg(c);
     var qi = document.getElementById("dpaQ");
     qi.oninput = function (ev) { q = ev.target.value.toLowerCase(); drawAll(); var x = document.getElementById("dpaQ"); x.focus(); x.setSelectionRange(x.value.length, x.value.length); };
-    c.onchange = function (ev) { var b = ev.target.closest("[data-dpk]"); if (!b) return; T[b.dataset.dpk] = b.checked; drawAll(); };
-    document.getElementById("dpaTickAll").onclick = function () { list.forEach(function (g) { g.rows.forEach(function (r) { if (!r.keep && !r.fba) T[kOf(r.a, r.e.sku)] = true; }); }); drawAll(); };
+    c.onchange = function (ev) { var b = ev.target.closest("[data-dpk]"); if (!b) return; T[b.dataset.dpk] = b.checked;
+      var tr = b.closest("tr"); tr && tr.classList.toggle("del", b.checked); setDelBtn(all.filter(isT).length); };
+    document.getElementById("dpaTickAll").onclick = function () {
+      list.forEach(function (g) { g.rows.forEach(function (r) { if (!r.keep && !r.fba) T[kOf(r.a, r.e.sku)] = true; }); });
+      c.querySelectorAll("[data-dpk]").forEach(function (b) { var on = !!T[b.dataset.dpk]; b.checked = on; var tr = b.closest("tr"); tr && tr.classList.toggle("del", on); });
+      setDelBtn(all.filter(isT).length); };
     document.getElementById("dpaDel").onclick = function () { delAll(all.filter(isT), G); };
   }
   async function delAll(list, G) {
