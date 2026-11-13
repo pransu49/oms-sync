@@ -168,7 +168,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   1 read per load (proshipIndex) + ~5 when the panel is opened. First real `check` run (13 Nov 2026): `/api/auth/signin` answered 200 "MFA required. OTP sent to registered email" — the user in the secrets has MFA on,
   so no robot login until ProShip switches MFA off for the API user (or the owner adds a user without it). Sandbox practice run (13 Nov 2026): login (no OTP there), pricing, create (awb_number + courier_id + label_url in the answer), find-by-reference,
   label PDF (298 x 420 pt, 1 page) and cancel all work; `/api/order/track_waybill` answers 404, so `sync` reads statuses from the order list
-  (`/api/order/external/details`, a GET with the filters in the BODY; a date range is required). The LIVE account is still untested.
+  (`/api/order/external/details`, a GET with the filters in the BODY; a date range is required). LIVE login works since 13 Nov 2026 ~13:50 IST (ProShip switched OTP off for the API user); first live `check` gave NO rates from 206001:
+  "No Serviceable Courier Found as per RuleMapping" (no couriers / rate card / pickup set up on the account yet). Shipping untested.
   Practice run: `proship.yml` mode `selftest` = ProShip's SANDBOX only (proshipdev.prozo.com, secrets `PROSHIP_SANDBOX_USERNAME` + `PROSHIP_SANDBOX_PASSWORD`): one dummy
   order -> label -> track -> cancel, prints ProShip's real answers, touches no Firebase. Never send real buyer data to the sandbox (shared test login);
   every other mode is refused on the sandbox so fake AWBs can't reach proshipIndex / OMS / Amazon.
