@@ -95,10 +95,12 @@ async function bq(token, path, body) {
 }
 async function findBillingTable(token, projectId) {
   const ds = (await bq(token, `projects/${projectId}/datasets?all=true`)).datasets || [];
+  console.log(`BigQuery ${projectId}: datasets [${ds.map((d) => d.datasetReference.datasetId + '@' + d.location).join(', ')}]`);
   for (const d of ds) {
     const id = d.datasetReference.datasetId;
     const tb = (await bq(token, `projects/${projectId}/datasets/${id}/tables?maxResults=100`)).tables || [];
     const t = tb.map((x) => x.tableReference.tableId).find((x) => /^gcp_billing_export_v1_/.test(x));
+    console.log(`BigQuery ${projectId}.${id}: tables [${tb.map((x) => x.tableReference.tableId).join(', ')}]`);
     if (t) return { table: `${projectId}.${id}.${t}`, location: d.location };
   }
   return null;
