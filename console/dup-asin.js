@@ -28,7 +28,16 @@
     ".dpa-seg button{all:unset;cursor:pointer;font-size:12px;font-weight:600;color:var(--ink-2);padding:6px 12px;border-radius:8px;white-space:nowrap}" +
     ".dpa-seg button.on{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(16,24,40,.12)}" +
     ".dpa-acct{display:inline-block;font-size:11px;font-weight:600;color:var(--navy,#1F2A44);background:#EEF2FA;border-radius:6px;padding:2px 8px;white-space:nowrap}" +
-    ".dpa-bb{font-size:11px;font-weight:600;color:var(--green)}.dpa-tick{all:unset;cursor:pointer;font-size:12px;font-weight:600;color:var(--ink-2);border:1px solid var(--line);border-radius:9px;padding:6px 12px;background:#fff}";
+    ".dpa-bb{font-size:11px;font-weight:600;color:var(--green)}.dpa-tick{all:unset;cursor:pointer;font-size:12px;font-weight:600;color:var(--ink-2);border:1px solid var(--line);border-radius:9px;padding:6px 12px;background:#fff}" +
+    ".dpa-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:14px 18px;border-bottom:1px solid var(--line-2)}" +
+    ".dpa-l,.dpa-r{display:flex;align-items:center;gap:10px}.dpa-l{flex:1 1 auto;min-width:0}.dpa-bar .ap-search{flex:0 1 320px;width:320px;min-width:180px;max-width:100%;margin:0;height:38px;box-sizing:border-box}" +
+    ".dpa-cnt{font-size:12px;color:var(--muted);white-space:nowrap;margin-right:4px}.dpa-cnt b{color:var(--ink);font-weight:600}" +
+    ".dpa-bar .dpa-seg{height:38px;box-sizing:border-box;align-items:center}.dpa-bar .dpa-seg button{padding:7px 14px}" +
+    ".dpa-bar .dpa-tick,.dpa-bar .dpa-del{height:38px;box-sizing:border-box;padding:0 15px;border-radius:10px;display:inline-flex;align-items:center;gap:7px;font-size:12.5px}" +
+    ".dpa-bar .dpa-tick:hover{border-color:var(--ink-2)}" +
+    ".dpa-note{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:9px 18px;background:#FBF8F1;border-bottom:1px solid var(--line-2);font-size:12px;color:var(--ink-2)}" +
+    ".dpa-note i{color:var(--gold-2);font-size:15px;vertical-align:-2px;margin-right:6px}.dpa-note a{all:unset;cursor:pointer;font-weight:600;color:var(--ink);white-space:nowrap}.dpa-note a:hover{text-decoration:underline}" +
+    "@media(max-width:1100px){.dpa-l,.dpa-r{flex-wrap:wrap;width:100%}.dpa-r{justify-content:flex-end}}@media(max-width:700px){.dpa-bar .ap-search{flex:1 1 100%;width:100%}}";
   document.head.appendChild(css);
 
   var esc = function (s) { return typeof escapeHtml === "function" ? escapeHtml(s) : String(s == null ? "" : s); };
@@ -83,6 +92,14 @@
     }).sort(function (x, y) { return y.units - x.units || x.name.localeCompare(y.name); });
   }
 
+  var CLEAR = "spapiKpiFilter=null;renderSpapiKpis();renderInventoryCards()";
+  function bar(o) {
+    return '<div class="dpa-bar"><div class="dpa-l">' + seg() + '<div class="ap-search"><i class="ti ti-search"></i><input type="text" id="dpaQ" placeholder="' + o.ph + '" value="' + esc(q) + '"></div></div>' +
+      '<div class="dpa-r"><span class="dpa-cnt"><b>' + o.asins + '</b> ASINs · <b>' + o.listings + '</b> listings' + (o.nQ ? ' · <b>' + o.nQ + '</b> queued' : '') + '</span>' +
+      (o.tickAll ? '<button type="button" class="dpa-tick" id="dpaTickAll"><i class="ti ti-checks"></i>Tick all except KEEP</button>' : '') +
+      '<button type="button" class="dpa-del" id="dpaDel"' + (o.nTick ? "" : " disabled") + '><i class="ti ti-trash"></i>Delete ' + o.nTick + ' ticked from Amazon</button></div></div>' +
+      '<div class="dpa-note"><span><i class="ti ti-info-circle"></i>' + o.hint + '</span><a onclick="' + CLEAR + '">Clear filter ✕</a></div>';
+  }
   function setDelBtn(n) { var d = document.getElementById("dpaDel"); if (!d) return; d.disabled = !n; d.innerHTML = '<i class="ti ti-trash"></i>Delete ' + n + " ticked from Amazon"; }
   function drawDup() {
     var c = document.getElementById("spapiInventoryTable_cards"); if (!c) return;
@@ -109,11 +126,8 @@
             "<td>" + act + "</td></tr>";
         }).join("");
     }).join("");
-    c.innerHTML = '<div class="ap-tools">' + seg() + '<div class="ap-search"><i class="ti ti-search"></i><input type="text" id="dpaQ" placeholder="Search product, SKU or ASIN…" value="' + esc(q) + '"></div>' +
-      '<span class="t-muted" style="font-size:12px">Same ASIN listed more than once in this account. One <b>KEEP</b> per ASIN (most sold, then most stock, then oldest); the others are ticked.</span>' +
-      '<button type="button" class="dpa-del" id="dpaDel"' + (nTick ? "" : " disabled") + '><i class="ti ti-trash"></i>Delete ' + nTick + " ticked from Amazon</button>" +
-      '<span class="ap-count">' + list.length + " ASINs · " + all.length + " listings" + (nQ ? " · " + nQ + " queued" : "") + "</span></div>" +
-      (typeof spFilterBar === "function" ? spFilterBar("duplicate ASINs", list.length + " ASINs", "spapiKpiFilter=null;renderSpapiKpis();renderInventoryCards()") : "") +
+    c.innerHTML = bar({ ph: "Search product, SKU or ASIN…", asins: list.length, listings: all.length, nQ: nQ, nTick: nTick,
+        hint: "Same ASIN listed more than once in this account. One <b>KEEP</b> per ASIN (most sold, then most stock, then oldest) — the others are ticked." }) +
       '<div class="ap-scroll"><table class="sp-tbl"><thead><tr><th></th><th>SKU</th><th>Listed on</th><th>Amazon stock</th><th>Price</th><th>Sold 30d</th><th>Shipping</th><th>Action</th></tr></thead><tbody>' + rows + "</tbody></table>" +
       (list.length ? "" : (typeof spEmpty === "function" ? spEmpty("ti-circle-check", "No duplicate ASINs", "Every in-stock ASIN has one listing.") : "")) + "</div>";
     bindSeg(c);
@@ -203,7 +217,7 @@
   function drawAll() {
     var c = document.getElementById("spapiInventoryTable_cards"); if (!c) return;
     if (!AX.data) {
-      c.innerHTML = '<div class="ap-tools">' + seg() + '<span class="t-muted" style="font-size:12px">Loading all accounts…</span></div>' + (typeof spSkeleton === "function" ? '<div class="ap-scroll">' + spSkeleton() + "</div>" : "");
+      c.innerHTML = '<div class="dpa-bar"><div class="dpa-l">' + seg() + '</div><div class="dpa-r"><span class="dpa-cnt">Loading all accounts…</span></div></div>' + (typeof spSkeleton === "function" ? '<div class="ap-scroll">' + spSkeleton() + "</div>" : "");
       bindSeg(c); loadAll().then(function () { if (mode === "all" && spapiKpiFilter === "duplicate") drawAll(); }); return;
     }
     var G = groupsAll(), all = [], T = AX.ticked, Qd = AX.queued;
@@ -231,12 +245,8 @@
             "<td>" + act + "</td></tr>";
         }).join("");
     }).join("");
-    c.innerHTML = '<div class="ap-tools">' + seg() + '<div class="ap-search"><i class="ti ti-search"></i><input type="text" id="dpaQ" placeholder="Search product, SKU, ASIN or account…" value="' + esc(q) + '"></div>' +
-      '<span class="t-muted" style="font-size:12px">Same ASIN in stock on more than one of your accounts. <b>KEEP</b> = account holding the Buy Box (else lowest price).</span>' +
-      '<button type="button" class="dpa-tick" id="dpaTickAll"><i class="ti ti-checks"></i> Tick all except KEEP</button>' +
-      '<button type="button" class="dpa-del" id="dpaDel"' + (nTick ? "" : " disabled") + '><i class="ti ti-trash"></i>Delete ' + nTick + " ticked from Amazon</button>" +
-      '<span class="ap-count">' + list.length + " ASINs · " + all.length + " listings" + (nQ ? " · " + nQ + " queued" : "") + "</span></div>" +
-      (typeof spFilterBar === "function" ? spFilterBar("duplicates across accounts", list.length + " ASINs", "spapiKpiFilter=null;renderSpapiKpis();renderInventoryCards()") : "") +
+    c.innerHTML = bar({ ph: "Search product, SKU, ASIN or account…", asins: list.length, listings: all.length, nQ: nQ, nTick: nTick, tickAll: true,
+        hint: "Same ASIN in stock on more than one of your accounts. <b>KEEP</b> = the account holding the Buy Box (else the lowest price). Nothing is ticked for you." }) +
       '<div class="ap-scroll"><table class="sp-tbl"><thead><tr><th></th><th>Account · SKU</th><th>Listed on</th><th>Amazon stock</th><th>Price</th><th>Buy Box</th><th>Shipping</th><th>Action</th></tr></thead><tbody>' + rows + "</tbody></table>" +
       (list.length ? "" : (typeof spEmpty === "function" ? spEmpty("ti-circle-check", "No duplicates across accounts", "No ASIN is in stock on more than one of your accounts.") : "")) + "</div>";
     bindSeg(c);
