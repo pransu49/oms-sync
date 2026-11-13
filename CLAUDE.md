@@ -101,15 +101,14 @@
   (title "Pack of N"/"x N" vs mapped units incl. LOTS "Pk6"/vendor qty), different product (word overlap < 0.34), size differs, cost above
   what the buyer paid incl. shipping. "Fix mapping" = page's openSpapiMatchModal(asin); "Looks right" = main `aikm_admin/costCheckOk.ok["acct|asin"]`
   (stamp = cost|issues, comes back if the cost changes). 1 read per page open.
-- **Bulk tick for LOSS orders** (`console/loss-bulk.js`, owner 13 Nov 2026 — one-by-one ticking too slow): one red bar above #cfTable
-  (Amazon confirmation), #psTable (ProShip), #nbTable (NimbusPost), #zpTable (Zippy): chips Loss up to ₹20/35/40 / Any, max ₹ box, product-name
-  words, account -> "Tick N loss orders" / "Untick all loss". Reads rows from the DOM (tr.nb-row-loss, "LOSS · ₹x") and clicks the table's own
-  checkboxes (change event), so each panel's own loss confirmation still runs. 0 Firebase. Loaded by the block at the end of `console/proship-tab.js`
-  (`aikmLossBulkJs`) — keep it. Only set text when it changed (body MutationObserver would loop).
-  FAST tick: while ticking, the panel's `<x>Kpis` box (cfKpis/psKpis/nbKpis/zpKpis) is renamed so each per-tick redraw stops at its
-  first line; ONE normal redraw at the end (200 ticks: 7 s -> 0.3 s). If a panel's render() stops starting with its Kpis box, fix KPI map.
-  AUTO rule (owner 13 Nov 2026: "loss above ₹40 = don't ship, rest ship"): "Always tick loss orders up to ₹X automatically", default ON at ₹40,
-  saved per computer (localStorage `aikm_loss_auto`, "" = off). Each order is auto-ticked once only, so a manual untick stays.
+- **Loss-order rule bar** (`console/loss-bulk.js`, owner 13 Nov 2026): ONE small red bar above #cfTable (Amazon confirmation), #psTable (ProShip),
+  #nbTable (NimbusPost), #zpTable (Zippy): "Ship loss orders with loss ABOVE ₹[40]" — loss orders above the amount are ticked automatically,
+  at/below it unticked. Amount always editable, saved per computer (localStorage `aikm_loss_above`, default 40, empty = off). Each order is set
+  once per amount (manual tick/untick stays; changing the amount re-applies). Owner asked to REMOVE the extra chips / product-name / account /
+  untick buttons — keep it to this one rule. Reads rows from the DOM (tr.nb-row-loss, "LOSS · ₹x") and clicks the table's own checkboxes, so each
+  panel's own loss confirmation still runs. FAST: the panel's `<x>Kpis` box is renamed while ticking so each per-tick redraw stops at its first line,
+  then ONE normal redraw (if a panel's render() stops starting with its Kpis box, fix the KPI map). Only set text when it changed (body
+  MutationObserver would loop). 0 Firebase. Loaded by the block at the end of `console/proship-tab.js` (`aikmLossBulkJs`) — keep it.
 - Orders cost (`order-fees.js`): old/relisted SKUs (not in inventory) use the order item's ASIN mapping first (packs, combos, vendor).
 - **LOTS-62 stock for Sasta Store** (owner 13 Nov 2026): `spapi-sync-sastastore.yml` sets `LOTS62_STOCK=on` -> the out-of-stock rule and its restock use
   the HIGHER of LOTS-GN and LOTS-62 stock (main `aikm_admin/lots62Catalog`, read only when its savedAt changed; cached in `.cache/lots62-catalog.json`).
