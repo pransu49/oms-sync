@@ -149,11 +149,39 @@
       "html#aikm body #aikmShipHub .hub-tabs button:hover{color:var(--x-text) !important;}" +
       "html#aikm body #aikmShipHub .hub-tools{display:flex;align-items:center;gap:8px;padding-bottom:8px;flex-wrap:nowrap;}" +
       "html#aikm body #aikmShipHub .hub-tools{margin-left:auto;}" +
+      "html#aikm body #aikmShipHub .hub-bar{margin:0 !important;}html#aikm body #selfshipProshipPanel .nb-card{padding-top:10px !important;}" +
+      "html#aikm body #aikmShipHub .hub-find{display:flex;align-items:center;gap:8px;margin-left:auto;flex-shrink:0;}" +
+      "html#aikm body #aikmShipHub .hub-find select{width:150px !important;border-radius:10px !important;height:36px;}" +
+      "html#aikm body #aikmShipHub .hub-find #psRefresh{width:36px !important;height:36px;padding:0 !important;display:inline-flex;align-items:center;justify-content:center;border-radius:10px !important;}" +
+      "html#aikm body #aikmShipHub .hub-find .hub-search input{width:220px !important;height:36px;}" +
+      "html#aikm body #aikmShipHub .hub-chiprow .nb-chips{flex:1 1 auto;min-width:0;}" +
+      "html#aikm body #aikmShipHub .hub-sep{width:1px;height:24px;background:var(--x-line);margin:0 2px;}" +
+      "html#aikm body #aikmShipHub .ps-conn{padding:0 6px 0 11px !important;height:36px;box-sizing:border-box;border-radius:10px !important;font-size:12px !important;}" +
+      "html#aikm body #aikmShipHub .ps-conn button{font-size:11.5px;padding:4px 8px;border-radius:7px;background:#fff;border:1px solid var(--x-line);color:#0F1E35 !important;}" +
+      "html#aikm body #aikmShipHub button.hub-ico{all:unset;cursor:pointer;width:36px;height:36px;box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;gap:3px;border-radius:10px;border:1px solid var(--x-line);background:#fff;color:#0F1E35;font-size:16px;position:relative;}" +
+      "html#aikm body #aikmShipHub button.hub-ico:hover{background:#0F1E35;color:#fff;border-color:#0F1E35;}" +
+      "html#aikm body #aikmShipHub #hubSetWarn:not(:empty){position:absolute;top:-4px;right:-4px;width:9px;height:9px;border-radius:50%;background:#B42318;font-size:0;overflow:hidden;}" +
+      "html#aikm body #aikmShipHub .hub-job{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin:12px 0 0;padding:10px 14px;border-radius:12px;border:1px solid var(--x-line);background:#FBF9F4;font-size:12.5px;}" +
+      "html#aikm body #aikmShipHub .hub-job.run{border-color:#E6D3A3;background:#FBF5E6;}html#aikm body #aikmShipHub .hub-job.bad{border-left:3px solid #B42318;}html#aikm body #aikmShipHub .hub-job.ok{border-left:3px solid #1E7A4B;}" +
+      "html#aikm body #aikmShipHub .hj-t{font-weight:700;color:#14213D;display:inline-flex;align-items:center;gap:6px;}" +
+      "html#aikm body #aikmShipHub .hj-n{color:#4A5468;}html#aikm body #aikmShipHub .hj-n b{font:700 15px Lexend,Inter,sans-serif;color:#14213D;margin-left:3px;font-variant-numeric:tabular-nums;}" +
+      "html#aikm body #aikmShipHub .hj-n.ok b{color:#1E7A4B;}html#aikm body #aikmShipHub .hj-n.bad b{color:#B42318;}" +
+      "html#aikm body #aikmShipHub .hj-bar{flex:0 0 160px;height:6px;border-radius:6px;background:#EFE7D2;overflow:hidden;}html#aikm body #aikmShipHub .hj-bar i{display:block;height:100%;background:#C9A24B;}" +
+      "html#aikm body #aikmShipHub .hj-act{margin-left:auto;display:flex;gap:8px;}" +
+      "html#aikm body #aikmShipHub .hj-act button{all:unset;cursor:pointer;font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid var(--x-line);background:#fff;color:#0F1E35;}" +
+      "html#aikm body #aikmShipHub .hj-act button.bad{color:#B42318;border-color:#F3B8B1;}html#aikm body #aikmShipHub .hj-act button:hover{background:#0F1E35;color:#fff;border-color:#0F1E35;}" +
+      /* console sub-bar above (Sync / Push / Confirm / Rejected): one tidy row, status texts become tooltips */
+      "html#aikm body #subtab-selfship{display:flex !important;align-items:center;gap:8px;flex-wrap:wrap;}" +
+      "html#aikm body #subtab-selfship .sn-pushinfo,html#aikm body #subtab-selfship .sn-amzinfo{display:none !important;}" +
+      "html#aikm body #subtab-selfship .sn-btn,html#aikm body #subtab-selfship .pe-btn,html#aikm body #subtab-selfship button{height:34px;box-sizing:border-box;border-radius:9px !important;padding:0 13px !important;font-size:12px !important;}" +
+      "html#aikm body #subtab-selfship .sn-btn.sn-amz,html#aikm body #subtab-selfship .sn-btn.sn-push{background:#fff !important;color:#0F1E35 !important;border:1px solid var(--x-line) !important;}" +
+      "html#aikm body #subtab-selfship .sn-btn.sn-amz .ti{color:#FF9900 !important;}html#aikm body #subtab-selfship .sn-btn.sn-push .ti{color:#C9A24B !important;}" +
+      "html#aikm body #subtab-selfship .sn-btn.sn-err-dot::after{content:'';width:7px;height:7px;border-radius:50%;background:#B42318;margin-left:4px;}" +
       "html#aikm body #aikmShipHub .cx-awb{white-space:nowrap;}" +
       "html#aikm body #aikmShipHub .lb-bar:has(b.lb-loss[style*='none']) .lb-row2{border-left:0 !important;padding-left:0 !important;margin-left:0 !important;}" +
       "html#aikm body #aikmShipHub .hub-search{position:relative;display:inline-flex;align-items:center;}" +
       "html#aikm body #aikmShipHub .hub-search i{position:absolute;left:11px;font-size:15px;color:var(--x-muted);pointer-events:none;}" +
-      "html#aikm body #aikmShipHub .hub-search input{width:260px !important;padding-left:34px !important;border-radius:10px !important;}" +
+      "html#aikm body #aikmShipHub .hub-search input{width:230px !important;padding-left:34px !important;border-radius:10px !important;}" +
       "html#aikm body #aikmShipHub .hub-tools select{width:160px !important;border-radius:10px !important;}" +
       "html#aikm body #aikmShipHub .hub-tools #psRefresh{width:38px !important;padding:0 !important;display:inline-flex;align-items:center;justify-content:center;border-radius:10px !important;}" +
       "html#aikm body #aikmShipHub .hub-chiprow{display:flex !important;align-items:center;gap:12px;margin:14px 0 0 !important;}" +
@@ -320,16 +348,12 @@
     }
     panel.innerHTML =
       '<div class="nb-card">' +
-        '<div class="nb-head"><div><div class="nb-kicker">AMAZON SELF-SHIP \u00b7 SHIPPING VIA PROSHIP</div>' +
-        '<div class="nb-title">Orders</div>' +
-        '<div class="nb-sub">Tick \u2192 <b>Ship</b>. AWBs go to OMS Guru and Amazon by themselves. ATS orders go at <b>450 g</b>, others at the weight shown.</div></div>' +
-        '<div class="hub-top"><div class="ps-conn" id="psConn"><i class="dot"></i><span id="psConnTxt">Not tested yet</span><button type="button" id="psTest">Test connection</button></div>' +
-        '<button type="button" id="hubSet" class="hub-old" title="Pickup address &amp; default box \u2014 saved online for every computer"><i class="ti ti-settings"></i> Settings <span id="hubSetWarn"></span></button>' +
-        '<button type="button" id="hubOld" class="hub-old" title="The previous Self-Ship screen (confirmation file, manual tracking)">Old tools</button></div></div>' +
         '<div class="hub-bar"><div class="hub-tabs" id="hubTabs"></div>' +
-          '<div class="nb-filter-row hub-tools"><span class="hub-search"><i class="ti ti-search"></i><input type="text" id="psQ" autocomplete="off" placeholder="Search order, buyer, product, city, PIN"></span>' +
-          '<select id="psAcct"><option value="">All accounts</option></select>' +
-          '<button type="button" id="psRefresh" title="Refresh"><i class="ti ti-refresh"></i></button></div></div>' +
+          '<div class="nb-filter-row hub-tools">' +
+          '<div class="ps-conn" id="psConn" title="ProShip connection"><i class="dot"></i><span id="psConnTxt">ProShip</span><button type="button" id="psTest" title="Test the ProShip login now">Test</button></div>' +
+          '<button type="button" id="hubSet" class="hub-ico" title="Pickup address &amp; default box \u2014 saved online for every computer"><i class="ti ti-settings"></i><span id="hubSetWarn"></span></button>' +
+          '<button type="button" id="hubOld" class="hub-ico" title="Old tools: confirmation file, fake ship, manual tracking"><i class="ti ti-tools"></i></button></div></div>' +
+        '<div id="hubJobBar" style="display:none;"></div>' +
 
         '<div id="hubSettings" style="display:none;">' +
         '<details class="ps-fold" id="psSetFold" open><summary><i class="ti ti-building-warehouse"></i>Pickup address &amp; default box <span class="nb-muted" id="psSetNote"></span><span id="psSetSaved" class="nb-muted"></span></summary><div>' +
@@ -347,7 +371,10 @@
         '<details class="ps-fold" id="psRateFold" style="display:none;"><summary><i class="ti ti-receipt-2"></i><span id="psRateTitle">ProShip rates</span> <span class="nb-muted" id="psRateNote"></span></summary><div id="psRates"></div></details>' +
         "</div>" +
 
-        '<div class="nb-filter hub-chiprow"><span class="hub-lbl" id="hubDateLbl">SLA</span><div class="nb-chips" id="psDates"></div><span class="nb-muted hub-note" id="psPoolNote"></span></div>' +
+        '<div class="nb-filter hub-chiprow"><span class="hub-lbl" id="hubDateLbl">SLA</span><div class="nb-chips" id="psDates"></div><span class="nb-muted hub-note" id="psPoolNote" style="display:none !important"></span>' +
+          '<div class="hub-find"><span class="hub-search"><i class="ti ti-search"></i><input type="text" id="psQ" autocomplete="off" placeholder="Search order, buyer, product, PIN"></span>' +
+          '<select id="psAcct"><option value="">All accounts</option></select>' +
+          '<button type="button" id="psRefresh" title="Refresh"><i class="ti ti-refresh"></i></button></div></div>' +
         '<div id="psResult" style="display:none;">' +
           '<div class="nb-kpis" id="psKpis"></div>' +
           '<div id="hubShipWrap" style="display:none;"><div class="table-scroll"><table class="data" id="hubShipTable"><thead><tr>' +
@@ -393,11 +420,11 @@
     var testing = 0;
     function showConn() {
       var box = $("psConn"), txt = $("psConnTxt"), at = check && check.at && check.at.toDate ? check.at.toDate() : null;
-      if (testing && (!at || at.getTime() < testing)) { box.className = "ps-conn"; txt.innerHTML = '<i class="ti ti-loader-2 ps-spin"></i> Testing\u2026 about 1 minute'; return; }
+      if (testing && (!at || at.getTime() < testing)) { box.className = "ps-conn"; txt.innerHTML = '<i class="ti ti-loader-2 ps-spin"></i> Testing\u2026'; return; }
       testing = 0;
-      if (!check) { box.className = "ps-conn"; txt.textContent = "Not tested yet"; return; }
+      if (!check) { box.className = "ps-conn"; txt.textContent = "ProShip"; box.title = "ProShip connection not tested yet"; return; }
       box.className = "ps-conn " + (check.ok ? "ok" : "bad");
-      txt.textContent = (check.ok ? "Connected" : "Not connected") + (at ? " \u00b7 " + when(at) : "");
+      txt.textContent = "ProShip"; box.title = (check.ok ? "ProShip connected" : "ProShip NOT connected") + (at ? " \u00b7 tested " + when(at) : "");
       var rates = check.rates || [];
       $("psRateFold").style.display = rates.length || check.note ? "" : "none";
       $("psRateTitle").textContent = check.ok ? "ProShip rates" : "Connection problem";
@@ -423,6 +450,15 @@
 
     /* Self-Ship sub-menu: "Sync OMS + NimbusPost now" -> "Sync OMS + ProShip now" (NimbusPost is off, owner 14 Nov 2026) */
     function fixSyncBtn() {
+      /* status texts of Push / Confirm become the buttons' tooltips (the texts are hidden by CSS) */
+      try {
+        var sb = document.getElementById("subtab-selfship");
+        if (sb) [[".sn-pushinfo", ".sn-push"], [".sn-amzinfo", ".sn-amz"]].forEach(function (p) {
+          var i = sb.querySelector(p[0]), btn = sb.querySelector(p[1]); if (!i || !btn) return;
+          var t = (i.textContent || "").trim(); if (t && btn.title !== t) btn.title = t;
+          btn.classList.toggle("sn-err-dot", i.classList.contains("sn-err"));
+        });
+      } catch (e) {}
       var all = [].slice.call(document.querySelectorAll('#subtab-selfship [data-sync-now="oms,nimbus"]'));
       var keep = all.filter(function (x) { return x.dataset.hubFixed; })[0];
       all.forEach(function (x) { if (keep && x !== keep) x.remove(); });
@@ -447,12 +483,16 @@
     /* ---------- pending self-ship pool (same rules as the NimbusPost / Zippy files) ---------- */
     var pool = [], lastRows = [], selDate = "all", selAcct = "", selQ = "", busy = false, jobRes = {};
     var view = "toship", shipRows = [], pSort = 0; // pSort: 0 = default, 1 = profit low->high, -1 = high->low
-    var VIEWS = [["toship", "To ship"], ["hold", "On hold"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["rto", "RTO / Cancelled"]];
+    var VIEWS = [["toship", "To ship"], ["hold", "On hold"], ["failed", "Failed"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["rto", "RTO / Cancelled"]];
     /* loss rule (same amount as the red Loss bar): flagged orders ship only when profit is above it */
     function lossLimit() { try { var v = localStorage.getItem("aikm_loss_above"); return v === null ? "40" : v; } catch (e) { return "40"; } }
     function profitOk(r) { var l = lossLimit(); return l !== "" && r.profit > +l; }
     function isHold(r) { return r.state !== "ok" || (r.loss && !profitOk(r)); }
-    function poolView() { return view === "toship" || view === "hold"; }
+    function poolView() { return view === "toship" || view === "hold" || view === "failed"; }
+    /* owner 14 Nov 2026: shipped orders leave To ship at once (they are in Shipped); orders the last ship job could NOT ship
+       are in their own "Failed" tab with ProShip's reason, so "200 to ship -> 180 shipped, 20 failed" is clear. */
+    function failedOf(r) { return !liveShip(r.id) && jobRes[r.id] && jobRes[r.id].e ? jobRes[r.id].e : ""; }
+    function poolKind(r) { if (liveShip(r.id)) return ""; if (failedOf(r)) return "failed"; return isHold(r) ? "hold" : "toship"; }
     /* shipped side: every ProShip AWB of the last days (one small doc), buyer + items from OMS */
     function stageOf(v) {
       var st = String(v.st || "").toUpperCase();
@@ -602,24 +642,24 @@
       return d.toLocaleDateString("en-IN", { weekday: "short" }) + " \u00b7 " + label;
     }
     function viewBase() {
-      if (poolView()) return pool.filter(function (r) { return isHold(r) === (view === "hold"); });
+      if (poolView()) return pool.filter(function (r) { return poolKind(r) === view; });
       return shipRows.filter(function (r) { return r.stage === view; });
     }
     function acctOf(r) { return r.acct || account(r.o.channel); }
     function renderTabs() {
       buildShipRows();
-      var n = { toship: 0, hold: 0, shipped: 0, delivered: 0, rto: 0 };
-      pool.forEach(function (r) { if (selAcct && acctOf(r) !== selAcct) return; n[isHold(r) ? "hold" : "toship"]++; });
+      var n = { toship: 0, hold: 0, failed: 0, shipped: 0, delivered: 0, rto: 0 };
+      pool.forEach(function (r) { if (selAcct && acctOf(r) !== selAcct) return; var k = poolKind(r); if (k) n[k]++; });
       shipRows.forEach(function (r) { if (selAcct && acctOf(r) !== selAcct) return; n[r.stage]++; });
       $("hubTabs").innerHTML = VIEWS.map(function (v) {
-        return '<button type="button" data-v="' + v[0] + '" class="' + (v[0] === view ? "on " : "") + (v[0] === "hold" ? "hold" : "") + '">' + v[1] + " <span>" + n[v[0]] + "</span></button>";
+        return '<button type="button" data-v="' + v[0] + '" class="' + (v[0] === view ? "on " : "") + (v[0] === "hold" || v[0] === "failed" ? "hold" : "") + '"' + (v[0] === "failed" && !n.failed ? ' style="display:none"' : "") + '>' + v[1] + " <span>" + n[v[0]] + "</span></button>";
       }).join("");
       document.querySelectorAll("#hubTabs button").forEach(function (b) { b.addEventListener("click", function () { if (view !== b.dataset.v) { view = b.dataset.v; selDate = "all"; renderDates(); } }); });
     }
     function renderDates() {
       renderTabs();
       $("hubDateLbl").textContent = poolView() ? "SLA" : "SLA \u00b7 labels";
-      $("psPoolNote").style.display = poolView() ? "" : "none";
+      
       var t = todayYmd(), counts = {}, over = 0, tot = 0;
       viewBase().forEach(function (r) { if (selAcct && acctOf(r) !== selAcct) return; tot++; if (r.sla && r.sla < t) over++; else counts[r.sla || "none"] = (counts[r.sla || "none"] || 0) + 1; });
       var keys = Object.keys(counts).sort();
@@ -793,11 +833,11 @@
           try { localStorage.removeItem(LAST); } catch (e) {} busy = false; jobRes = {}; $("psStatus").style.display = "none"; if (unsub) { unsub(); unsub = null; } pickRows(); return;
         }
         if (st === "queued" || st === "running") {
-          busy = true; jobRes = j.results || {};
+          busy = true; jobRes = j.results || {}; jobBar(j);
           show("psStatus", "<b>" + (j.total || j.count || "") + " orders</b> \u2014 " + esc(j.step || "Starting on the server\u2026") + ' <span class="nb-muted">(about 1 minute per 100 orders \u2014 you can switch tabs or close this page, it keeps running)</span>', "run");
-          render(); return;
+          renderTabs(); render(); return;
         }
-        var wasBusy = busy; busy = false; jobRes = j.results || {};
+        var wasBusy = busy; busy = false; jobRes = j.results || {}; jobBar(j);
         if (st === "failed") show("psStatus", "<b>Could not ship.</b> " + esc(j.step || ""), "bad");
         else {
           var errs = Object.keys(jobRes).filter(function (k) { return jobRes[k].e; });
@@ -805,8 +845,25 @@
             (errs.length ? '<div class="nb-muted nb-small" style="margin-top:6px;">Not shipped: ' + errs.slice(0, 8).map(function (k) { return esc(k) + " (" + esc(jobRes[k].e) + ")"; }).join(" \u00b7 ") + (errs.length > 8 ? " \u2026" : "") + "</div>" : ""), errs.length && !j.made ? "bad" : "ok");
         }
         if (wasBusy) lastRows.forEach(function (r) { r.touched = false; });
-        pickRows();
+        renderDates();
       }, function (e) { busy = false; show("psStatus", "Could not read the job: " + esc(e.message || e), "bad"); render(); });
+    }
+    /* One clear line for the last ship job: sent · shipped · failed (owner 14 Nov 2026) */
+    function jobBar(j) {
+      var b = $("hubJobBar"); if (!b) return;
+      var res = j.results || {}, ids = Object.keys(res), ok = ids.filter(function (k) { return res[k].a; }).length, bad = ids.filter(function (k) { return res[k].e; }).length;
+      var total = j.total || j.count || Object.keys(j.ids || {}).length || ids.length, running = j.status === "queued" || j.status === "running";
+      var ts = j.createdAt && j.createdAt.toDate ? j.createdAt.toDate() : null;
+      var pct = total ? Math.round(ids.length / total * 100) : 0;
+      b.style.display = "flex";
+      b.className = "hub-job" + (running ? " run" : bad ? " bad" : " ok");
+      b.innerHTML = '<span class="hj-t">' + (running ? '<i class="ti ti-loader-2 ps-spin"></i> Shipping now' : "Last ship job") + (ts ? " \u00b7 " + esc(when(ts.getTime())) : "") + "</span>" +
+        '<span class="hj-n">Sent <b>' + total + "</b></span>" +
+        '<span class="hj-n ok">\u2713 Shipped <b>' + ok + "</b></span>" +
+        '<span class="hj-n bad">\u2715 Failed <b>' + bad + "</b></span>" +
+        (running ? '<span class="hj-bar"><i style="width:' + pct + '%"></i></span><span class="hj-n">' + ids.length + " / " + total + "</span>" : "") +
+        '<span class="hj-act">' + (ok ? '<button type="button" data-hj="shipped">View shipped</button>' : "") + (bad ? '<button type="button" data-hj="failed" class="bad">View failed</button>' : "") + "</span>";
+      b.querySelectorAll("[data-hj]").forEach(function (x) { x.onclick = function () { view = x.dataset.hj; selDate = "all"; renderDates(); }; });
     }
     function ship() {
       if (busy) return;

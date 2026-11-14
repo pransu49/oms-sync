@@ -207,6 +207,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   REAL FREIGHT: ProShip's order list gives merchantPricing.price (= freightTotalWithTax, e.g. 24.78); `sync` (every 30 min) saves it as `r`
   for every live AWB (backfills old ones). KPI "Avg shipping cost · ProShip" on To ship (all accounts, per-account in the tooltip) and on
   the Shipped tabs (rows shown); unshipped orders' profit uses the account's AVERAGE r (5+ shipments).
+  LAYOUT (owner 14 Nov 2026 "too messy"): no kicker/title/subtitle. Row 1 = status tabs | ProShip pill (Test) · gear Settings · tools icon
+  Old tools. Row 2 = SLA chips | search · account · refresh. Console sub-bar: Push/Confirm status texts hidden -> button tooltips (+ red dot on error).
+  SHIPPED LEAVE "To ship" at once (liveShip -> Shipped tab). Tab "Failed" (shown only when >0) = orders the LAST ship job could not ship,
+  reason in Status, can be re-shipped from there. #hubJobBar = "Last ship job · time · Sent N · Shipped N · Failed N" (+ progress while running).
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
   "Rejected · N" in the Self-Ship top bar = console's tracking-push alert (OMS 'stuck' Shipped-without-AWB + Amazon confirm errors), click = reasons.
   Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).
