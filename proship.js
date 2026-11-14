@@ -371,6 +371,10 @@ async function modeSync() {
     const j = await getWithBody('/api/order/external/details', { updated_from: day(-6), updated_to: day(1), offset, limit: 50 });
     const rows = (j && j.data) || [];
     if (!rows.length && offset === 0 && j && j.message) throw new Error('ProShip order list: ' + clip(j.message, 200));
+    if (offset === 0 && rows[0] && process.env.PS_DEBUG_KEYS) { // one-off: which fields hold the freight charge
+      const flat = (o, p = '', out = {}) => { Object.keys(o || {}).forEach((k) => { const v = o[k]; if (v && typeof v === 'object' && !Array.isArray(v)) flat(v, p + k + '.', out); else if (/charge|price|amount|freight|cost|rate|weight/i.test(k)) out[p + k] = v; }); return out; };
+      console.log('ROWKEYS', JSON.stringify(Object.keys(rows[0]))); console.log('ROWMONEY', JSON.stringify(flat(rows[0])).slice(0, 3000));
+    }
     rows.forEach((o) => {
       const k = byAwb[String(o.awbNumber || '')]; if (!k) return; seen++;
       const st = clip(o.orderStatus || '', 40), s = bucket(NaN, st), c = courierOf(o.courierDetail);

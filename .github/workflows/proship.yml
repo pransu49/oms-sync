@@ -59,6 +59,7 @@ jobs:
           PROSHIP_BASE: ${{ github.event_name != 'schedule' && inputs.mode == 'selftest' && 'https://proshipdev.prozo.com' || 'https://proship.prozo.com' }}
           PROSHIP_USERNAME: ${{ inputs.mode == 'selftest' && secrets.PROSHIP_SANDBOX_USERNAME || secrets.PROSHIP_USERNAME }}
           PROSHIP_PASSWORD: ${{ inputs.mode == 'selftest' && secrets.PROSHIP_SANDBOX_PASSWORD || secrets.PROSHIP_PASSWORD }}
+          PS_DEBUG_KEYS: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'sync' && '1' || '' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ inputs.mode != 'selftest' && secrets.FIREBASE_SERVICE_ACCOUNT || '' }}
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ inputs.mode != 'selftest' && secrets.FIREBASE_SERVICE_ACCOUNT_OMS || '' }}
 
