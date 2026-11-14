@@ -274,8 +274,8 @@
       idxRef = d.collection("aikm_admin").doc("proshipIndex");
       idxRef.onSnapshot(function (s) {
         try { idx = s.exists && s.data().data ? JSON.parse(s.data().data) : {}; } catch (e) { idx = {}; }
-        feedFallback();
-        if (isOpen()) renderDates();
+        feedFallback(); frMedAt = 0;
+        if (isOpen()) { renderDates(); if (typeof buildPool === "function") setTimeout(buildPool, 0); }
         if (typeof window.__aikmCfRefresh === "function") window.__aikmCfRefresh();
       }, function (e) { console.warn("ProShip index read error", e); });
     }
@@ -514,13 +514,26 @@
       if (Date.now() - P.at > 6 * 36e5 || (up && up > P.at + 60e3)) return null;
       return P.c != null ? P : null;
     }
+    /* Profit of one OMS line WITHOUT the courier (the courier is taken once per order below, from ProShip).
+       Buyer shipping: the part above GST is ours - GST on shipping is charged at the item's GST rate (owner 14 Nov 2026:
+       "why 15% shipping margin" - it was a flat 15% guess for that GST; now exact per item). OMS shipping is PER UNIT -> x qty. */
     function lineProfit(o) {
       var L = listingOf(o); if (!L || L.c == null || L.k == null) return null;
       var price = num(o.price), q = Math.max(1, num(o.qty) || 1); if (!(price > 0)) return null;
-      var g = (L.g != null ? L.g : 5) / 100, fee = L.fp != null ? L.fp : 2, courier = L.k * (1 + 0.25 * (q - 1));
-      var gst = g > 0 ? (price - L.c) * g / (1 + g) * q : 0;
-      /* OMS "Shipping Charge Per Item" is PER UNIT -> x qty (owner 14 Nov 2026: qty-2 orders were ~Rs 60 too low vs OMS) */
-      return price * q + 0.85 * num(o.shippingCharge) * q - L.c * q - courier - fee * q - gst - 3;
+      var g = (L.g != null ? L.g : 5) / 100, fee = L.fp != null ? L.fp : 2;
+      var gst = g > 0 ? (price - L.c) * g / (1 + g) * q : 0, shipNet = num(o.shippingCharge) * q / (1 + g);
+      return { p: price * q + shipNet - L.c * q - fee * q - gst - 3, est: L.k * (1 + 0.25 * (q - 1)) };
+    }
+    /* Courier cost: the real ProShip freight of this shipment (proshipIndex r, saved at booking); not booked yet = the median
+       ProShip freight of this account's recent shipments; no ProShip data yet = the robot's estimate. */
+    var frMed = {}, frMedAt = 0;
+    function freightMedian(acct) {
+      if (Date.now() - frMedAt > 60000) {
+        frMedAt = Date.now(); var by = {};
+        Object.keys(idx || {}).forEach(function (k) { var v = idx[k]; if (v && v.r > 0 && v.s !== "cancelled") (by[v.ac || ""] = by[v.ac || ""] || []).push(v.r); });
+        frMed = {}; Object.keys(by).forEach(function (a) { var l = by[a].sort(function (x, y) { return x - y; }); if (l.length >= 5) frMed[a] = l[Math.floor(l.length / 2)]; });
+      }
+      return frMed[acct] || null;
     }
     function isSelfShipPending(o) {
       return /amazon/i.test(o.channel || "") && phone10(o.buyerPhone).length >= 10 && !String(o.awb || "").trim() &&
@@ -541,7 +554,11 @@
       var r = { id: id, o: o, sla: ymd(o.slaDate), items: list, isCod: isCod, cod: r2(cod > 0 ? cod : (isCod ? total : 0)), weight: weightFor(list), state: "ok", note: "Ready" };
       var omsLoss = typeof isOmsOrderLoss === "function" && live.some(function (x) { return isOmsOrderLoss(x); });
       r.omsProfit = r2(live.reduce(function (s, x) { return s + (parseFloat(x.profit) || 0); }, 0));
-      var ep = 0, all = true; live.forEach(function (x) { var p = lineProfit(x); if (p == null) all = false; else ep += p; });
+      var ep = 0, est = 0, all = true; live.forEach(function (x) { var p = lineProfit(x); if (p == null) all = false; else { ep += p.p; est = Math.max(est, p.est); } });
+      var shp = liveShip(id), med = freightMedian(account(o.channel));
+      r.freight = shp && shp.r > 0 ? shp.r : med != null ? med : est;
+      r.freightSrc = shp && shp.r > 0 ? "ProShip charge" : med != null ? "ProShip average" : "estimate";
+      ep -= r.freight;
       r.src = all ? "tool" : "oms";
       r.profit = all ? Math.round(ep) : r.omsProfit;
       var orderVal = live.reduce(function (s, x) { return s + num(x.price) * (num(x.qty) || 1) + num(x.shippingCharge); }, 0);
@@ -720,7 +737,8 @@
           '<td class="r"><div class="hub-pf ' + (r.profit < 0 ? "neg" : r.loss && !profitOk(r) ? "low" : "ok") + '"' +
             (r.src === "oms" ? ' title="No cost mapped for this product in the Amazon tool - OMS Guru profit shown"' : ' title="Our tool: price + 85% shipping - cost - courier - Amazon fees - GST on margin - Rs 3"') + ">" +
             (r.loss ? '<span class="nb-loss">LOSS \u00b7 ' + rs(r.profit) + "</span>" : rs(r.profit)) + "</div>" +
-            '<div class="hub-oms">' + (r.src === "tool" ? "OMS " + rs(r.omsProfit) : "our tool: no cost mapped") + "</div></td>" +
+            '<div class="hub-oms">' + (r.src === "tool" ? "OMS " + rs(r.omsProfit) : "our tool: no cost mapped") + "</div>" +
+            (r.src === "tool" ? '<div class="hub-oms" title="Courier cost used: ' + esc(r.freightSrc) + '">ship ' + rs(r.freight) + " \u00b7 " + (r.freightSrc === "ProShip charge" ? "ProShip" : r.freightSrc === "ProShip average" ? "ProShip avg" : "est.") + "</div>" : "") + "</td>" +
           '<td class="r"><input type="number" step="0.01" min="0.01" class="nb-w" data-i="' + i + '" value="' + r.weight + '"' + (sh ? " disabled" : "") + "></td>" +
           '<td><span class="nb-tag ' + tag + '">' + esc(note) + "</span>" + under + "</td></tr>";
       }).join("") : '<tr><td colspan="8" class="nb-muted" style="text-align:center;padding:22px !important;">' + (pool.length ? "No orders here." : "No self-ship orders waiting right now.") + "</td></tr>";

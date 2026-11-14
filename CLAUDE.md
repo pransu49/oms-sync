@@ -200,6 +200,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   (ids mode: ProShip labels only, SLA ignored, no picklist/Telegram; file "Label <order>.pdf" / "Self-Ship Labels N orders.pdf"). ~25 reads per job.
   Profit check vs OMS (14 Nov 2026, `profit-diag.yml` manual, read-only ~30 reads): OMS shippingCharge is PER UNIT (x qty, fixed); rest of the gap =
   cost source (LOTS mapping vs OMS Cost of Goods; OMS cogs 0 / wrong pack mappings) + our 15% shipping holdback + Rs 3 by design.
+  COURIER + SHIPPING in Self-Ship profit (owner 14 Nov 2026 "why 15% shipping margin, we have ProShip's charge"): buyer shipping counts
+  WITHOUT GST at the item's GST rate (ship/(1+g), was flat 0.85); courier taken ONCE per order = ProShip freight `r` (priceAfterTax of the
+  cheapest courier at the weight actually sent, saved by proship.js ship into proshipIndex) -> else median `r` of the account (5+ shipments)
+  -> else listingIndex estimate k. Shown under the profit as "ship Rs x · ProShip / ProShip avg / est.". (Price robot in spapi-sync still uses 0.85.)
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
   "Rejected · N" in the Self-Ship top bar = console's tracking-push alert (OMS 'stuck' Shipped-without-AWB + Amazon confirm errors), click = reasons.
   Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).

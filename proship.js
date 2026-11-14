@@ -309,7 +309,11 @@ async function modeShip() {
           // ATS rule: ask ProShip's cheapest courier with the real weight; ATS -> send 450 g
           const realG = b.body.shipment_detail[0].item_weight; let atsSent = false, guess = null;
           try { guess = await cheapestCourier(b.body); } catch (e) { console.log('  rate check failed, real weight kept:', e.message); }
-          if (guess && isAts(guess.name)) { b.body.shipment_detail[0].item_weight = ATS_GRAMS; atsSent = true; }
+          if (guess && isAts(guess.name)) {
+            b.body.shipment_detail[0].item_weight = ATS_GRAMS; atsSent = true;
+            // real freight at the weight we send (owner 14 Nov 2026: profit must use ProShip's actual shipping charge)
+            try { const g2 = await cheapestCourier(b.body); if (g2 && isAts(g2.name)) guess = g2; } catch (e) {}
+          }
           try {
             const r = await api('POST', '/api/order/create', b.body);
             const x = (r.json && r.json.result) || {};
@@ -324,6 +328,8 @@ async function modeShip() {
               if (courier && atsSent && !isAts(courier)) res.warn = `Sent at ${ATS_GRAMS} g for ATS, but ProShip gave ${courier} — real weight ${realG} g`;
               if (courier && !atsSent && isAts(courier)) res.warn = `ProShip gave ATS but the real weight ${realG} g was sent (not ${ATS_GRAMS} g)`;
               idx[id] = fresh[id] = { a: awb, c: courier, s: 'ok', st: clip(x.orderStatus || 'ORDER_PLACED', 40), t: Date.now(), ac: b.acct };
+              // r = ProShip freight incl. GST for the courier it assigned (only when it is the courier we priced)
+              if (guess && guess.price > 0 && (!courier || isAts(courier) === isAts(guess.name))) idx[id].r = fresh[id].r = guess.price;
             }
             else res = { e: apiOk(r) ? 'ProShip accepted the order but gave no AWB yet — check ProShip → Unprocessed Shipments' : apiMsg(r) };
           } catch (e) { res = { e: clip(e.message, 200) }; }
