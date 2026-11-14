@@ -519,7 +519,8 @@
       var price = num(o.price), q = Math.max(1, num(o.qty) || 1); if (!(price > 0)) return null;
       var g = (L.g != null ? L.g : 5) / 100, fee = L.fp != null ? L.fp : 2, courier = L.k * (1 + 0.25 * (q - 1));
       var gst = g > 0 ? (price - L.c) * g / (1 + g) * q : 0;
-      return price * q + 0.85 * num(o.shippingCharge) - L.c * q - courier - fee * q - gst - 3;
+      /* OMS "Shipping Charge Per Item" is PER UNIT -> x qty (owner 14 Nov 2026: qty-2 orders were ~Rs 60 too low vs OMS) */
+      return price * q + 0.85 * num(o.shippingCharge) * q - L.c * q - courier - fee * q - gst - 3;
     }
     function isSelfShipPending(o) {
       return /amazon/i.test(o.channel || "") && phone10(o.buyerPhone).length >= 10 && !String(o.awb || "").trim() &&

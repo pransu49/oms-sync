@@ -16,7 +16,7 @@ const nid = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').replace(
     const L = ix.skus[sku]; if (!L || L.c == null || L.k == null) continue;
     const price = num(o.price), q = Math.max(1, num(o.qty) || 1), ship = num(o.shippingCharge), g = (L.g ?? 5) / 100, fee = L.fp ?? 2;
     const courier = L.k * (1 + 0.25 * (q - 1)), gst = g > 0 ? (price - L.c) * g / (1 + g) * q : 0;
-    const ours = price * q + 0.85 * ship - L.c * q - courier - fee * q - gst - 3, om = num(o.profit), cogs = num(o.cogs);
+    const ours = price * q + 0.85 * ship * q - L.c * q - courier - fee * q - gst - 3, om = num(o.profit), cogs = num(o.cogs);
     rows.push({ id: nid(o.channelOrderId), a, sku, nm: String(o.productName || '').slice(0, 40), price, q, ship, total: num(o.total), c: L.c, cogs, k: L.k, fee, g: L.g, gst: Math.round(gst), ours: Math.round(ours), oms: Math.round(om), d: Math.round(ours - om) });
   }
   const avg = (f) => Math.round(rows.reduce((s, r) => s + f(r), 0) / Math.max(1, rows.length) * 10) / 10;
@@ -27,6 +27,7 @@ const nid = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').replace(
   console.log('cogs 0 count', rows.filter((r) => !r.cogs).length, ' |cost-cogs|>20%', rows.filter((r) => r.cogs && Math.abs(r.c * r.q - r.cogs) > 0.2 * r.cogs).length);
   rows.sort((x, y) => Math.abs(y.d) - Math.abs(x.d));
   rows.slice(0, 40).forEach((r) => console.log('ROW', JSON.stringify(r)));
-  const byQ = rows.filter((r) => r.q > 1); console.log('qty>1 rows', byQ.length, 'avg diff', Math.round(byQ.reduce((s, r) => s + r.d, 0) / Math.max(1, byQ.length)));
+  const byQ = rows.filter((r) => r.q > 1); const q1 = rows.filter((r) => r.q === 1); console.log('qty=1 rows', q1.length, 'avg diff', Math.round(q1.reduce((s, r) => s + r.d, 0) / Math.max(1, q1.length)), 'avg cost diff', Math.round(q1.reduce((s, r) => s + (r.c - r.cogs), 0) / Math.max(1, q1.length)));
+  console.log('qty>1 rows', byQ.length, 'avg diff', Math.round(byQ.reduce((s, r) => s + r.d, 0) / Math.max(1, byQ.length)));
   process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
