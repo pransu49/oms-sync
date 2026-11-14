@@ -487,7 +487,7 @@
     /* loss rule (same amount as the red Loss bar): flagged orders ship only when profit is above it */
     window.addEventListener("aikm-loss-limit", function () { if (typeof buildPool === "function") setTimeout(buildPool, 0); });
     function lossLimit() { try { var v = localStorage.getItem("aikm_loss_above"); return v === null ? "40" : v; } catch (e) { return "40"; } }
-    function profitOk(r) { var l = lossLimit(); return l !== "" && r.profit > +l; }
+    function profitOk(r) { var l = lossLimit(); return l !== "" && (r.lossVal != null ? r.lossVal : r.profit) > +l; }
     function isHold(r) { return r.state !== "ok" || (r.loss && !profitOk(r)); }
     function poolView() { return view === "toship" || view === "hold" || view === "failed"; }
     /* owner 14 Nov 2026: shipped orders leave To ship at once (they are in Shipped); orders the last ship job could NOT ship
@@ -611,7 +611,10 @@
       /* owner 14 Nov 2026 ("loss orders are not reflecting"): a loss order = profit BELOW the owner's own amount on the loss bar
          ("Ship them only when profit is above Rs [40]", localStorage aikm_loss_above); bar empty = the robot's rule (Rs 15 / 10% of order) */
       var lim = lossLimit(), cut = lim === "" ? Math.min(15, 0.1 * orderVal) : +lim;
-      r.loss = all ? r.profit < cut : (omsLoss || r.omsProfit < cut);
+      /* owner 14 Nov 2026 (later): "calculate profit on OMS - loss below 40" -> the hold / loss decision uses OMS Guru's profit;
+         our tool's profit stays on screen (big) for comparison */
+      r.lossVal = Math.round(r.omsProfit || 0);
+      r.loss = omsLoss || r.lossVal < cut;
       var missing = [];
       if (!String(o.buyerAddress1 || "").trim() && !String(o.buyerAddress2 || "").trim()) missing.push("address");
       if (!/^\d{6}$/.test(String(o.buyerPincode || "").trim())) missing.push("pincode");
@@ -694,7 +697,7 @@
       }).sort(function (a, b) {
         if (pSort) return pSort * ((a.profit || 0) - (b.profit || 0)) || a.id.localeCompare(b.id);
         /* default: loss / low-profit orders on top, lowest profit first (owner 14 Nov 2026); the rest by SLA date */
-        return (b.loss - a.loss) || (a.loss && b.loss ? (a.profit || 0) - (b.profit || 0) : 0) ||
+        return (b.loss - a.loss) || (a.loss && b.loss ? (a.lossVal || 0) - (b.lossVal || 0) : 0) ||
           (a.sla || "9999").localeCompare(b.sla || "9999") || account(a.o.channel).localeCompare(account(b.o.channel)) || a.id.localeCompare(b.id);
       });
       lastRows.forEach(function (r) {
@@ -762,10 +765,10 @@
     }
     function render() {
       var sel = 0, bad = 0, done = 0, loss = 0, minus = 0;
-      var selP = 0; lastRows.forEach(function (r) { if (r.sel) { sel++; selP += r.profit || 0; } if (r.state !== "ok") bad++; if (r.ship) done++; if (r.loss) loss++; if (r.profit < 0) minus++; });
+      var selP = 0; lastRows.forEach(function (r) { if (r.sel) { sel++; selP += r.profit || 0; } if (r.state !== "ok") bad++; if (r.ship) done++; if (r.loss) loss++; if (r.lossVal < 0) minus++; });
       $("psKpis").innerHTML =
         kpi(view === "hold" ? "On hold" : "Orders to ship", lastRows.length, "") + kpi("Selected to ship", sel, "nb-ok") + kpi("Expected profit (selected)", rs(Math.round(selP)), selP < 0 ? "nb-bad" : "nb-ok") +
-        kpi(lossLimit() === "" ? "Loss / low profit" : "Profit below \u20b9" + lossLimit(), loss, loss ? "nb-bad" : "", minus + " of them are a real loss (profit in minus)") + kpi("Need a fix", bad, bad ? "nb-bad" : "") + avgShipKpi();
+        kpi(lossLimit() === "" ? "Loss / low profit" : "OMS profit below \u20b9" + lossLimit(), loss, loss ? "nb-bad" : "", minus + " of them are a real loss in OMS (profit in minus)") + kpi("Need a fix", bad, bad ? "nb-bad" : "") + avgShipKpi();
       var body = $("psBody");
       body.innerHTML = lastRows.length ? lastRows.map(function (r, i) {
         var o = r.o, ok = r.state === "ok", sh = r.ship, f = inFile[r.id], err = jobRes[r.id] && jobRes[r.id].e;
@@ -790,10 +793,10 @@
           '<td class="ps-items">' + r.items.map(function (it, k) { return "<div>" + esc(it.name) + " <b>\u00d7 " + it.qty + '</b> <span class="nb-muted nb-small">' + rs(it.price) + "</span>" +
             ' <button type="button" class="hub-map' + (it.mapped ? "" : " need") + '" data-i="' + i + '" data-k="' + k + '" title="' + (it.mapped ? "Change the mapping on the Amazon page" : "No cost mapped - map it on the Amazon page") + '">' +
             (it.mapped ? '<i class="ti ti-link"></i> Remap' : '<i class="ti ti-link-plus"></i> Map') + "</button></div>"; }).join("") + "</td>" +
-          '<td class="r"><div class="hub-pf ' + (r.profit < 0 ? "neg" : r.loss && !profitOk(r) ? "low" : "ok") + '"' +
+          '<td class="r"><div class="hub-pf ' + (r.src === "tool" && r.profit < 0 ? "neg" : "ok") + '"' +
             (r.src === "oms" ? ' title="No cost mapped for this product in the Amazon tool - OMS Guru profit shown"' : ' title="Our tool: price + 85% shipping - cost - courier - Amazon fees - GST on margin - Rs 3"') + ">" +
-            (r.loss ? '<span class="nb-loss">LOSS \u00b7 ' + rs(r.profit) + "</span>" : rs(r.profit)) + "</div>" +
-            '<div class="hub-oms">' + (r.src === "tool" ? "OMS " + rs(r.omsProfit) : "our tool: no cost mapped") + "</div>" +
+            (r.src === "tool" ? rs(r.profit) : '<span class="nb-muted nb-small">no cost</span>') + "</div>" +
+            '<div class="hub-oms" title="OMS Guru profit - decides loss / On hold">' + (r.loss ? '<span class="nb-loss">LOSS \u00b7 ' + rs(r.lossVal) + "</span>" : "OMS " + rs(r.lossVal)) + "</div>" +
             (r.src === "tool" ? '<div class="hub-oms" title="Courier cost used: ' + esc(r.freightSrc) + '">ship ' + rs(r.freight) + " \u00b7 " + (r.freightSrc === "ProShip charge" ? "ProShip" : r.freightSrc === "ProShip average" ? "ProShip avg" : "est.") + "</div>" : "") + "</td>" +
           '<td class="r"><input type="number" step="0.01" min="0.01" class="nb-w" data-i="' + i + '" value="' + r.weight + '"' + (sh ? " disabled" : "") + "></td>" +
           '<td><span class="nb-tag ' + tag + '">' + esc(note) + "</span>" + under + "</td></tr>";
