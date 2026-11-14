@@ -1175,7 +1175,7 @@
               obs.disconnect();
               setTimeout(function () {
                 var after = recOf(asin), saved = after !== before && after !== "null", c = saved ? costOf(asin) : { cost: null, name: "" };
-                tell({ type: "close", asin: asin, acct: acct || spapiCurrentAccount, saved: saved, cost: c.cost, name: c.name });
+                tell({ type: "close", asin: asin, acct: acct || spapiCurrentAccount, saved: saved, cost: c.cost, name: c.name, wasSaved: before !== "null" });
               }, 250);
             });
             obs.observe(mm, { attributes: true, attributeFilter: ["style"] }); lastObs = obs;
@@ -1188,6 +1188,29 @@
     })();
   }
   window.aikmOpenMap = openFor;
+  /* Owner 14 Nov 2026: "it is showing mapped but it's reflecting not mapped". When an ASIN has NO saved mapping the
+     window pre-fills a SUGGESTED product - it looks mapped but nothing is saved until "Save mapping" is pressed, and the
+     robots / Self-Ship / profit only use saved mappings. Show that clearly in the window. */
+  (function wrap(n) {
+    if (typeof openSpapiMatchModal !== "function") return void (n < 60 && setTimeout(function () { wrap(n + 1); }, 1000));
+    if (openSpapiMatchModal.__aikmNote) return;
+    var orig = openSpapiMatchModal;
+    var f = function (asin) {
+      var r = orig.apply(this, arguments);
+      try {
+        var head = document.querySelector("#spapiMatchModal .admin-modal-head"), old = document.getElementById("mmSavedNote");
+        old && old.remove();
+        var saved = !!(STORE.asinLotsMap && STORE.asinLotsMap[asin]), sug = !saved && typeof spMatchSel !== "undefined" && spMatchSel && spMatchSel.length;
+        if (head) head.insertAdjacentHTML("beforeend", saved
+          ? '<div id="mmSavedNote" style="margin-top:8px;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#1E7A4B;background:#E6F3EC;border-radius:8px;padding:5px 10px">\u2713 Saved mapping</div>'
+          : '<div id="mmSavedNote" style="margin-top:8px;display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:#A86A12;background:#FBF1DF;border:1px solid #EBDDBA;border-radius:8px;padding:5px 10px">\u26a0 ' +
+            (sug ? "Suggested match only \u2014 NOT saved yet. Check it and press Save mapping." : "Not mapped yet \u2014 pick the product and press Save mapping.") + "</div>");
+      } catch (e) {}
+      return r;
+    };
+    f.__aikmNote = true;
+    try { openSpapiMatchModal = f; } catch (e) {} window.openSpapiMatchModal = f;
+  })(0);
   try {
     var p = new URLSearchParams(location.search), a = p.get("map");
     if (a) {

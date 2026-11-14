@@ -478,6 +478,8 @@
       var skus = ix.skus || {}, sku = o.sku;
       if (!skus[sku]) { var ol = (ix.orders || {})[nid(o.channelOrderId)] || []; if (ol.length === 1) sku = ol[0].s; }
       var L = skus[sku] || null, asin = String((L && L.a) || o.asin || "").toUpperCase(), P = mapPatch(acctKey(o.channel), asin, ix);
+      /* old / relisted SKU without a cost: use another SKU of the SAME ASIN that has one (mapping is saved per ASIN) */
+      if ((!L || L.c == null) && asin) { for (var k2 in skus) { var S2 = skus[k2]; if (S2 && S2.c != null && String(S2.a || "").toUpperCase() === asin) { L = Object.assign({}, S2, L || {}, { c: S2.c, k: S2.k, g: S2.g, fp: S2.fp }); break; } } }
       if (!P) return L;
       return Object.assign({ a: asin, g: 5, fp: 2 }, L || {}, { c: P.c, k: L && L.k != null ? L.k : 45 });
     }
@@ -831,7 +833,7 @@
           try { localStorage.setItem("aikm_map_patch", JSON.stringify(all)); } catch (e) {}
           toastHub(ev.cost != null ? "✓ Mapping saved · cost ₹" + (Math.round(ev.cost * 100) / 100) + " · profit updated" : "✓ Mapping saved · profit updates at the next SP-API sync");
           setTimeout(buildPool, 0);
-        }
+        } else if (!ev.wasSaved) toastHub("Not saved \u2014 the product shown was only a suggestion. Open Map again and press Save mapping.");
       }
     };
     function toastHub(msg) {

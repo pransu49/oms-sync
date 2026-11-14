@@ -188,6 +188,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   open / close {saved, cost per unit} / error. Saves = the Amazon page's own save (spapiAsinLotsMap, overflow ...2). A saved cost is
   applied in Self-Ship at once via localStorage `aikm_map_patch` {"acct|ASIN":{c,at}} until listingIndex is newer (max 6 h).
   Firebase: the Amazon page's normal load, once per console visit and only when Map is clicked.
+  SUGGESTED vs SAVED (owner 14 Nov 2026 "showing mapped but reflecting not mapped"): with no saved record the mapping window pre-fills a
+  SUGGESTED product; nothing is saved (robots / listingIndex / profit use only saved records) until "Save mapping". The same block wraps
+  openSpapiMatchModal to show "Suggested match only - NOT saved yet" / "Saved mapping" under the title (everywhere on the Amazon page);
+  Self-Ship toasts when the window closes without saving. Self-Ship also uses the cost of another SKU of the same ASIN (old/relisted SKUs).
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
   "Rejected · N" in the Self-Ship top bar = console's tracking-push alert (OMS 'stuck' Shipped-without-AWB + Amazon confirm errors), click = reasons.
   Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).
