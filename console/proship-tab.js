@@ -154,6 +154,8 @@
       "html#aikm body #subtab-selfship :is(.sn-pushinfo,.sn-amzinfo){max-width:190px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px;color:var(--x-muted);}" +
       "html#aikm body #subtab-selfship :is(button,.sn-btn,.pe-btn){height:32px;min-height:32px !important;border-radius:9px !important;}" +
       "@media (max-width:1300px){html#aikm body #aikmShipHub .hub-search input{width:210px !important;}html#aikm body #aikmShipHub .hub-tools select{width:140px !important;}}" +
+      "html#aikm body #aikmShipHub .hub-lbl{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;color:#0F1E35;padding:5px 10px;border-radius:8px;border:1px solid var(--x-line);background:#fff;white-space:nowrap;}" +
+      "html#aikm body #aikmShipHub .hub-lbl:hover{background:#0F1E35;color:#fff;border-color:#0F1E35;}html#aikm body #aikmShipHub .hub-lbl[disabled]{opacity:.6;pointer-events:none;}" +
       "html#aikm body #aikmShipHub .hub-map{all:unset;cursor:pointer;font-size:11px;font-weight:600;color:var(--x-muted);margin-left:6px;padding:1px 7px;border-radius:6px;border:1px solid var(--x-line);white-space:nowrap;}" +
       "html#aikm body #aikmShipHub .hub-map.need{color:#1A1405;background:#D4AF37;border-color:#D4AF37;}" +
       "@media (max-width:900px){html#aikm body .ps-grid{grid-template-columns:1fr 1fr;}}" +
@@ -329,7 +331,7 @@
         '<div id="psResult" style="display:none;">' +
           '<div class="nb-kpis" id="psKpis"></div>' +
           '<div id="hubShipWrap" style="display:none;"><div class="table-scroll"><table class="data" id="hubShipTable"><thead><tr>' +
-            '<th>SLA</th><th>Order</th><th>Buyer</th><th>Items</th><th>AWB &amp; courier</th><th>Status</th><th>Booked</th><th></th>' +
+            '<th style="width:28px;"><input type="checkbox" id="hubShipAll" title="Select all (for bulk labels)"></th><th>SLA</th><th>Order</th><th>Buyer</th><th>Items</th><th>AWB &amp; courier</th><th>Status</th><th>Booked</th><th>Label</th><th></th>' +
           '</tr></thead><tbody id="hubShipBody"></tbody></table></div></div>' +
           '<div id="psPoolWrap"><div class="table-scroll"><table class="data" id="psTable"><thead><tr>' +
             '<th style="width:28px;"><input type="checkbox" id="psAll" title="Select all"></th><th>SLA</th><th>Order</th><th>Buyer &amp; address</th><th>Items</th><th class="r hub-sort" id="hubPSort" title="Sort by profit">Profit <i class="ti ti-arrows-sort" id="hubPSortI"></i><div class="hub-sub">our tool \u00b7 OMS</div></th><th class="r">Weight</th><th>Status</th>' +
@@ -343,6 +345,7 @@
       "</div>";
     tpanel.appendChild(panel);
     function $(id) { return document.getElementById(id); }
+    var shipSel = {}, shipShown = [];   // Shipped tabs: orders ticked for bulk labels
 
     var MAP = { psName: "name", psPhone: "phone", psEmail: "email", psAddr: "address", psCity: "city", psState: "state", psPin: "pin", psGst: "gstin", psW: "weight", psL: "l", psB: "b", psH: "h" };
     function fillSettings() {
@@ -591,7 +594,7 @@
       var t = todayYmd();
       var q = selQ.toLowerCase().replace(/\s+/g, " ").trim();
       if (!poolView()) { renderShip(q, t); return; }
-      $("hubShipWrap").style.display = "none"; $("psPoolWrap").style.display = ""; $("psShip").style.display = "";
+      $("hubShipWrap").style.display = "none"; $("psPoolWrap").style.display = ""; $("psShip").style.display = ""; lblBtnText();
       lastRows = viewBase().filter(function (r) {
         if (selAcct && account(r.o.channel) !== selAcct) return false;
         if (q) {
@@ -638,6 +641,7 @@
       $("hubShipBody").innerHTML = rows.length ? rows.slice(0, 1500).map(function (r) {
         var o = r.o, v = r.v, st = prettySt(v), cls = r.stage === "delivered" ? "d" : r.stage === "rto" ? "r" : /pickup pending/i.test(st) ? "" : "t";
         return "<tr>" +
+          '<td><input type="checkbox" class="hub-lsel" data-id="' + esc(r.id) + '"' + (shipSel[r.id] ? " checked" : "") + "></td>" +
           '<td><div class="ps-sla">' + (r.sla ? esc(niceDay(r.sla)) : '<span class="nb-muted">\u2014</span>') + "</div></td>" +
           '<td><div class="cx-awb">' + esc(r.id) + '</div><div class="nb-muted nb-small">' + esc(r.acct) + "</div></td>" +
           '<td><div class="nb-name">' + esc(o.buyerName || "") + '</div><div class="nb-muted nb-small">' + esc([o.buyerCity, o.buyerPincode].filter(Boolean).join(" \u00b7 ")) + "</div></td>" +
@@ -645,11 +649,18 @@
           '<td><div class="cx-awb">' + esc(v.a) + '</div><div class="nb-muted nb-small">' + esc(v.c || "ProShip") + "</div></td>" +
           '<td><span class="hub-st ' + cls + '">' + esc(st) + "</span></td>" +
           '<td class="nb-muted nb-small">' + (v.t ? esc(when(v.t)) : "") + "</td>" +
+          '<td><button type="button" class="hub-lbl" data-id="' + esc(r.id) + '" title="Download this label (PDF)"><i class="ti ti-printer"></i> Label</button></td>' +
           "<td>" + (r.stage === "shipped" && /pickup pending|booked|manifest/i.test(st) ? '<button type="button" class="ps-x" data-awb="' + esc(v.a) + '" data-id="' + esc(r.id) + '">Cancel</button>' : "") + "</td></tr>";
-      }).join("") : '<tr><td colspan="8" class="nb-muted" style="text-align:center;padding:22px !important;">Nothing here.</td></tr>';
+      }).join("") : '<tr><td colspan="10" class="nb-muted" style="text-align:center;padding:22px !important;">Nothing here.</td></tr>';
+      shipShown = rows.slice(0, 1500).map(function (r) { return r.id; });
+      Object.keys(shipSel).forEach(function (k) { if (shipShown.indexOf(k) < 0) delete shipSel[k]; });
+      $("hubShipBody").querySelectorAll(".hub-lsel").forEach(function (c) { c.addEventListener("change", function () { if (c.checked) shipSel[c.dataset.id] = 1; else delete shipSel[c.dataset.id]; lblBtnText(); }); });
+      $("hubShipBody").querySelectorAll(".hub-lbl").forEach(function (b) { b.addEventListener("click", function () { labelsFor([b.dataset.id], b); }); });
+      var all = $("hubShipAll"); if (all) all.checked = shipShown.length > 0 && shipShown.every(function (k) { return shipSel[k]; });
+      lblBtnText();
       $("hubShipBody").querySelectorAll(".ps-x").forEach(function (b) { b.addEventListener("click", function () { cancelShip(b.dataset.id, b.dataset.awb); }); });
       $("psResult").style.display = "block";
-      $("psNote").textContent = view === "shipped" ? "Labels: pick an SLA date above, then Download labels." : "";
+      $("psNote").textContent = "Labels: tick orders (or one Label button), or pick an SLA date chip and press Download labels.";
     }
     function kpi(l, n, cls) { return '<div class="nb-kpi ' + cls + '"><div class="nb-kpi-n">' + n + '</div><div class="nb-kpi-l">' + l + "</div></div>"; }
     function render() {
@@ -861,8 +872,23 @@
     }
 
     /* ---------- labels (the normal label robot: NimbusPost + ProShip labels of the SLA date, product name + QTY printed) ---------- */
-    var lblUnsub = null, lblBusy = false;
+    var lblUnsub = null, lblBusy = false, lblRowBtn = null;
+    function lblBtnText() {
+      var b = $("psLabels"); if (!b) return;
+      var n = Object.keys(shipSel).length, onShip = view !== "toship" && view !== "hold";
+      b.innerHTML = '<i class="ti ti-printer"></i> ' + (onShip && n ? "Download " + n + " label" + (n > 1 ? "s" : "") : "Download labels (SLA date)");
+    }
+    /* Labels for chosen orders (owner 14 Nov 2026: "download label one by one and in bulk"): same label robot
+       (nimbus-labels.yml), job labelJobs/<id> {ids:[...]} -> one PDF with product names stamped. ~25 Firebase reads per job. */
+    function labelsFor(ids, rowBtn) {
+      ids = (ids || []).filter(Boolean);
+      if (!ids.length) return;
+      if (ids.length > 2000) { alert("Please choose up to 2,000 orders at a time."); return; }
+      runLabelJob({ ids: ids, sla: "", acct: "" }, ids.length === 1 ? "Label " + ids[0] : ids.length + " labels", rowBtn);
+    }
     function labels() {
+      var n = Object.keys(shipSel).length;
+      if (n && view !== "toship" && view !== "hold") return labelsFor(Object.keys(shipSel));
       if (lblBusy) return;
       var d = db(), sla = /^\d{4}-\d{2}-\d{2}$/.test(selDate) ? selDate : "";
       if (!sla) { alert("Labels are made per SLA date.\n\nClick one date chip above (e.g. \u201cToday\u201d), then Download labels."); return; }
@@ -890,7 +916,43 @@
         .catch(function (e) { lblBusy = false; show("psLblStatus", "Could not start: " + esc(e.message || e), "bad"); });
     }
 
+    function runLabelJob(job, title, rowBtn) {
+      var d = db();
+      if (!d) { alert("Still connecting \u2014 try again in a few seconds."); return; }
+      if (typeof window.aikmGhDispatch !== "function") { alert("Please reload the console (Ctrl + Shift + R) and try again."); return; }
+      if (lblBusy) { alert("A label download is already running \u2014 please wait a moment."); return; }
+      lblBusy = true; lblRowBtn = rowBtn || null;
+      if (lblRowBtn) { lblRowBtn.disabled = true; lblRowBtn.innerHTML = '<i class="ti ti-loader"></i> Making\u2026'; }
+      var head = "<b>" + esc(title) + "</b> \u2014 ", fresh = true;
+      show("psLblStatus", head + "starting on the server (about 1 minute)\u2026", "run");
+      var done = function () { lblBusy = false; if (lblRowBtn) { lblRowBtn.disabled = false; lblRowBtn.innerHTML = '<i class="ti ti-printer"></i> Label'; lblRowBtn = null; } };
+      var ref = d.collection("labelJobs").doc();
+      ref.set(Object.assign({ onlyNew: false, status: "queued", step: "Waiting for the server\u2026", createdAt: firebase.firestore.FieldValue.serverTimestamp() }, job))
+        .then(function () {
+          if (lblUnsub) lblUnsub();
+          lblUnsub = ref.onSnapshot(function (doc) {
+            if (!doc.exists) return;
+            var j = doc.data(), st = j.status || "queued";
+            if (st === "queued" || st === "running") { show("psLblStatus", head + esc(j.step || "Starting\u2026"), "run"); return; }
+            done();
+            if (st === "failed") { show("psLblStatus", head + "could not make the labels. " + esc(j.step || ""), "bad"); return; }
+            if (j.url) {
+              show("psLblStatus", head + "<b>" + j.count + ' label' + (j.count > 1 ? "s" : "") + ' ready</b> <a class="ps-dl" href="' + esc(j.url) + '" rel="noopener"><i class="ti ti-download"></i> Download PDF</a>' +
+                (j.noLabel && j.noLabel.length ? '<div class="nb-muted nb-small" style="margin-top:6px;">' + j.noLabel.length + " label(s) not returned by ProShip: " + esc(j.noLabel.slice(0, 5).join(", ")) + "</div>" : "") +
+                (j.missingCount ? '<div class="nb-muted nb-small" style="margin-top:6px;">' + j.missingCount + " order(s) have no ProShip shipment: " + esc((j.missing || []).slice(0, 5).join(", ")) + "</div>" : ""), "ok");
+              if (fresh) { fresh = false; var x = document.createElement("a"); x.href = j.url; x.rel = "noopener"; document.body.appendChild(x); x.click(); setTimeout(function () { x.remove(); }, 500); }
+            } else show("psLblStatus", head + esc(j.step || "No labels."), "");
+          }, function () { done(); });
+          return window.aikmGhDispatch("nimbus-labels.yml", { job_id: ref.id });
+        })
+        .catch(function (e) { done(); show("psLblStatus", "Could not start: " + esc(e.message || e), "bad"); });
+    }
+
     $("psShip").addEventListener("click", ship);
+    $("hubShipAll").addEventListener("change", function () {
+      var on = this.checked; shipShown.forEach(function (k) { if (on) shipSel[k] = 1; else delete shipSel[k]; });
+      $("hubShipBody").querySelectorAll(".hub-lsel").forEach(function (c) { c.checked = on; }); lblBtnText();
+    });
     $("hubPSort").addEventListener("click", function () {
       pSort = pSort === 0 ? 1 : pSort === 1 ? -1 : 0;
       $("hubPSortI").className = "ti " + (pSort === 1 ? "ti-sort-ascending" : pSort === -1 ? "ti-sort-descending" : "ti-arrows-sort");

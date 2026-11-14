@@ -53,19 +53,24 @@ def account(ch):
 
 
 # ---------------------------------------------------------------- 1. orders from OMS Guru
-def oms_orders(sla, acct):
+def oms_orders(sla, acct, ids=None):
+    """ids (set of Amazon order ids) = label job for chosen orders (owner 14 Nov 2026: one-by-one / bulk) - SLA date ignored."""
     by = {}
     for d in omsdb.collection('aikm_admin').document('omsOrders').collection('chunks').stream():
         for o in (d.to_dict() or {}).get('orders') or []:
             if not re.search('amazon', str(o.get('channel') or ''), re.I):
                 continue
-            if ymd(o.get('slaDate')) != sla:
-                continue
-            if acct and account(o.get('channel')) != acct:
-                continue
             oid = nid(o.get('channelOrderId'))
             if not oid:
                 continue
+            if ids is not None:
+                if oid not in ids:
+                    continue
+            else:
+                if ymd(o.get('slaDate')) != sla:
+                    continue
+                if acct and account(o.get('channel')) != acct:
+                    continue
             by.setdefault(oid, []).append(o)
     out = {}
     for oid, lines in by.items():
@@ -395,15 +400,19 @@ def main():
     sla = (job.get('sla') or os.environ.get('SLA') or '').strip()
     acct = (job.get('acct') if JOB_ID else os.environ.get('ACCT')) or ''
     only_new = False  # always include every label — re-downloading the same SLA date must always work
-    if not re.match(r'^\d{4}-\d{2}-\d{2}$', sla):
+    pick_ids = set(nid(x) for x in (job.get('ids') or []) if nid(x)) if JOB_ID else set()
+    if not pick_ids and not re.match(r'^\d{4}-\d{2}-\d{2}$', sla):
         raise RuntimeError('No SLA date given')
     note('running', step='Reading OMS Guru orders…', sla=sla, acct=acct)
 
-    orders = oms_orders(sla, acct)
+    orders = oms_orders(sla, acct, pick_ids or None)
     if not orders:
-        note('done', step='No orders for this SLA date.', count=0, url='', missing=[]); return
-    note('running', step=f'{len(orders)} orders · finding their NimbusPost shipments…')
-    ship = nimbus_shipments(set(orders), sla)
+        note('done', step='These orders were not found in OMS Guru (or are cancelled).' if pick_ids else 'No orders for this SLA date.', count=0, url='', missing=[]); return
+    if pick_ids:   # chosen orders: ProShip only (NimbusPost is switched off)
+        ship = {}
+    else:
+        note('running', step=f'{len(orders)} orders · finding their NimbusPost shipments…')
+        ship = nimbus_shipments(set(orders), sla)
     print(f'{len(orders)} OMS orders, {len(ship)} shipped in NimbusPost')
     ps_count = 0
     try:
@@ -466,16 +475,20 @@ def main():
     blob = bucket.blob(name)
     blob.upload_from_string(data, content_type='application/pdf')
     stamp_ist = dt.datetime.now(IST).strftime('%d-%m-%Y %H%M')
+    fname = (f'Label {final[0]} ({stamp_ist}).pdf' if len(final) == 1 else f'Self-Ship Labels {len(final)} orders ({stamp_ist}).pdf') if pick_ids \
+        else f"{'Self-Ship' if ps_count else 'NimbusPost'} Labels SLA {sla} ({stamp_ist}).pdf"
     url = blob.generate_signed_url(version='v4', expiration=dt.timedelta(hours=24), method='GET',
-                                   response_disposition=f'attachment; filename="{'Self-Ship' if ps_count else 'NimbusPost'} Labels SLA {sla} ({stamp_ist}).pdf"')
+                                   response_disposition=f'attachment; filename="{fname}"')
     now = int(time.time() * 1000)
     keep = {k: v for k, v in printed.items() if now - int(v) < 20 * 864e5}
     for k in final:
         keep[k] = now
     if JOB_ID:  # manual test runs don't count as printed
         printed_ref.set({'ids': keep})
-    # picklist (premium PDF made by picklist-pdf.js in the next workflow step -> Telegram)
+    # picklist (premium PDF made by picklist-pdf.js in the next workflow step -> Telegram) - not for one-by-one / chosen-order labels
     try:
+        if pick_ids:
+            raise RuntimeError('chosen orders - no picklist')
         rows = {}
         for k in final:
             for n, q in orders[k]['items']:

@@ -192,6 +192,9 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   SUGGESTED product; nothing is saved (robots / listingIndex / profit use only saved records) until "Save mapping". The same block wraps
   openSpapiMatchModal to show "Suggested match only - NOT saved yet" / "Saved mapping" under the title (everywhere on the Amazon page);
   Self-Ship toasts when the window closes without saving. Self-Ship also uses the cost of another SKU of the same ASIN (old/relisted SKUs).
+  LABELS one-by-one + bulk (owner 14 Nov 2026): Shipped / Delivered / RTO tabs have a tick box + "Label" button per row; the bottom
+  button = "Download N labels" when rows are ticked, else the SLA-date label run. Job labelJobs/<id> {ids:[orderIds]} -> nimbus_labels.py
+  (ids mode: ProShip labels only, SLA ignored, no picklist/Telegram; file "Label <order>.pdf" / "Self-Ship Labels N orders.pdf"). ~25 reads per job.
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
   "Rejected · N" in the Self-Ship top bar = console's tracking-push alert (OMS 'stuck' Shipped-without-AWB + Amazon confirm errors), click = reasons.
   Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).
