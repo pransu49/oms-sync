@@ -80,8 +80,8 @@
       "html#aikm body #aikmShipHub{width:100%;margin-bottom:16px;}" +
       "html#aikm body #tab-selfship:not(.hub-old-on) > div.wrap{display:none !important;}" +
       "html#aikm body #tab-selfship.hub-old-on > #aikmShipHub{display:none !important;}" +
-      "html#aikm body .hub-top{display:flex;align-items:center;gap:10px;}" +
-      "html#aikm body button.hub-old{all:unset;cursor:pointer;font-size:12px;font-weight:600;color:var(--x-muted);padding:7px 12px;border-radius:20px;border:1px solid var(--x-line);}" +
+      "html#aikm body .hub-top{display:flex;align-items:center;gap:10px;flex-shrink:0;}" +
+      "html#aikm body button.hub-old{all:unset;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:12px;font-weight:600;color:var(--x-muted);padding:7px 12px;border-radius:20px;border:1px solid var(--x-line);}" +
       "html#aikm body .hub-tabs{display:flex;gap:4px;margin:18px 0 4px;border-bottom:1px solid var(--x-line);overflow-x:auto;}" +
       "html#aikm body .hub-tabs button{all:unset;cursor:pointer;padding:10px 16px;font-size:13px;font-weight:600;color:var(--x-text-2);border-bottom:3px solid transparent;margin-bottom:-1px;white-space:nowrap;display:inline-flex;align-items:center;gap:8px;}" +
       "html#aikm body .hub-tabs button span{font-size:11.5px;font-weight:700;padding:1px 8px;border-radius:20px;background:var(--x-surface-2);color:var(--x-text-2);border:1px solid var(--x-line);}" +
@@ -242,10 +242,12 @@
         '<div class="nb-title">Orders</div>' +
         '<div class="nb-sub">Tick \u2192 <b>Ship</b>. AWBs go to OMS Guru and Amazon by themselves. ATS orders go at <b>450 g</b>, others at the weight shown.</div></div>' +
         '<div class="hub-top"><div class="ps-conn" id="psConn"><i class="dot"></i><span id="psConnTxt">Not tested yet</span><button type="button" id="psTest">Test connection</button></div>' +
+        '<button type="button" id="hubSet" class="hub-old" title="Pickup address &amp; default box \u2014 saved online for every computer"><i class="ti ti-settings"></i> Settings <span id="hubSetWarn"></span></button>' +
         '<button type="button" id="hubOld" class="hub-old" title="The previous Self-Ship screen (confirmation file, manual tracking)">Old tools</button></div></div>' +
         '<div class="hub-tabs" id="hubTabs"></div>' +
 
-        '<details class="ps-fold" id="psSetFold"><summary><i class="ti ti-building-warehouse"></i>Pickup address &amp; default box <span class="nb-muted" id="psSetNote"></span><span id="psSetSaved" class="nb-muted"></span></summary><div>' +
+        '<div id="hubSettings" style="display:none;">' +
+        '<details class="ps-fold" id="psSetFold" open><summary><i class="ti ti-building-warehouse"></i>Pickup address &amp; default box <span class="nb-muted" id="psSetNote"></span><span id="psSetSaved" class="nb-muted"></span></summary><div>' +
           '<div class="ps-grid">' +
             field("psName", "Pickup name (company)", 1, "ps-wide") + field("psPhone", "Phone (10 digits)", 1) + field("psEmail", "Email", 1) +
             field("psAddr", "Full pickup address", 1, "ps-wide") + field("psCity", "City", 1) + field("psState", "State", 1) +
@@ -258,6 +260,7 @@
           '<div class="nb-muted nb-small">Saved for every computer. Use the same pickup address that is registered in ProShip. Product weights set in the NimbusPost / Zippy file are used here too.</div>' +
         "</div></details>" +
         '<details class="ps-fold" id="psRateFold" style="display:none;"><summary><i class="ti ti-receipt-2"></i><span id="psRateTitle">ProShip rates</span> <span class="nb-muted" id="psRateNote"></span></summary><div id="psRates"></div></details>' +
+        "</div>" +
 
         '<div class="nb-filter">' +
           '<div class="nb-lbl"><span id="hubDateLbl">SLA date</span> <span class="nb-muted" id="psPoolNote"></span></div>' +
@@ -292,7 +295,7 @@
       var miss = pickupReady();
       $("psSetNote").textContent = !setLoaded && miss.length ? "" : miss.length ? "\u00b7 fill this first" : "\u00b7 " + settings.name + ", " + settings.city + " " + settings.pin;
       $("psSetNote").style.color = miss.length ? "var(--x-red)" : "";
-      if (miss.length && setLoaded && !$("psSetFold").dataset.auto) { $("psSetFold").open = true; $("psSetFold").dataset.auto = "1"; }
+      var w = $("hubSetWarn"); if (w) { w.textContent = miss.length && setLoaded ? "\u00b7 pickup address missing" : ""; w.style.color = "var(--x-red)"; }
     }
     fillSettings();
     Object.keys(MAP).forEach(function (id) {
@@ -318,7 +321,7 @@
       var rates = check.rates || [];
       $("psRateFold").style.display = rates.length || check.note ? "" : "none";
       $("psRateTitle").textContent = check.ok ? "ProShip rates" : "Connection problem";
-      if (!check.ok) $("psRateFold").open = true;
+      if (!check.ok) { $("psRateFold").open = true; $("hubSettings").style.display = ""; }
       if (!rates.length) { $("psRates").innerHTML = '<div class="nb-muted nb-small">' + esc(check.note || "") + "</div>"; $("psRateNote").textContent = ""; return; }
       var by = {}; rates.forEach(function (r) { (by[r.city] = by[r.city] || { city: r.city, to: r.to, zone: r.zone })[r.g] = r; });
       $("psRateNote").textContent = "\u00b7 cheapest courier, incl. GST, from " + (check.from || "");
@@ -601,7 +604,7 @@
       var d = db();
       if (!d) { alert("Still connecting \u2014 try again in a few seconds."); return; }
       var miss = pickupReady();
-      if (miss.length) { $("psSetFold").open = true; alert("Fill the pickup address first:\n\u2022 " + miss.join("\n\u2022 ")); $("psName").focus(); return; }
+      if (miss.length) { $("hubSettings").style.display = ""; alert("Fill the pickup address first:\n\u2022 " + miss.join("\n\u2022 ")); $("psName").focus(); return; }
       var rows = lastRows.filter(function (r) { return r.sel && r.state === "ok" && !r.ship; });
       if (!rows.length) return;
       if (rows.length > 2000) { alert("Please ship at most 2,000 orders at a time (" + rows.length + " ticked)."); return; }
@@ -668,6 +671,7 @@
     }
 
     $("psShip").addEventListener("click", ship);
+    $("hubSet").addEventListener("click", function () { var h = $("hubSettings"); h.style.display = h.style.display === "none" ? "" : "none"; });
     $("hubOld").addEventListener("click", function () {
       selfTab.classList.add("hub-old-on");
       if (!$("hubBack")) {

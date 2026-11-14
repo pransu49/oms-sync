@@ -173,7 +173,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   check / ship / sync / cancel; secrets `PROSHIP_USERNAME` + `PROSHIP_PASSWORD` = an API user from ProShip -> Settings -> Manage Users).
   Console panel `console/proship-tab.js` — since 14 Nov 2026 (owner: "aggregator dashboard like Shiprocket, ProShip INSIDE Amazon Self-Ship")
   it is the Amazon Self-Ship screen itself: `#aikmShipHub` is the first child of `#tab-selfship`; the old Self-Ship screen (`.wrap`: confirmation
-  file, manual tracking) is hidden behind the "Old tools" button (class `hub-old-on` on #tab-selfship). Status tabs: To ship · On hold (real loss,
+  file, manual tracking) is hidden behind the "Old tools" button. Pickup address + default box + rates sit behind the header "Settings" button
+  (`#hubSettings`, hidden; owner 14 Nov 2026: "remove pickup address from the screen, saved in backend" = `aikm_admin/proshipSettings`). The old screen (class `hub-old-on` on #tab-selfship). Status tabs: To ship · On hold (real loss,
   profit at/below the Loss-bar amount `aikm_loss_above`, missing address) · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).
   No own side-menu tab any more: a hidden `.tabbtn[data-tab=proship]` keeps old `?tab=proship` links working (opens Self-Ship). NOT built (owner asked,
   declined): fake tracking numbers sent to Amazon for orders we don't ship: tick orders -> job doc main `proshipJobs/<id>` {ids:{orderId:weightKg}, box, pickup}
