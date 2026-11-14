@@ -660,7 +660,7 @@
       lblBtnText();
       $("hubShipBody").querySelectorAll(".ps-x").forEach(function (b) { b.addEventListener("click", function () { cancelShip(b.dataset.id, b.dataset.awb); }); });
       $("psResult").style.display = "block";
-      $("psNote").textContent = "Labels: tick orders (or one Label button), or pick an SLA date chip and press Download labels.";
+      $("psNote").textContent = "Labels: tick orders (or press Label on one), then Download. Nothing ticked = all labels of the SLA date chip.";
     }
     function kpi(l, n, cls) { return '<div class="nb-kpi ' + cls + '"><div class="nb-kpi-n">' + n + '</div><div class="nb-kpi-l">' + l + "</div></div>"; }
     function render() {
@@ -678,7 +678,8 @@
         var under = sh ? '<div class="cx-awb" style="margin-top:5px;">' + esc(sh.a) + "</div>" +
           (jr.g ? '<div class="nb-muted nb-small">' + (jr.ats ? "ATS \u00b7 " : "") + "sent " + jr.g + " g</div>" : "") +
           (jr.warn ? '<div class="nb-small" style="color:var(--x-red);max-width:240px;white-space:normal;margin-top:3px;">\u26a0 ' + esc(jr.warn) + "</div>" : "") +
-          '<button type="button" class="ps-x" data-awb="' + esc(sh.a) + '" data-id="' + esc(r.id) + '">Cancel shipment</button>'
+          '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;"><button type="button" class="hub-lbl" data-id="' + esc(r.id) + '" title="Download this label (PDF)"><i class="ti ti-printer"></i> Label</button>' +
+          '<button type="button" class="ps-x" data-awb="' + esc(sh.a) + '" data-id="' + esc(r.id) + '">Cancel shipment</button></div>'
           : err ? '<div class="nb-muted nb-small" style="margin-top:5px;max-width:220px;white-space:normal;">' + esc(err) + "</div>" : "";
         return '<tr class="' + (r.sel || sh ? "" : "nb-row-out") + (r.loss && !sh ? " nb-row-loss" : "") + '">' +
           '<td><input type="checkbox" class="ps-sel" data-i="' + i + '"' + (r.sel ? " checked" : "") + (ok && !sh ? "" : " disabled") + "></td>" +
@@ -711,6 +712,8 @@
         cb.addEventListener("change", function () { var r = lastRows[+cb.dataset.i]; r.sel = cb.checked; r.touched = true; render(); });
       });
       body.querySelectorAll(".ps-x").forEach(function (b) { b.addEventListener("click", function () { cancelShip(b.dataset.id, b.dataset.awb); }); });
+      body.querySelectorAll(".hub-lbl").forEach(function (b) { b.addEventListener("click", function () { labelsFor([b.dataset.id], b); }); });
+      lblBtnText();
       body.querySelectorAll(".hub-map").forEach(function (b) { b.addEventListener("click", function () { var r = lastRows[+b.dataset.i]; if (r) openMap(r, r.items[+b.dataset.k]); }); });
       var okRows = lastRows.filter(function (r) { return r.state === "ok" && !r.ship && (view === "hold" || !r.loss || profitOk(r)); });
       $("psAll").checked = okRows.length > 0 && okRows.every(function (r) { return r.sel; });
@@ -875,8 +878,8 @@
     var lblUnsub = null, lblBusy = false, lblRowBtn = null;
     function lblBtnText() {
       var b = $("psLabels"); if (!b) return;
-      var n = Object.keys(shipSel).length, onShip = view !== "toship" && view !== "hold";
-      b.innerHTML = '<i class="ti ti-printer"></i> ' + (onShip && n ? "Download " + n + " label" + (n > 1 ? "s" : "") : "Download labels (SLA date)");
+      var onShip = view !== "toship" && view !== "hold", n = onShip ? Object.keys(shipSel).length : shippedHere().length;
+      b.innerHTML = '<i class="ti ti-printer"></i> ' + (n ? "Download " + n + (onShip ? "" : " shipped") + " label" + (n > 1 ? "s" : "") : "Download labels (SLA date)");
     }
     /* Labels for chosen orders (owner 14 Nov 2026: "download label one by one and in bulk"): same label robot
        (nimbus-labels.yml), job labelJobs/<id> {ids:[...]} -> one PDF with product names stamped. ~25 Firebase reads per job. */
@@ -886,9 +889,11 @@
       if (ids.length > 2000) { alert("Please choose up to 2,000 orders at a time."); return; }
       runLabelJob({ ids: ids, sla: "", acct: "" }, ids.length === 1 ? "Label " + ids[0] : ids.length + " labels", rowBtn);
     }
+    function shippedHere() { return (lastRows || []).filter(function (r) { return r.ship; }).map(function (r) { return r.id; }); }
     function labels() {
       var n = Object.keys(shipSel).length;
       if (n && view !== "toship" && view !== "hold") return labelsFor(Object.keys(shipSel));
+      if ((view === "toship" || view === "hold") && shippedHere().length) return labelsFor(shippedHere());
       if (lblBusy) return;
       var d = db(), sla = /^\d{4}-\d{2}-\d{2}$/.test(selDate) ? selDate : "";
       if (!sla) { alert("Labels are made per SLA date.\n\nClick one date chip above (e.g. \u201cToday\u201d), then Download labels."); return; }
