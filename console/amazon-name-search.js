@@ -1123,3 +1123,49 @@
     }, 900);
   }, true);
 } catch (e) {} })();
+
+/* ===== Open mapping from Self-Ship (owner 14 Nov 2026) - keep this block =====
+   The console's Self-Ship "Map" button opens this page as /pages/amazon?map=<ASIN>&acct=<label>
+   (or sends {aikmMap, acct} to an already-open Amazon tab). We switch to that account and open the
+   normal SP-API mapping window (openSpapiMatchModal). 0 extra Firebase reads. */
+(function () {
+  function ready(acct) {
+    try {
+      if (typeof openSpapiMatchModal !== "function") return false;
+      if (acct && typeof spapiCurrentAccount !== "undefined" && spapiCurrentAccount !== acct) return false;
+      if (typeof spapiSessionCache !== "undefined" && acct && !spapiSessionCache[acct]) return false;
+      return true;
+    } catch (e) { return false; }
+  }
+  function openFor(asin, acct) {
+    if (!asin) return;
+    try {
+      if (acct && typeof SPAPI_ACCOUNTS !== "undefined" && !SPAPI_ACCOUNTS.some(function (a) { return a.label === acct; })) acct = "";
+    } catch (e) {}
+    var tries = 0, switched = false;
+    (function tick() {
+      tries++;
+      try {
+        if (acct && !switched && typeof setSpapiAccount === "function" && typeof spapiCurrentAccount !== "undefined" && spapiCurrentAccount !== acct) {
+          switched = true; setSpapiAccount(acct);
+          try { document.querySelectorAll("[data-acct]").forEach(function (b) { b.classList.toggle("active", b.dataset.acct === acct); }); } catch (e) {}
+        }
+        if (ready(acct)) { setTimeout(function () { openSpapiMatchModal(asin); }, 400); return; }
+      } catch (e) {}
+      if (tries < 120) setTimeout(tick, 500);
+      else if (typeof openSpapiMatchModal === "function") openSpapiMatchModal(asin);
+    })();
+  }
+  try {
+    var p = new URLSearchParams(location.search), a = p.get("map");
+    if (a) {
+      var acct = p.get("acct") || "";
+      try { history.replaceState(null, "", location.pathname + (acct ? "#" + acct : location.hash)); } catch (e) {}
+      openFor(a, acct);
+    }
+  } catch (e) {}
+  window.addEventListener("message", function (e) {
+    if (e.origin !== location.origin || !e.data || !e.data.aikmMap) return;
+    openFor(String(e.data.aikmMap), String(e.data.acct || ""));
+  });
+})();
