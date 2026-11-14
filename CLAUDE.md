@@ -171,8 +171,12 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 
 - **ProShip (Prozo) courier for Amazon self-ship** (owner 13 Nov 2026): robot `proship.js`, workflow `proship.yml` (on command only, modes
   check / ship / sync / cancel; secrets `PROSHIP_USERNAME` + `PROSHIP_PASSWORD` = an API user from ProShip -> Settings -> Manage Users).
-  Console panel `console/proship-tab.js` — its OWN side-menu tab "ProShip" (data-tab `proship`, link `/pages/console?tab=proship`, full page width,
-  owner 13 Nov 2026; ALL waiting orders listed by default, SLA chips + search filter; the Self-Ship "ProShip" pill only opens the tab): tick orders -> job doc main `proshipJobs/<id>` {ids:{orderId:weightKg}, box, pickup}
+  Console panel `console/proship-tab.js` — since 14 Nov 2026 (owner: "aggregator dashboard like Shiprocket, ProShip INSIDE Amazon Self-Ship")
+  it is the Amazon Self-Ship screen itself: `#aikmShipHub` is the first child of `#tab-selfship`; the old Self-Ship screen (`.wrap`: confirmation
+  file, manual tracking) is hidden behind the "Old tools" button (class `hub-old-on` on #tab-selfship). Status tabs: To ship · On hold (real loss,
+  profit at/below the Loss-bar amount `aikm_loss_above`, missing address) · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).
+  No own side-menu tab any more: a hidden `.tabbtn[data-tab=proship]` keeps old `?tab=proship` links working (opens Self-Ship). NOT built (owner asked,
+  declined): fake tracking numbers sent to Amazon for orders we don't ship: tick orders -> job doc main `proshipJobs/<id>` {ids:{orderId:weightKg}, box, pickup}
   -> robot reads the orders FRESH from OMS chunks, skips cancelled / already-AWB (OMS, nimbusIndex, zippyIndex, proshipIndex) and creates the
   shipments (reference = Amazon order id). AWBs live in ONE doc main `aikm_admin/proshipIndex` {data: JSON {orderId:{a,c,s,st,t}}} — same shape as
   zippyIndex; `oms-push-tracking.js` + `amazon-confirm.js` read it (ProShip fills in only where NimbusPost / Zippy have no live AWB) and
