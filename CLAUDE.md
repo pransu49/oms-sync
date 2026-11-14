@@ -211,6 +211,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Old tools. Row 2 = SLA chips | search · account · refresh. Console sub-bar: Push/Confirm status texts hidden -> button tooltips (+ red dot on error).
   SHIPPED LEAVE "To ship" at once (liveShip -> Shipped tab). Tab "Failed" (shown only when >0) = orders the LAST ship job could not ship,
   reason in Status, can be re-shipped from there. #hubJobBar = "Last ship job · time · Sent N · Shipped N · Failed N" (+ progress while running).
+  Shipped KPIs by ProShip status bucket (bucketOf, owner 15 Nov 2026): Pickup pending = ORDER_PLACED/PICKUP_PENDING/OUT_FOR_PICKUP/AWB_REGISTERED/...,
+  In transit = INTRANSIT/PICKED_UP/..., Out for delivery, Pickup failed / issue. (Before, everything not "pickup pending" counted as in transit.)
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
   "Rejected · N" in the Self-Ship top bar = console's tracking-push alert (OMS 'stuck' Shipped-without-AWB + Amazon confirm errors), click = reasons.
   Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).

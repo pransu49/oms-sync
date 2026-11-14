@@ -501,6 +501,16 @@
       if (/DELIVERED/.test(st)) return "delivered";
       return "shipped";
     }
+    /* ProShip status -> bucket (owner 15 Nov 2026: "ProShip shows In transit 176, our tool 800+" - OUT_FOR_PICKUP / AWB_REGISTERED /
+       PICKUP_FAILED were counted as in transit) */
+    function bucketOf(v) {
+      var st = String(v.st || "ORDER_PLACED").toUpperCase().replace(/[\s-]+/g, "_");
+      if (/PICKUP_FAIL|NOT_PICKED|PICKUP_EXCEPTION|PICKUP_CANCEL/.test(st)) return "pfail";
+      if (/ORDER_PLACED|PICKUP_PENDING|OUT_FOR_PICKUP|AWB_REGISTERED|MANIFEST|BOOKED|PICKUP_SCHEDULED|READY_TO_SHIP|PENDING/.test(st)) return "pickup";
+      if (/OUT_FOR_DELIVERY/.test(st)) return "ofd";
+      if (/UNDELIVERED|NDR|FAILED|EXCEPTION|LOST|DAMAGE/.test(st)) return "issue";
+      return "transit";
+    }
     function prettySt(v) {
       if (v.s === "cancelled") return "Cancelled";
       var st = String(v.st || "Booked").replace(/_/g, " ").toLowerCase().replace(/\b\w/g, function (c) { return c.toUpperCase(); });
@@ -722,15 +732,16 @@
         if (selDate === "none") return !r.sla;
         return r.sla === selDate;
       }).sort(function (a, b) { return (b.v.t || 0) - (a.v.t || 0); });
-      var pick = rows.filter(function (r) { return /pickup pending|booked|manifest/i.test(prettySt(r.v)); }).length;
+      var B = { pickup: 0, pfail: 0, transit: 0, ofd: 0, issue: 0 }; rows.forEach(function (r) { B[bucketOf(r.v)]++; });
       $("psKpis").innerHTML = kpi("Orders", rows.length, "") +
-        (view === "shipped" ? kpi("Pickup pending", pick, pick ? "nb-warnk" : "") + kpi("In transit", rows.length - pick, "nb-ok") : "") +
-        kpi("Accounts", Object.keys(rows.reduce(function (m, r) { m[r.acct] = 1; return m; }, {})).length, "") +
+        (view === "shipped" ? kpi("Pickup pending", B.pickup, B.pickup ? "nb-warnk" : "", "Not picked up yet (incl. Out for pickup)") + kpi("In transit", B.transit, "nb-ok") +
+          kpi("Out for delivery", B.ofd, "nb-ok") + kpi("Pickup failed / issue", B.pfail + B.issue, B.pfail + B.issue ? "nb-bad" : "") :
+          kpi("Accounts", Object.keys(rows.reduce(function (m, r) { m[r.acct] = 1; return m; }, {})).length, "")) +
         avgShipKpi(rows.map(function (r) { return r.v.r || 0; }));
       $("hubShipBody").innerHTML = rows.length ? rows.slice(0, 1500).map(function (r) {
         var o = r.o, v = r.v, st = prettySt(v), cls = r.stage === "delivered" ? "d" : r.stage === "rto" ? "r" : /pickup pending/i.test(st) ? "" : "t";
         var its = Object.keys(r.items), itTxt = its.map(function (k) { return k + " \u00d7 " + r.items[k]; }).join(" + ");
-        var canCancel = r.stage === "shipped" && /pickup pending|booked|manifest/i.test(st);
+        var canCancel = r.stage === "shipped" && (bucketOf(v) === "pickup" || bucketOf(v) === "pfail");
         return '<tr' + (shipSel[r.id] ? ' class="hs-on"' : "") + ">" +
           '<td class="hs-ck"><input type="checkbox" class="hub-lsel" data-id="' + esc(r.id) + '"' + (shipSel[r.id] ? " checked" : "") + "></td>" +
           '<td class="hs-nw"><b>' + (r.sla ? esc(niceDay(r.sla)) : "\u2014") + "</b></td>" +
