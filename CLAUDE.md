@@ -198,6 +198,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   floating timer pill #hubLblPill ("Label X · 12 s of about 18 s", then "ready in N s · Download again").
   To ship / On hold: shipped rows get the same Label button; bottom button = "Download N shipped labels" (those rows).
   (ids mode: ProShip labels only, SLA ignored, no picklist/Telegram; file "Label <order>.pdf" / "Self-Ship Labels N orders.pdf"). ~25 reads per job.
+  Profit check vs OMS (14 Nov 2026, `profit-diag.yml` manual, read-only ~30 reads): OMS shippingCharge is PER UNIT (x qty, fixed); rest of the gap =
+  cost source (LOTS mapping vs OMS Cost of Goods; OMS cogs 0 / wrong pack mappings) + our 15% shipping holdback + Rs 3 by design.
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
   "Rejected · N" in the Self-Ship top bar = console's tracking-push alert (OMS 'stuck' Shipped-without-AWB + Amazon confirm errors), click = reasons.
   Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).
