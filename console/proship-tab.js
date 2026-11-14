@@ -30,7 +30,7 @@
       "html#aikm body #selfshipProshipPanel{width:100%;}" +
       "html#aikm body #selfshipProshipPanel .nb-card{background:var(--x-surface);border:1px solid var(--x-line);border-radius:14px;box-shadow:var(--x-shadow);max-width:none !important;}" +
       "html#aikm body #selfshipProshipPanel .nb-sub{max-width:900px;}" +
-      "html#aikm body #selfshipProshipPanel .nb-filter-row input#psQ{flex:1;min-width:260px;max-width:520px;}" +
+
       "html#aikm body #psTable{width:100%;}" +
       "html#aikm body #psTable thead th{position:sticky;top:0;z-index:1;background:var(--x-surface-2);}" +
       "html#aikm body #psTable .ps-addr{max-width:340px;white-space:normal;color:var(--x-text-2);font-size:12px;margin-top:2px;line-height:1.4;}" +
@@ -122,6 +122,70 @@
       "html#aikm body #aikmShipHub .nb-actions{position:sticky;bottom:0;background:var(--x-surface);padding:12px 0 2px;margin-top:0;border-top:1px solid var(--x-line);z-index:2;}" +
       "html#aikm body #aikmShipHub .lb-bar{background:var(--x-surface-2) !important;border:1px solid var(--x-line) !important;border-radius:12px !important;padding:10px 14px !important;margin:0 0 12px !important;}" +
       "html#aikm body #aikmShipHub .lb-bar b.lb-loss{color:var(--x-red) !important;}" +
+      /* SaaS layout (owner 14 Nov 2026): tabs + tools on one line, chips row, one-line rule bar, tidy top toolbar */
+      "html#aikm body #aikmShipHub .hub-bar{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 16px;border-bottom:1px solid var(--x-line);margin:20px 0 0;}" +
+      "html#aikm body #aikmShipHub .hub-tabs{border-bottom:0 !important;margin:0 !important;overflow:visible !important;flex-wrap:nowrap !important;}" +
+      "html#aikm body #aikmShipHub .hub-tabs button{background:transparent !important;border:0 !important;border-bottom:3px solid transparent !important;border-radius:0 !important;box-shadow:none !important;padding:10px 14px 11px !important;min-height:0 !important;height:auto !important;margin:0 0 -1px !important;color:var(--x-text-2) !important;font-weight:600 !important;}" +
+      "html#aikm body #aikmShipHub .hub-tabs button.on{border-bottom-color:#D4AF37 !important;color:var(--x-text) !important;}" +
+      "html#aikm body #aikmShipHub .hub-tabs button:hover{color:var(--x-text) !important;}" +
+      "html#aikm body #aikmShipHub .hub-tools{display:flex;align-items:center;gap:8px;padding-bottom:8px;flex-wrap:nowrap;}" +
+      "html#aikm body #aikmShipHub .hub-tools{margin-left:auto;}" +
+      "html#aikm body #aikmShipHub .cx-awb{white-space:nowrap;}" +
+      "html#aikm body #aikmShipHub .lb-bar:has(b.lb-loss[style*='none']) .lb-row2{border-left:0 !important;padding-left:0 !important;margin-left:0 !important;}" +
+      "html#aikm body #aikmShipHub .hub-search{position:relative;display:inline-flex;align-items:center;}" +
+      "html#aikm body #aikmShipHub .hub-search i{position:absolute;left:11px;font-size:15px;color:var(--x-muted);pointer-events:none;}" +
+      "html#aikm body #aikmShipHub .hub-search input{width:260px !important;padding-left:34px !important;border-radius:10px !important;}" +
+      "html#aikm body #aikmShipHub .hub-tools select{width:160px !important;border-radius:10px !important;}" +
+      "html#aikm body #aikmShipHub .hub-tools #psRefresh{width:38px !important;padding:0 !important;display:inline-flex;align-items:center;justify-content:center;border-radius:10px !important;}" +
+      "html#aikm body #aikmShipHub .hub-chiprow{display:flex !important;align-items:center;gap:12px;margin:14px 0 0 !important;}" +
+      "html#aikm body #aikmShipHub .hub-chiprow .nb-chips{margin:0 !important;flex:1;}" +
+      "html#aikm body #aikmShipHub .hub-lbl{font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--x-muted);text-transform:uppercase;white-space:nowrap;}" +
+      "html#aikm body #aikmShipHub .hub-note{white-space:nowrap;font-size:12px;}" +
+      "html#aikm body #aikmShipHub .lb-bar{flex-wrap:wrap !important;gap:8px 10px !important;}" +
+      "html#aikm body #aikmShipHub .lb-bar span,html#aikm body #aikmShipHub .lb-bar b{white-space:nowrap;}" +
+      "html#aikm body #aikmShipHub .lb-bar .lb-row2{flex-basis:auto !important;flex:1;justify-content:flex-start;border-left:1px solid var(--x-line);padding-left:14px;margin-left:4px;}" +
+      "html#aikm body #aikmShipHub .lb-bar .lb-n{margin-left:0 !important;font-size:12px;}" +
+      "html#aikm body #aikmShipHub .lb-bar input.lb-q{width:220px !important;}" +
+      "html#aikm body #aikmShipHub th.hub-sort{cursor:pointer;user-select:none;}html#aikm body #aikmShipHub th.hub-sort:hover{color:var(--x-text) !important;}" +
+      "html#aikm body #aikmShipHub th.hub-sort i{font-size:13px;vertical-align:-2px;}" +
+      /* top toolbar of Amazon Self-Ship: one tidy line */
+      "html#aikm body #subtab-selfship{display:flex;flex-wrap:wrap;align-items:center;gap:8px !important;max-width:none !important;padding:10px 14px !important;border-style:solid !important;border-color:var(--x-line) !important;background:var(--x-surface) !important;border-radius:14px !important;}" +
+      "html#aikm body #subtab-selfship .subtab-label{font-size:15px !important;letter-spacing:0 !important;text-transform:none !important;color:var(--x-text) !important;font-weight:700 !important;margin-right:auto !important;font-family:var(--x-brand-font);}" +
+      "html#aikm body #subtab-selfship :is(.sn-pushinfo,.sn-amzinfo){max-width:190px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px;color:var(--x-muted);}" +
+      "html#aikm body #subtab-selfship :is(button,.sn-btn,.pe-btn){height:32px;min-height:32px !important;border-radius:9px !important;}" +
+      "@media (max-width:1300px){html#aikm body #aikmShipHub .hub-search input{width:210px !important;}html#aikm body #aikmShipHub .hub-tools select{width:140px !important;}}" +
+      /* mapping window */
+      "html#aikm body #aikmShipHub .hub-map{all:unset;cursor:pointer;font-size:11px;font-weight:600;color:var(--x-muted);margin-left:6px;padding:1px 7px;border-radius:6px;border:1px solid var(--x-line);white-space:nowrap;}" +
+      "html#aikm body #aikmShipHub .hub-map.need{color:#1A1405;background:#D4AF37;border-color:#D4AF37;}" +
+      "html#aikm body .hub-mw{position:fixed;inset:0;z-index:2147480000;background:rgba(15,30,53,.45);display:none;align-items:center;justify-content:center;padding:24px;}" +
+      "html#aikm body .hub-mw.open{display:flex;}" +
+      "html#aikm body .hub-mw-box{width:min(1040px,100%);max-height:calc(100vh - 48px);display:flex;flex-direction:column;background:var(--x-surface,#fff);border-radius:18px;box-shadow:0 30px 80px -20px rgba(15,30,53,.5);overflow:hidden;}" +
+      "html#aikm body .hub-mw-head{display:flex;justify-content:space-between;gap:16px;padding:20px 24px 14px;border-bottom:1px solid var(--x-line);}" +
+      "html#aikm body .hub-mw-title{font-family:var(--x-brand-font);font-size:18px;font-weight:600;color:var(--x-text);margin-top:4px;}" +
+      "html#aikm body .hub-mw-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}" +
+      "html#aikm body .hub-chip{font-size:11.5px;padding:3px 9px;border-radius:20px;background:var(--x-surface-2);border:1px solid var(--x-line);color:var(--x-text-2);}" +
+      "html#aikm body .hub-mw-x{all:unset;cursor:pointer;font-size:24px;line-height:1;color:var(--x-muted);padding:0 4px;}" +
+      "html#aikm body .hub-mw-body{display:grid;grid-template-columns:1.25fr 1fr;min-height:0;flex:1;}" +
+      "html#aikm body .hub-mw-left{padding:16px 18px;border-right:1px solid var(--x-line);display:flex;flex-direction:column;gap:10px;min-height:0;}" +
+      "html#aikm body .hub-mw-left .hub-search input{width:100% !important;padding-left:34px !important;height:40px;border-radius:10px;box-sizing:border-box;}" +
+      "html#aikm body .hub-mw-left .hub-search{display:flex;position:relative;align-items:center;}html#aikm body .hub-mw-left .hub-search i{position:absolute;left:11px;color:var(--x-muted);}" +
+      "html#aikm body .hub-mw-list{overflow:auto;max-height:52vh;display:flex;flex-direction:column;gap:6px;}" +
+      "html#aikm body .hub-mw-item{all:unset;cursor:pointer;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;border:1px solid var(--x-line);}" +
+      "html#aikm body .hub-mw-item:hover{border-color:#D4AF37;background:var(--x-gold-soft);}" +
+      "html#aikm body .hub-mw-item img,html#aikm body .hub-mw-item .ph{width:40px;height:40px;border-radius:8px;object-fit:contain;background:var(--x-surface-2);display:flex;align-items:center;justify-content:center;flex:none;color:var(--x-muted);}" +
+      "html#aikm body .hub-mw-item .t{flex:1;display:flex;flex-direction:column;gap:2px;font-size:12.5px;min-width:0;}" +
+      "html#aikm body .hub-mw-item .c{font-weight:700;font-variant-numeric:tabular-nums;}" +
+      "html#aikm body .hub-mw-right{padding:16px 18px;overflow:auto;}" +
+      "html#aikm body .hub-mw-part{display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--x-line);border-radius:10px;margin-bottom:8px;}" +
+      "html#aikm body .hub-mw-part .t{flex:1;display:flex;flex-direction:column;gap:2px;font-size:12.5px;min-width:0;}" +
+      "html#aikm body .hub-mw-part label{display:flex;flex-direction:column;gap:3px;font-size:10.5px;font-weight:600;color:var(--x-muted);}" +
+      "html#aikm body .hub-mw-part input{width:62px !important;height:32px;min-height:32px !important;}" +
+      "html#aikm body .hub-mw-part .hm-del{all:unset;cursor:pointer;font-size:18px;color:var(--x-red);padding:0 4px;}" +
+      "html#aikm body .hub-mw-sum{margin-top:10px;border-top:1px solid var(--x-line);padding-top:10px;display:flex;flex-direction:column;gap:6px;font-size:13px;}" +
+      "html#aikm body .hub-mw-sum div{display:flex;justify-content:space-between;}html#aikm body .hub-mw-sum b.ok{color:var(--x-green);}html#aikm body .hub-mw-sum b.neg{color:var(--x-red);}" +
+      "html#aikm body .hub-mw-foot{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:14px 24px;border-top:1px solid var(--x-line);background:var(--x-surface-2);}" +
+      "html#aikm body .hub-mw-foot .nb-muted{margin-right:auto;}" +
+      "html#aikm body .hub-toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:2147481000;background:#0F1E35;color:#F3E2A6;padding:11px 18px;border-radius:12px;font-weight:600;font-size:13px;box-shadow:0 10px 30px rgba(15,30,53,.35);}" +
       "@media (max-width:900px){html#aikm body .ps-grid{grid-template-columns:1fr 1fr;}}" +
       "}";
     document.head.appendChild(css);
@@ -270,7 +334,10 @@
         '<div class="hub-top"><div class="ps-conn" id="psConn"><i class="dot"></i><span id="psConnTxt">Not tested yet</span><button type="button" id="psTest">Test connection</button></div>' +
         '<button type="button" id="hubSet" class="hub-old" title="Pickup address &amp; default box \u2014 saved online for every computer"><i class="ti ti-settings"></i> Settings <span id="hubSetWarn"></span></button>' +
         '<button type="button" id="hubOld" class="hub-old" title="The previous Self-Ship screen (confirmation file, manual tracking)">Old tools</button></div></div>' +
-        '<div class="hub-tabs" id="hubTabs"></div>' +
+        '<div class="hub-bar"><div class="hub-tabs" id="hubTabs"></div>' +
+          '<div class="nb-filter-row hub-tools"><span class="hub-search"><i class="ti ti-search"></i><input type="text" id="psQ" autocomplete="off" placeholder="Search order, buyer, product, city, PIN"></span>' +
+          '<select id="psAcct"><option value="">All accounts</option></select>' +
+          '<button type="button" id="psRefresh" title="Refresh"><i class="ti ti-refresh"></i></button></div></div>' +
 
         '<div id="hubSettings" style="display:none;">' +
         '<details class="ps-fold" id="psSetFold" open><summary><i class="ti ti-building-warehouse"></i>Pickup address &amp; default box <span class="nb-muted" id="psSetNote"></span><span id="psSetSaved" class="nb-muted"></span></summary><div>' +
@@ -288,20 +355,14 @@
         '<details class="ps-fold" id="psRateFold" style="display:none;"><summary><i class="ti ti-receipt-2"></i><span id="psRateTitle">ProShip rates</span> <span class="nb-muted" id="psRateNote"></span></summary><div id="psRates"></div></details>' +
         "</div>" +
 
-        '<div class="nb-filter">' +
-          '<div class="nb-lbl"><span id="hubDateLbl">SLA date</span> <span class="nb-muted" id="psPoolNote"></span></div>' +
-          '<div class="nb-chips" id="psDates"></div>' +
-          '<div class="nb-filter-row"><input type="text" id="psQ" autocomplete="off" placeholder="Search order ID, buyer, product, city or PIN">' +
-          '<select id="psAcct"><option value="">All accounts</option></select>' +
-          '<button type="button" id="psRefresh"><i class="ti ti-refresh"></i> Refresh</button></div>' +
-        "</div>" +
+        '<div class="nb-filter hub-chiprow"><span class="hub-lbl" id="hubDateLbl">SLA</span><div class="nb-chips" id="psDates"></div><span class="nb-muted hub-note" id="psPoolNote"></span></div>' +
         '<div id="psResult" style="display:none;">' +
           '<div class="nb-kpis" id="psKpis"></div>' +
           '<div id="hubShipWrap" style="display:none;"><div class="table-scroll"><table class="data" id="hubShipTable"><thead><tr>' +
             '<th>SLA</th><th>Order</th><th>Buyer</th><th>Items</th><th>AWB &amp; courier</th><th>Status</th><th>Booked</th><th></th>' +
           '</tr></thead><tbody id="hubShipBody"></tbody></table></div></div>' +
           '<div id="psPoolWrap"><div class="table-scroll"><table class="data" id="psTable"><thead><tr>' +
-            '<th style="width:28px;"><input type="checkbox" id="psAll" title="Select all"></th><th>SLA</th><th>Order</th><th>Buyer &amp; address</th><th>Items</th><th class="r">Profit<div class="hub-sub">our tool \u00b7 OMS</div></th><th class="r">Weight</th><th>Status</th>' +
+            '<th style="width:28px;"><input type="checkbox" id="psAll" title="Select all"></th><th>SLA</th><th>Order</th><th>Buyer &amp; address</th><th>Items</th><th class="r hub-sort" id="hubPSort" title="Sort by profit">Profit <i class="ti ti-arrows-sort" id="hubPSortI"></i><div class="hub-sub">our tool \u00b7 OMS</div></th><th class="r">Weight</th><th>Status</th>' +
           '</tr></thead><tbody id="psBody"></tbody></table></div></div>' +
           '<div class="nb-actions"><button type="button" id="psShip" class="btn-gold"><i class="ti ti-truck-delivery"></i> Ship via ProShip</button>' +
           '<button type="button" id="psLabels"><i class="ti ti-printer"></i> Download labels</button>' +
@@ -369,9 +430,12 @@
 
     /* Self-Ship sub-menu: "Sync OMS + NimbusPost now" -> "Sync OMS + ProShip now" (NimbusPost is off, owner 14 Nov 2026) */
     function fixSyncBtn() {
-      var b = document.querySelector('#subtab-selfship [data-sync-now="oms,nimbus"]');
-      if (!b || b.dataset.hubFixed) return;
-      var n = b.cloneNode(false); n.dataset.hubFixed = "1"; n.removeAttribute("data-sync-now"); n.className = b.className;
+      var all = [].slice.call(document.querySelectorAll('#subtab-selfship [data-sync-now="oms,nimbus"]'));
+      var keep = all.filter(function (x) { return x.dataset.hubFixed; })[0];
+      all.forEach(function (x) { if (keep && x !== keep) x.remove(); });
+      var b = keep ? null : all[0];
+      if (!b) return;
+      var n = b.cloneNode(false); n.dataset.hubFixed = "1"; n.className = b.className;
       n.innerHTML = '<i class="ti ti-refresh"></i> Sync OMS + ProShip now'; n.title = "Fetch new OMS Guru orders and refresh ProShip shipment statuses";
       n.addEventListener("click", function () {
         if (typeof window.aikmGhDispatch !== "function") { alert("Please reload the console (Ctrl + Shift + R) and try again."); return; }
@@ -383,13 +447,13 @@
       });
       b.parentNode.replaceChild(n, b);
     }
-    fixSyncBtn(); [1500, 5000, 10000, 20000].forEach(function (t) { setTimeout(fixSyncBtn, t); });
+    fixSyncBtn(); setInterval(fixSyncBtn, 3000);
 
     if (isOpen()) setTimeout(function () { hookPanel(); hookIdx(); fillSettings(); pickupNote(); showConn(); build(); }, 0);
 
     /* ---------- pending self-ship pool (same rules as the NimbusPost / Zippy files) ---------- */
     var pool = [], lastRows = [], selDate = "all", selAcct = "", selQ = "", busy = false, jobRes = {};
-    var view = "toship", shipRows = [];
+    var view = "toship", shipRows = [], pSort = 0; // pSort: 0 = default, 1 = profit low->high, -1 = high->low
     var VIEWS = [["toship", "To ship"], ["hold", "On hold"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["rto", "RTO / Cancelled"]];
     /* loss rule (same amount as the red Loss bar): flagged orders ship only when profit is above it */
     function lossLimit() { try { var v = localStorage.getItem("aikm_loss_above"); return v === null ? "40" : v; } catch (e) { return "40"; } }
@@ -460,7 +524,8 @@
       var o = live[0], items = {}, order = [];
       live.forEach(function (x) {
         var key = x.sku || x.productName;
-        if (!items[key]) { items[key] = { sku: x.sku || "", name: x.productName || x.sku || "Item", qty: 0, price: num(x.price), ship: 0 }; order.push(key); }
+        if (!items[key]) { var Lx = listingOf(x); items[key] = { sku: x.sku || "", name: x.productName || x.sku || "Item", qty: 0, price: num(x.price), ship: 0, line: x,
+          mapped: !!(Lx && Lx.c != null), asin: String((Lx && Lx.a) || x.asin || "").toUpperCase() }; order.push(key); }
         var q = num(x.qty) || 1; items[key].qty += q; items[key].ship += num(x.shippingCharge) * q;
       });
       var list = order.map(function (k) { return items[k]; });
@@ -498,7 +563,7 @@
       var accts = {}; pool.forEach(function (r) { accts[account(r.o.channel)] = 1; });
       var sel = $("psAcct"), cur = sel.value;
       sel.innerHTML = '<option value="">All accounts</option>' + Object.keys(accts).sort().map(function (a) { return "<option" + (a === cur ? " selected" : "") + ">" + esc(a) + "</option>"; }).join("");
-      $("psPoolNote").textContent = data.length ? "\u00b7 " + pool.length + " self-ship orders waiting" : "\u00b7 OMS data loading\u2026";
+      $("psPoolNote").textContent = data.length ? pool.length + " orders waiting" : "OMS data loading\u2026";
       
       renderDates();
     }
@@ -527,7 +592,7 @@
     }
     function renderDates() {
       renderTabs();
-      $("hubDateLbl").textContent = poolView() ? "SLA date" : "SLA date (for labels)";
+      $("hubDateLbl").textContent = poolView() ? "SLA" : "SLA \u00b7 labels";
       $("psPoolNote").style.display = poolView() ? "" : "none";
       var t = todayYmd(), counts = {}, over = 0, tot = 0;
       viewBase().forEach(function (r) { if (selAcct && acctOf(r) !== selAcct) return; tot++; if (r.sla && r.sla < t) over++; else counts[r.sla || "none"] = (counts[r.sla || "none"] || 0) + 1; });
@@ -556,7 +621,12 @@
         if (selDate === "overdue") return r.sla && r.sla < t;
         if (selDate === "none") return !r.sla;
         return r.sla === selDate;
-      }).sort(function (a, b) { return (b.loss - a.loss) || (a.sla || "9999").localeCompare(b.sla || "9999") || account(a.o.channel).localeCompare(account(b.o.channel)) || a.id.localeCompare(b.id); });
+      }).sort(function (a, b) {
+        if (pSort) return pSort * ((a.profit || 0) - (b.profit || 0)) || a.id.localeCompare(b.id);
+        /* default: loss / low-profit orders on top, lowest profit first (owner 14 Nov 2026); the rest by SLA date */
+        return (b.loss - a.loss) || (a.loss && b.loss ? (a.profit || 0) - (b.profit || 0) : 0) ||
+          (a.sla || "9999").localeCompare(b.sla || "9999") || account(a.o.channel).localeCompare(account(b.o.channel)) || a.id.localeCompare(b.id);
+      });
       lastRows.forEach(function (r) {
         r.ship = liveShip(r.id);
         if (!r.touched) r.sel = r.state === "ok" && !inFile[r.id] && (!r.loss || profitOk(r));
@@ -626,7 +696,9 @@
           '<td><div class="nb-name">' + esc(o.buyerName || "") + "</div>" +
             '<div class="ps-addr">' + esc([o.buyerAddress1, o.buyerAddress2].filter(Boolean).join(", ")) + "</div>" +
             '<div class="nb-muted nb-small">' + esc([o.buyerCity, o.buyerState, o.buyerPincode].filter(Boolean).join(" \u00b7 ")) + "</div></td>" +
-          '<td class="ps-items">' + r.items.map(function (it) { return "<div>" + esc(it.name) + " <b>\u00d7 " + it.qty + '</b> <span class="nb-muted nb-small">' + rs(it.price) + "</span></div>"; }).join("") + "</td>" +
+          '<td class="ps-items">' + r.items.map(function (it, k) { return "<div>" + esc(it.name) + " <b>\u00d7 " + it.qty + '</b> <span class="nb-muted nb-small">' + rs(it.price) + "</span>" +
+            ' <button type="button" class="hub-map' + (it.mapped ? "" : " need") + '" data-i="' + i + '" data-k="' + k + '" title="' + (it.mapped ? "Change the LOTS mapping" : "No cost mapped - map it to a LOTS product") + '">' +
+            (it.mapped ? '<i class="ti ti-link"></i> Remap' : '<i class="ti ti-link-plus"></i> Map') + "</button></div>"; }).join("") + "</td>" +
           '<td class="r"><div class="hub-pf ' + (r.profit < 0 ? "neg" : r.loss && !profitOk(r) ? "low" : "ok") + '"' +
             (r.src === "oms" ? ' title="No cost mapped for this product in the Amazon tool - OMS Guru profit shown"' : ' title="Our tool: price + 85% shipping - cost - courier - Amazon fees - GST on margin - Rs 3"') + ">" +
             (r.loss ? '<span class="nb-loss">LOSS \u00b7 ' + rs(r.profit) + "</span>" : rs(r.profit)) + "</div>" +
@@ -646,6 +718,7 @@
         cb.addEventListener("change", function () { var r = lastRows[+cb.dataset.i]; r.sel = cb.checked; r.touched = true; render(); });
       });
       body.querySelectorAll(".ps-x").forEach(function (b) { b.addEventListener("click", function () { cancelShip(b.dataset.id, b.dataset.awb); }); });
+      body.querySelectorAll(".hub-map").forEach(function (b) { b.addEventListener("click", function () { var r = lastRows[+b.dataset.i]; if (r) openMap(r, r.items[+b.dataset.k]); }); });
       var okRows = lastRows.filter(function (r) { return r.state === "ok" && !r.ship && (view === "hold" || !r.loss || profitOk(r)); });
       $("psAll").checked = okRows.length > 0 && okRows.every(function (r) { return r.sel; });
       $("psResult").style.display = "block";
@@ -725,6 +798,152 @@
         .catch(function (e) { alert(e.message || e); });
     }
 
+    /* ---------- MAPPING WINDOW (owner 14 Nov 2026: "deploy mapping window here, reflect everywhere: SP-API, Order Mapper") ----------
+       Saves exactly what the other tools read:
+         1. Amazon ASIN -> LOTS item(s): aikm_admin/spapiAsinLotsMap (overflow spapiAsinLotsMap2), same record the Amazon page and the
+            Order Mapper write { code, name, vendorName:"LOTS", parts:[{code,name,qty,lotsPack?}], savedAt } -> price robot, stock rule,
+            listingIndex costs (profit here) and the Amazon page all use it from the next SP-API sync (~15 min).
+         2. Order Mapper product mapping: the console's own rememberMatch / saveLearned + pushMasterMappingToCloud (masterMapping).
+       Profit here updates at once (local estimate) and is replaced by the robot's exact numbers at the next sync. */
+    var LOTS = null, lotsLoading = null;
+    function bestSlab(p) { var b = null; ((p && p.slabs) || []).forEach(function (x) { var v = num(x.price); if (v > 0 && (b == null || v < b)) b = v; }); return b; }
+    function lotsList() {
+      if (LOTS) return Promise.resolve(LOTS);
+      var prods = null; try { prods = typeof lotsVendor !== "undefined" && lotsVendor && lotsVendor.products; } catch (e) {}
+      if (prods && prods.length) { LOTS = prods; return Promise.resolve(LOTS); }
+      if (lotsLoading) return lotsLoading;
+      var d = db(); if (!d) return Promise.resolve([]);
+      lotsLoading = d.collection("aikm_admin").doc("lotsCatalog").collection("chunks").get().then(function (sn) {
+        var all = []; sn.forEach(function (x) { (x.data().products || []).forEach(function (p) { if (p && p.code != null) all.push(p); }); }); LOTS = all; return all;
+      }).catch(function () { lotsLoading = null; return []; });
+      return lotsLoading;
+    }
+    function packOf(t) { var m = /pack\s*of\s*(\d{1,3})|set\s*of\s*(\d{1,3})|\b(\d{1,3})\s*(?:pcs|pieces|units)\b/i.exec(String(t || "")); var n = m ? +(m[1] || m[2] || m[3]) : 1; return n >= 1 && n <= 100 ? n : 1; }
+    function partLabel(parts) {
+      return parts.length === 1
+        ? (parts[0].lotsPack ? parts[0].qty + " pcs of " + (parts[0].name || parts[0].code) + " (LOTS pack of " + parts[0].lotsPack + ")" : parts[0].qty === 1 ? parts[0].name : parts[0].qty + " \u00d7 " + (parts[0].name || parts[0].code))
+        : "Combo: " + parts.map(function (x) { return x.lotsPack ? (x.name || x.code) + " " + x.qty + "/" + x.lotsPack + " pcs" : (x.name || x.code) + " \u00d7" + x.qty; }).join(" + ");
+    }
+    var MW = null;   // { r, it, parts: [] }
+    var mw = document.createElement("div");
+    mw.id = "hubMap"; mw.className = "hub-mw";
+    mw.innerHTML = '<div class="hub-mw-box"><div class="hub-mw-head"><div><div class="nb-kicker">MAP PRODUCT \u00b7 SAVED FOR AMAZON TOOL + ORDER MAPPER</div>' +
+      '<div class="hub-mw-title" id="hmTitle"></div><div class="hub-mw-chips" id="hmChips"></div></div><button type="button" class="hub-mw-x" id="hmClose">\u00d7</button></div>' +
+      '<div class="hub-mw-body"><div class="hub-mw-left"><span class="hub-search"><i class="ti ti-search"></i><input type="text" id="hmQ" autocomplete="off" placeholder="Search LOTS product name, code or barcode"></span>' +
+      '<div class="hub-mw-list" id="hmList"><div class="nb-muted" style="padding:14px;">Loading LOTS products\u2026</div></div></div>' +
+      '<div class="hub-mw-right"><div class="hub-lbl" style="margin-bottom:8px;">Mapped to</div><div id="hmParts"></div><div class="hub-mw-sum" id="hmSum"></div></div></div>' +
+      '<div class="hub-mw-foot"><span class="nb-muted nb-small" id="hmNote"></span><button type="button" id="hmCancel">Cancel</button><button type="button" class="btn-gold" id="hmSave"><i class="ti ti-check"></i> Save mapping</button></div></div>';
+    document.body.appendChild(mw);
+    function closeMap() { mw.classList.remove("open"); MW = null; }
+    $("hmClose").addEventListener("click", closeMap); $("hmCancel").addEventListener("click", closeMap);
+    mw.addEventListener("click", function (e) { if (e.target === mw) closeMap(); });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && MW) closeMap(); });
+    function currentParts(it) {
+      var ix = lixAll()[acctKey(it.line.channel)], L = ix && ix.skus && ix.skus[it.sku];
+      return [];   // the ASIN record itself is not in the console; start empty, the summary shows the current cost
+    }
+    function openMap(r, it) {
+      if (!it) return;
+      MW = { r: r, it: it, parts: currentParts(it) };
+      var L = listingOf(it.line);
+      $("hmTitle").textContent = it.name;
+      $("hmChips").innerHTML = [account(r.o.channel), it.sku ? "SKU <b>" + esc(it.sku) + "</b>" : "", it.asin ? "ASIN <b>" + esc(it.asin) + "</b>" : '<span style="color:var(--x-red)">No ASIN found \u2014 saved for Order Mapper only</span>',
+        "Sells at <b>" + rs(it.price) + "</b>", L && L.c != null ? "Current cost <b>" + rs(L.c) + "</b>" : '<span style="color:var(--x-amber)">No cost mapped yet</span>']
+        .filter(Boolean).map(function (c) { return '<span class="hub-chip">' + c + "</span>"; }).join("");
+      $("hmQ").value = ""; $("hmNote").textContent = "";
+      mw.classList.add("open"); paintParts(); setTimeout(function () { $("hmQ").focus(); }, 30);
+      lotsList().then(function () { search(); });
+    }
+    function search() {
+      if (!MW) return;
+      var q = $("hmQ").value.toLowerCase().trim(), words = q.split(/\s+/).filter(Boolean), list = LOTS || [];
+      if (!words.length) words = MW.it.name.toLowerCase().replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(function (w) { return w.length > 2; }).slice(0, 4);
+      var hits = list.map(function (p) {
+        var hay = (String(p.name || "") + " " + p.code + " " + (p.barcode || "") + " " + (p.brand || "")).toLowerCase(), n = 0;
+        words.forEach(function (w) { if (hay.indexOf(w) >= 0) n++; });
+        return { p: p, n: n };
+      }).filter(function (x) { return q ? x.n === words.length : x.n >= Math.min(2, words.length); }).sort(function (a, b) { return b.n - a.n; }).slice(0, 40);
+      $("hmList").innerHTML = hits.length ? hits.map(function (x, k) {
+        var p = x.p, c = bestSlab(p);
+        return '<button type="button" class="hub-mw-item" data-k="' + k + '">' + (p.img ? '<img src="' + esc(p.img) + '" alt="">' : '<span class="ph"><i class="ti ti-package"></i></span>') +
+          '<span class="t"><b>' + esc(p.name) + '</b><span class="nb-muted nb-small">Code ' + esc(p.code) + (p.mrp ? " \u00b7 MRP " + rs(num(p.mrp)) : "") + (p.qty != null ? " \u00b7 Stock " + esc(p.qty) : "") + "</span></span>" +
+          '<span class="c">' + (c != null ? rs(c) : "\u2014") + "</span></button>";
+      }).join("") : '<div class="nb-muted" style="padding:14px;">' + (LOTS ? "No LOTS product found. Try another word." : "Loading LOTS products\u2026") + "</div>";
+      $("hmList").querySelectorAll(".hub-mw-item").forEach(function (b) { b.addEventListener("click", function () {
+        var p = hits[+b.dataset.k].p, a = packOf(MW.it.name), l = packOf(p.name);
+        MW.parts.push(a > 1 && l > 1 && a !== l ? { code: String(p.code), name: p.name, qty: a, lotsPack: l, p: p } : { code: String(p.code), name: p.name, qty: a === l && l > 1 ? 1 : a, p: p });
+        paintParts();
+      }); });
+    }
+    var hmT; $("hmQ").addEventListener("input", function () { clearTimeout(hmT); hmT = setTimeout(search, 150); });
+    function mapCost() { return MW.parts.reduce(function (s, x) { var c = bestSlab(x.p); return s + (c == null ? NaN : c * Math.max(1, x.qty) / Math.max(1, x.lotsPack || 1)); }, 0); }
+    function paintParts() {
+      if (!MW) return;
+      $("hmParts").innerHTML = MW.parts.length ? MW.parts.map(function (x, k) {
+        return '<div class="hub-mw-part"><div class="t"><b>' + esc(x.name) + '</b><span class="nb-muted nb-small">Code ' + esc(x.code) + " \u00b7 " + rs(bestSlab(x.p) || 0) + " per LOTS unit</span></div>" +
+          '<label>Pieces <input type="number" min="1" step="1" class="hm-q" data-k="' + k + '" value="' + x.qty + '"></label>' +
+          '<label title="Pieces in one LOTS unit (e.g. LOTS sells a pack of 20)">LOTS pack <input type="number" min="1" step="1" class="hm-lp" data-k="' + k + '" value="' + (x.lotsPack || 1) + '"></label>' +
+          '<button type="button" class="hm-del" data-k="' + k + '" title="Remove">\u00d7</button></div>';
+      }).join("") : '<div class="nb-muted nb-small" style="padding:10px 0 14px;">Pick the LOTS product on the left. Add more than one for a combo.</div>';
+      $("hmParts").querySelectorAll(".hm-q").forEach(function (i) { i.addEventListener("input", function () { MW.parts[+i.dataset.k].qty = Math.max(1, parseInt(i.value, 10) || 1); paintSum(); }); });
+      $("hmParts").querySelectorAll(".hm-lp").forEach(function (i) { i.addEventListener("input", function () { var v = Math.max(1, parseInt(i.value, 10) || 1); if (v > 1) MW.parts[+i.dataset.k].lotsPack = v; else delete MW.parts[+i.dataset.k].lotsPack; paintSum(); }); });
+      $("hmParts").querySelectorAll(".hm-del").forEach(function (b) { b.addEventListener("click", function () { MW.parts.splice(+b.dataset.k, 1); paintParts(); }); });
+      paintSum();
+    }
+    function estProfit(cost) {   // same maths as lineProfit, with the robot's numbers when known, else estimates
+      var it = MW.it, o = it.line, L = listingOf(o) || {}, price = num(o.price), q = Math.max(1, num(o.qty) || 1);
+      var g = (L.g != null ? L.g : num((MW.parts[0] && MW.parts[0].p && MW.parts[0].p.gst)) || 5) / 100;
+      var fee = L.fp != null ? L.fp : (price / q <= 250 ? 20 : price / q <= 500 ? 26 : 51), k = L.k != null ? L.k : 40;
+      return price * q + 0.85 * num(o.shippingCharge) - cost * q - k * (1 + 0.25 * (q - 1)) - fee * q - (g > 0 ? (price - cost) * g / (1 + g) * q : 0) - 3;
+    }
+    function paintSum() {
+      var c = MW.parts.length ? mapCost() : NaN;
+      $("hmSum").innerHTML = MW.parts.length ? (isNaN(c) ? '<span style="color:var(--x-red)">A picked LOTS product has no price.</span>' :
+        '<div><span>Cost per order unit</span><b>' + rs(c) + "</b></div>" + '<div><span>Expected profit (this order)</span><b class="' + (estProfit(c) < 0 ? "neg" : "ok") + '">' + rs(Math.round(estProfit(c))) + "</b></div>") : "";
+      $("hmSave").disabled = !MW.parts.length || isNaN(c);
+    }
+    function saveMap() {
+      if (!MW || !MW.parts.length) return;
+      var d = db(); if (!d) { alert("Still connecting \u2014 try again in a few seconds."); return; }
+      var it = MW.it, stamp = new Date().toISOString(), cost = mapCost();
+      var parts = MW.parts.map(function (x) { var o = { code: x.code, name: x.name || "", qty: Math.max(1, x.qty || 1) }; if ((x.lotsPack || 1) > 1) o.lotsPack = x.lotsPack; return o; });
+      var rec = { code: parts[0].code, name: partLabel(parts), vendorName: "LOTS", parts: parts, savedAt: stamp };
+      var jobs = [];
+      /* 1. Amazon ASIN mapping (SP-API robot, Amazon page, stock rule, profit) */
+      if (it.asin) {
+        var A = d.collection("aikm_admin");
+        jobs.push(A.doc("spapiAsinLotsMap").set({ map: { [it.asin]: rec }, savedAt: stamp }, { merge: true })
+          .catch(function () { return A.doc("spapiAsinLotsMap2").set({ map: { [it.asin]: rec }, savedAt: stamp }, { merge: true }); }));
+      }
+      /* 2. Order Mapper (same functions its own map window uses) */
+      try {
+        if (parts.length === 1 && typeof rememberMatch === "function") rememberMatch(it.name, { vendorName: "LOTS", code: parts[0].code, name: parts[0].name }, parts[0].qty, parts[0].lotsPack || 1, {});
+        else if (typeof loadLearned === "function" && typeof saveLearned === "function" && typeof normalize === "function") {
+          var Lr = loadLearned();
+          Lr[normalize(it.name)] = { orderName: it.name, vendorName: "LOTS", code: parts.map(function (p) { return p.code; }).join(", "), name: parts.map(function (p) { return p.name; }).join(" + "),
+            orderPackQty: 1, vendorPackQty: 1, isComboPart: true, comboSource: parts.length + " products",
+            parts: parts.map(function (p) { return { mapped: true, code: p.code, name: p.name, vendorName: "LOTS", plain: false, orderPackQty: p.qty, vendorPackQty: p.lotsPack || 1 }; }), savedAt: stamp };
+          saveLearned(Lr); if (typeof saveAll === "function") saveAll(); if (typeof pushMasterMappingToCloud === "function") pushMasterMappingToCloud(Lr);
+        } else {
+          var key = String(it.name).toLowerCase().replace(/[|/,_\-()]/g, " ").replace(/[^a-z0-9. ]/g, " ").replace(/\s+/g, " ").trim();
+          jobs.push(d.collection("aikm_admin").doc("masterMapping").collection("chunks").doc("__spapi_live_" + key.replace(/[^a-z0-9]/g, "_").slice(0, 60))
+            .set({ map: { [key]: { orderName: it.name, vendorName: "LOTS", code: parts[0].code, name: parts[0].name, orderPackQty: parts[0].qty, vendorPackQty: parts[0].lotsPack || 1, savedAt: stamp } } }));
+        }
+      } catch (e) { console.warn("Order Mapper mapping not saved", e); }
+      $("hmSave").disabled = true; $("hmNote").textContent = "Saving\u2026";
+      Promise.all(jobs).then(function () {
+        /* 3. show the new profit right away (robot's exact numbers replace it at the next SP-API sync) */
+        var ak = acctKey(it.line.channel), ix = lixAll()[ak];
+        if (ix) { ix.skus = ix.skus || {}; var L = ix.skus[it.sku] || (ix.skus[it.sku] = { a: it.asin });
+          L.c = Math.round(cost * 100) / 100; if (L.k == null) L.k = 40; if (L.g == null) L.g = num(parts[0] && MW.parts[0].p && MW.parts[0].p.gst) || 5;
+          if (L.fp == null) { var u = num(it.price); L.fp = u <= 250 ? 20 : u <= 500 ? 26 : 51; } }
+        closeMap(); buildPool();
+        toastHub(it.asin ? "\u2713 Mapped \u2014 saved for the Amazon tool (SP-API) and the Order Mapper" : "\u2713 Mapped \u2014 saved for the Order Mapper (this order has no ASIN for the Amazon tool)");
+      }).catch(function (e) { $("hmSave").disabled = false; $("hmNote").textContent = ""; alert("Mapping not saved: " + (e.message || e)); });
+    }
+    $("hmSave").addEventListener("click", saveMap);
+    function toastHub(m) { var t = document.createElement("div"); t.className = "hub-toast"; t.textContent = m; document.body.appendChild(t); setTimeout(function () { t.remove(); }, 3500); }
+
     /* ---------- labels (the normal label robot: NimbusPost + ProShip labels of the SLA date, product name + QTY printed) ---------- */
     var lblUnsub = null, lblBusy = false;
     function labels() {
@@ -756,6 +975,11 @@
     }
 
     $("psShip").addEventListener("click", ship);
+    $("hubPSort").addEventListener("click", function () {
+      pSort = pSort === 0 ? 1 : pSort === 1 ? -1 : 0;
+      $("hubPSortI").className = "ti " + (pSort === 1 ? "ti-sort-ascending" : pSort === -1 ? "ti-sort-descending" : "ti-arrows-sort");
+      pickRows();
+    });
     $("hubSet").addEventListener("click", function () { var h = $("hubSettings"); h.style.display = h.style.display === "none" ? "" : "none"; });
     $("hubOld").addEventListener("click", function () {
       selfTab.classList.add("hub-old-on");
