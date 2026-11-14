@@ -647,6 +647,131 @@
   #abBtn .c{font-family:var(--f-mono);font-size:11px;background:var(--gold);color:#0F1B33;border-radius:10px;padding:1px 7px;margin-left:6px}
   @media(max-width:700px){.ab-head{padding:12px 14px}.ab-body{padding:14px}.ab-foot{padding:10px 14px}.ab-foot .btn{flex:1}.ab-t .hm{display:none}}
   `;
+  /* ---------- RATE CHECK on the purchase bill screen (owner 14 Nov 2026):
+     each line's net rate vs what we paid before — last paid, lowest supplier and how much cheaper it was ---------- */
+  const RC = { hist: null, at: 0, busy: null };
+  async function rcLoad() {
+    if (RC.hist && Date.now() - RC.at < 5 * 60 * 1000) return RC.hist;
+    if (RC.busy) return RC.busy;
+    RC.busy = (async () => {
+      const rows = await sbAll(`kind=in.(bill,setting)&select=kind,id,data`);
+      const merge = (rows.find(r => r.kind === "setting" && r.id === "product_merge") || {}).data || {};
+      const to = k => { let i = 0; while (merge.map && merge.map[k] && merge.map[k] !== k && i++ < 20) k = merge.map[k]; return k; };
+      const H = new Map(), nameKey = new Map();
+      for (const r of rows) {
+        if (r.kind !== "bill") continue; const b = r.data; if (!b || !b.items || b.docType === "credit") continue;
+        b.items.forEach(it => {
+          if (!it.name) return;
+          const units = num(it.qty) + num(it.free); let tx = num(it.taxable);
+          if (!tx && num(it.qty) && num(it.rate)) tx = num(it.qty) * num(it.rate) * (1 - num(it.discPct) / 100);
+          if (!(units > 0) || !(tx > 0)) return;
+          const key = to(pkey(it)), nk = normName(withSize(it.name, it.pack));
+          nameKey.set(nk, key);
+          if (it.barcode) nameKey.set("bc:" + it.barcode, key);
+          (H.get(key) || H.set(key, []).get(key)).push({ bid: r.id, sup: b.supplier || "", billNo: b.billNo || "", date: b.billDate || "", unit: tx / units, mrp: num(it.mrp), name: withSize(it.name, it.pack) });
+        });
+      }
+      const sims = [...H.entries()].map(([k, l]) => { const x = l.reduce((a, y) => y.date > a.date ? y : a); return { k, name: x.name, sz: sizeSig(x.name), tk: toks(x.name), br: brandOf(x.name), mrp: x.mrp }; });
+      // LOTS price list (today's best slab, before GST) as one more "supplier"
+      let lots = [];
+      try { const ch = await fsList("main", "aikm_admin/lotsCatalog/chunks"); ch.forEach(c => (c.products || []).forEach(p => { const sl = p.slabs || [], pr = sl.length ? num(sl[sl.length - 1].price) : 0; if (pr > 0) lots.push({ k: "lots:" + p.code, name: p.name, sz: sizeSig(p.name), tk: toks(p.name), br: brandOf(p.name), mrp: num(p.mrp), unit: pr / (1 + num(p.gst) / 100) }); })); } catch (e) {}
+      RC.hist = { H, nameKey, sims, to, lots, link: ((rows.find(r => r.kind === "setting" && r.id === "rate_link") || {}).data) || {} }; RC.at = Date.now(); RC.busy = null;
+      return RC.hist;
+    })();
+    return RC.busy;
+  }
+  const brandOf = n => (String(n || "").toLowerCase().match(/[a-z]{2,}/) || [""])[0];
+  function rcMatch(list, name, pack, mrp) {
+    // list: [{k, name, sz, tk, br, mrp}] — same brand + same size required; score = shared words (+ same MRP bonus)
+    const nm = withSize(name, pack), sz = sizeSig(nm), tk = toks(nm), br = brandOf(nm);
+    let best = null, bs = 0;
+    for (const x of list) {
+      if (x.br !== br || (sz && x.sz && x.sz !== sz)) continue;
+      let hit = 0; tk.forEach(t => { if (x.tk.has(t)) hit++; });
+      let sc = hit / Math.max(1, Math.min(tk.size, x.tk.size));
+      if (mrp && x.mrp && Math.abs(mrp - x.mrp) < 1) sc += 0.35;
+      if (!sz || !x.sz) sc -= 0.25;
+      if (sc > bs) { bs = sc; best = x; }
+    }
+    return bs >= 0.6 ? best : null;
+  }
+  function rcFind(h, name, pack, mrp) {
+    const nk = normName(withSize(name, pack));
+    if (h.link[nk]) return { key: h.link[nk], how: "linked" };
+    if (h.nameKey.has(nk)) return { key: h.nameKey.get(nk), how: "same name" };
+    const m = rcMatch(h.sims, name, pack, mrp);
+    return m ? { key: m.k, how: "looks like " + m.name } : null;
+  }
+  async function rcRender(box) {
+    box.innerHTML = `<div class="sub" style="padding:10px">Checking rates against all past bills…</div>`;
+    let h; try { h = await rcLoad(); } catch (e) { box.innerHTML = `<div class="sub" style="padding:10px">Could not load past bills: ${esc(e.message)}</div>`; return; }
+    const sup = (document.getElementById("b_supplier") || {}).value || "", billNo = (document.getElementById("b_billNo") || {}).value || "";
+    const lines = [...document.querySelectorAll("#itBody tr[data-i]")].map(tr => { const g = k => (tr.querySelector(`input[data-k="${k}"]`) || {}).value || ""; return { name: g("name"), pack: g("pack"), qty: num(g("qty")), free: num(g("free")), rate: num(g("rate")), disc: num(g("discPct")), gst: num(g("gstPct")), taxable: num(g("taxable")), mrp: num(g("mrp")) }; }).filter(l => l.name);
+    let extra = 0, saveAll = 0, higher = 0, lower = 0, fresh = 0;
+    const rowsH = lines.map((l, li) => {
+      const units = l.qty + l.free, tx = l.taxable || l.qty * l.rate * (1 - l.disc / 100), unit = units ? tx / units : 0;
+      const f = rcFind(h, l.name, l.pack, l.mrp), key = f && f.key;
+      const past = key ? (h.H.get(key) || []).filter(x => !(normName(x.sup) === normName(sup) && normName(x.billNo) === normName(billNo))) : [];
+      const lm = rcMatch(h.lots, l.name, l.pack, l.mrp);
+      if (lm) past.push({ sup: "LOTS price list (today)", date: todayIso(), unit: lm.unit, name: lm.name, lots: true });
+      const inc = unit * (1 + l.gst / 100), mrpM = l.mrp && inc ? (l.mrp - inc) / l.mrp * 100 : null;
+      const how = f && f.how !== "same name" ? `<div class="sub" style="color:#9A6A00">${f.how === "linked" ? "linked by you" : esc(f.how)}</div>` : "";
+      const linkBtn = `<button type="button" class="btn small rcLink" data-li="${li}" style="padding:1px 8px;margin-top:3px">${past.filter(x => !x.lots).length ? "Wrong product?" : "Link to past product"}</button>`;
+      if (!past.length) { fresh++; return `<tr><td><span class="pn">${esc(l.name)}</span><div>${linkBtn}</div></td><td class="r num">${inr(unit, 2)}</td><td colspan="3" class="sub">Not bought before (and not on LOTS list) — nothing to compare</td><td class="r num">${mrpM == null ? "—" : mrpM.toFixed(1) + "%"}</td></tr>`; }
+      const own = past.filter(x => !x.lots), last = own.length ? own.reduce((a, x) => x.date > a.date ? x : a) : null, low = past.reduce((a, x) => x.unit < a.unit ? x : a);
+      const vsLow = unit - low.unit, pct = low.unit ? vsLow / low.unit * 100 : 0, vsLast = last ? unit - last.unit : 0, bad = vsLow > 0.01 && pct > 0.5;
+      let pill;
+      if (bad) { pill = `<span class="pill bad">₹${vsLow.toFixed(2)} higher (${pct.toFixed(1)}%)</span>`; higher++; extra += vsLow * units; }
+      else if (unit < low.unit - 0.01) { pill = `<span class="pill good">Cheapest ✓ (₹${(low.unit - unit).toFixed(2)} less)</span>`; lower++; }
+      else pill = `<span class="pill good">Same as lowest ✓</span>`;
+      const lowM = l.mrp ? (l.mrp - low.unit * (1 + l.gst / 100)) / l.mrp * 100 : null;
+      return `<tr${bad ? ' style="background:#FBE7E4"' : ""}><td><span class="pn">${esc(l.name)}</span><div class="sub">${units} units · ${own.length} earlier buy${own.length === 1 ? "" : "s"}</div>${how}<div>${linkBtn}</div></td>
+        <td class="r num"><b>${inr(unit, 2)}</b></td>
+        <td class="num">${last ? `${inr(last.unit, 2)} <span class="${vsLast > 0.01 ? "up" : vsLast < -0.01 ? "down" : "sub"}">${Math.abs(vsLast) > 0.01 ? (vsLast > 0 ? "▲" : "▼") + Math.abs(vsLast).toFixed(2) : "same"}</span><div class="sub">${esc(last.sup)} · ${fmtD(last.date)}</div>` : '<span class="sub">—</span>'}</td>
+        <td class="num"><b>${inr(low.unit, 2)}</b><div class="sub">${esc(low.sup)}${low.lots ? "" : " · " + fmtD(low.date)}</div>${low.name && normName(low.name) !== normName(l.name) ? `<div class="sub" title="${esc(low.name)}" style="max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(low.name)}</div>` : ""}</td>
+        <td>${pill}${bad ? `<div class="sub">${inr(vsLow * units, 2)} more on this bill</div>` : ""}</td>
+        <td class="r num">${mrpM == null ? "—" : mrpM.toFixed(1) + "%"}${lowM != null && bad ? `<div class="sub">${lowM.toFixed(1)}% at lowest</div>` : ""}</td></tr>`;
+    });
+    box.innerHTML = `<div class="row" style="gap:8px;flex-wrap:wrap;padding:10px 12px;align-items:center">
+        <b style="font-family:var(--f-display)">Rate check</b>
+        ${higher ? `<span class="pill bad">${higher} costlier than before · ${inr(extra, 2)} extra on this bill</span>` : `<span class="pill good">No line costlier than the lowest earlier rate</span>`}
+        ${lower ? `<span class="pill good">${lower} new lowest</span>` : ""}${fresh ? `<span class="pill">${fresh} first time</span>` : ""}
+        <span class="sub" style="margin-left:auto">Net rate per unit, before GST, after discounts and free qty</span></div>
+      <div class="tablebox" style="margin:0 12px 12px"><table class="ab-t"><thead><tr><th>Product</th><th class="r">This bill</th><th>Last paid</th><th>Lowest paid · supplier</th><th>Compare</th><th class="r">Margin on MRP</th></tr></thead><tbody>${rowsH.join("")}</tbody></table></div>`;
+    const allNames = [...h.H.entries()].map(([k, l]) => ({ k, name: l.reduce((a, y) => y.date > a.date ? y : a).name })).sort((a, b) => a.name.localeCompare(b.name));
+    box.querySelectorAll(".rcLink").forEach(btn => btn.onclick = () => {
+      const l = lines[+btn.dataset.li], td = btn.parentNode;
+      td.innerHTML = `<datalist id="rcDl">${allNames.map(x => `<option value="${esc(x.name)}">`).join("")}</datalist><input list="rcDl" class="rcPick" placeholder="Type past product name" style="width:240px;padding:4px 8px"> <button type="button" class="btn small primary rcSave">Link</button>`;
+      td.querySelector(".rcPick").focus();
+      td.querySelector(".rcSave").onclick = async () => {
+        const v = td.querySelector(".rcPick").value.trim(), hit = allNames.find(x => x.name === v); if (!hit) return toast("Pick a product from the list.");
+        try {
+          const cur = ((await sb("GET", "docs?kind=eq.setting&id=eq.rate_link&select=data"))[0] || {}).data || {};
+          const nk = normName(withSize(l.name, l.pack));
+          await sbPut([{ kind: "setting", id: "rate_link", data: { ...cur, [nk]: hit.k, savedAt: nowIso() } }]);
+          h.link[nk] = hit.k; toast(`Linked to ${hit.name} — remembered for next bills`); rcRender(box);
+        } catch (e) { toast("Not saved: " + e.message, 5000); }
+      };
+    });
+  }
+  (function rateCheckMount() {
+    const add = () => {
+      const f = document.getElementById("bf"); if (!f || f.querySelector(".abRateBox")) return;
+      const sec = [...f.querySelectorAll(".sec")].find(x => /Products/i.test(x.textContent)); if (!sec) return;
+      const btn = document.createElement("button"); btn.type = "button"; btn.className = "btn small"; btn.textContent = "📊 Check rates";
+      btn.title = "Compare each line with earlier purchase rates and the lowest supplier";
+      const box = document.createElement("div"); box.className = "abRateBox"; box.style.cssText = "border:1px solid #E4DCCB;border-left:4px solid #C9A227;border-radius:12px;background:#fff;margin:4px 0 10px"; box.hidden = true;
+      const tb = f.querySelector("#itBody")?.closest(".tablebox"); if (!tb) return;
+      tb.parentNode.insertBefore(box, tb.nextSibling);
+      const tgt = sec.querySelector("#addLine"); (tgt ? tgt.parentNode : sec).insertBefore(btn, tgt || null);
+      btn.style.marginRight = "6px";
+      btn.onclick = () => { box.hidden = !box.hidden; btn.textContent = box.hidden ? "📊 Check rates" : "Hide rate check"; if (!box.hidden) rcRender(box); };
+      // quick warning without opening: count costlier lines in the background
+      rcLoad().then(() => { if (!document.body.contains(btn)) return; const tmp = document.createElement("div"); rcRender(tmp).then(() => { const m = tmp.querySelector(".pill.bad"); if (m) { btn.innerHTML = "📊 Check rates <span class='pill bad' style='margin-left:4px'>" + esc(m.textContent.split("·")[0].trim()) + "</span>"; } }); }).catch(() => {});
+    };
+    new MutationObserver(add).observe(document.body, { childList: true, subtree: true });
+  })();
+
   /* ---------- purchase bill screen: make every box look editable + full product names (owner 13 Nov 2026) ---------- */
   (function billEditLook() {
     const st = document.createElement("style"); st.id = "abBillEdit";
