@@ -178,7 +178,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   profit at/below the Loss-bar amount `aikm_loss_above`, missing address)
   EXPECTED PROFIT = our tool (owner 14 Nov 2026), not OMS Guru: per OMS line from `listingIndex/<acct>` skus {c cost, k courier, g GST, fp fee}
   — same maths as the price robot / Loss Orders tab (price + 85% buyer shipping − cost − courier − fees − GST on margin − ₹3); OMS profit only when a
-  SKU has no cost. Owner 14 Nov 2026: show BOTH - our profit big, "OMS ₹x" under it. Flag = our profit < min(₹15, 10% of order) (OMS flag only for un-priced orders). Own "Exp. profit" column
+  SKU has no cost. Owner 14 Nov 2026: show BOTH - our profit big, "OMS ₹x" under it. Flag (owner 14 Nov 2026 "loss orders not reflecting") = our profit BELOW the loss-bar amount `aikm_loss_above` (default 40; empty = old rule min(₹15, 10% of order)) -> On hold; un-priced orders: OMS flag or OMS profit below it. loss-bulk fires `aikm-loss-limit` on change -> pool rebuilt. KPI "Profit below ₹40" (tooltip: how many in minus). Own "Exp. profit" column
   (the "LOSS · ₹x" tag lives there — loss-bulk reads it). listingIndex: re-uses window.__nbLIX, else 1 listener (4 docs + 1 read per changed account sync).
   MAP BUTTON (owner 14 Nov 2026: "use the SP-API mapping window, it has images etc" + "deploy it inside, don't redirect" - do NOT
   build a separate mapping window): Shopify blocks framing /pages/amazon (X-Frame-Options DENY, frame-ancestors 'none'), so

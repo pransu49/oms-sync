@@ -14,7 +14,7 @@
   var KEY = "aikm_loss_above";
 
   function getMax() { try { var v = localStorage.getItem(KEY); return v === null ? "40" : v; } catch (e) { return "40"; } }
-  function setMax(v) { try { localStorage.setItem(KEY, v); } catch (e) {} }
+  function setMax(v) { try { localStorage.setItem(KEY, v); } catch (e) {} try { clearTimeout(setMax._t); setMax._t = setTimeout(function () { window.dispatchEvent(new Event("aikm-loss-limit")); }, 500); } catch (e) {} }
   function setText(el, t) { if (el && el.textContent !== t) el.textContent = t; } // only real changes (the observer would loop)
 
   var css = document.createElement("style");

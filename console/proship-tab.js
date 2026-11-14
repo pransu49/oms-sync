@@ -485,6 +485,7 @@
     var view = "toship", shipRows = [], pSort = 0; // pSort: 0 = default, 1 = profit low->high, -1 = high->low
     var VIEWS = [["toship", "To ship"], ["hold", "On hold"], ["failed", "Failed"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["rto", "RTO / Cancelled"]];
     /* loss rule (same amount as the red Loss bar): flagged orders ship only when profit is above it */
+    window.addEventListener("aikm-loss-limit", function () { if (typeof buildPool === "function") setTimeout(buildPool, 0); });
     function lossLimit() { try { var v = localStorage.getItem("aikm_loss_above"); return v === null ? "40" : v; } catch (e) { return "40"; } }
     function profitOk(r) { var l = lossLimit(); return l !== "" && r.profit > +l; }
     function isHold(r) { return r.state !== "ok" || (r.loss && !profitOk(r)); }
@@ -607,7 +608,10 @@
       var orderVal = live.reduce(function (s, x) { return s + num(x.price) * (num(x.qty) || 1) + num(x.shippingCharge); }, 0);
       /* flagged: our tool's profit decides when it can be worked out (under the robot's rule: Rs 15 or 10% of the order);
          OMS Guru's own flag only for orders our tool cannot price (no cost mapped) */
-      r.loss = all ? r.profit < Math.min(15, 0.1 * orderVal) : omsLoss;
+      /* owner 14 Nov 2026 ("loss orders are not reflecting"): a loss order = profit BELOW the owner's own amount on the loss bar
+         ("Ship them only when profit is above Rs [40]", localStorage aikm_loss_above); bar empty = the robot's rule (Rs 15 / 10% of order) */
+      var lim = lossLimit(), cut = lim === "" ? Math.min(15, 0.1 * orderVal) : +lim;
+      r.loss = all ? r.profit < cut : (omsLoss || r.omsProfit < cut);
       var missing = [];
       if (!String(o.buyerAddress1 || "").trim() && !String(o.buyerAddress2 || "").trim()) missing.push("address");
       if (!/^\d{6}$/.test(String(o.buyerPincode || "").trim())) missing.push("pincode");
@@ -757,11 +761,11 @@
       return kpi("Avg shipping cost \u00b7 ProShip", "\u20b9" + a.v.toFixed(1), "", tip);
     }
     function render() {
-      var sel = 0, bad = 0, done = 0, loss = 0;
-      var selP = 0; lastRows.forEach(function (r) { if (r.sel) { sel++; selP += r.profit || 0; } if (r.state !== "ok") bad++; if (r.ship) done++; if (r.loss) loss++; });
+      var sel = 0, bad = 0, done = 0, loss = 0, minus = 0;
+      var selP = 0; lastRows.forEach(function (r) { if (r.sel) { sel++; selP += r.profit || 0; } if (r.state !== "ok") bad++; if (r.ship) done++; if (r.loss) loss++; if (r.profit < 0) minus++; });
       $("psKpis").innerHTML =
         kpi(view === "hold" ? "On hold" : "Orders to ship", lastRows.length, "") + kpi("Selected to ship", sel, "nb-ok") + kpi("Expected profit (selected)", rs(Math.round(selP)), selP < 0 ? "nb-bad" : "nb-ok") +
-        kpi("Loss / low profit", loss, loss ? "nb-bad" : "") + kpi("Need a fix", bad, bad ? "nb-bad" : "") + avgShipKpi();
+        kpi(lossLimit() === "" ? "Loss / low profit" : "Profit below \u20b9" + lossLimit(), loss, loss ? "nb-bad" : "", minus + " of them are a real loss (profit in minus)") + kpi("Need a fix", bad, bad ? "nb-bad" : "") + avgShipKpi();
       var body = $("psBody");
       body.innerHTML = lastRows.length ? lastRows.map(function (r, i) {
         var o = r.o, ok = r.state === "ok", sh = r.ship, f = inFile[r.id], err = jobRes[r.id] && jobRes[r.id].e;
