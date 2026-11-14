@@ -96,6 +96,30 @@
       "html#aikm body .hub-st.t{background:var(--x-gold-soft);color:var(--x-gold);border-color:var(--x-gold-line);}" +
       "html#aikm body .hub-st.d{background:var(--x-green-soft);color:var(--x-green);border-color:transparent;}" +
       "html#aikm body .hub-st.r{background:var(--x-red-soft);color:var(--x-red);border-color:transparent;}" +
+      /* premium + aligned (owner 14 Nov 2026) */
+      "html#aikm body #aikmShipHub .nb-card{padding:26px 28px !important;border-radius:16px;}" +
+      "html#aikm body #aikmShipHub .nb-title{font-size:22px;letter-spacing:-.01em;}" +
+      "html#aikm body #aikmShipHub .nb-kpis{grid-template-columns:repeat(5,minmax(0,1fr)) !important;gap:12px;margin:16px 0 14px;}" +
+      "html#aikm body #aikmShipHub .nb-kpi{padding:12px 16px;border-radius:12px;background:var(--x-surface);}" +
+      "html#aikm body #aikmShipHub .nb-kpi-n{font-size:22px;}" +
+      "html#aikm body #aikmShipHub .nb-kpi.nb-bad{background:var(--x-surface);border:1px solid color-mix(in srgb,var(--x-red) 35%,transparent);}" +
+      "html#aikm body #aikmShipHub .nb-filter-row{gap:10px;}" +
+      "html#aikm body #aikmShipHub .nb-filter-row :is(input,select,button){height:38px !important;min-height:38px !important;box-sizing:border-box;}" +
+      "html#aikm body #aikmShipHub .table-scroll{border:1px solid var(--x-line);border-radius:12px;overflow:auto;max-height:70vh;}" +
+      "html#aikm body #aikmShipHub table.data{border-collapse:separate;border-spacing:0;margin:0 !important;}" +
+      "html#aikm body #aikmShipHub table.data thead th{font-size:11px !important;letter-spacing:.06em;text-transform:uppercase;color:var(--x-muted) !important;font-weight:700 !important;padding-top:11px !important;padding-bottom:11px !important;border-bottom:1px solid var(--x-line) !important;white-space:nowrap;}" +
+      "html#aikm body #aikmShipHub table.data td{padding-top:12px !important;padding-bottom:12px !important;border-bottom:1px solid var(--x-line) !important;}" +
+      "html#aikm body #aikmShipHub table.data tr:last-child td{border-bottom:0 !important;}" +
+      "html#aikm body #aikmShipHub table.data tbody tr:hover td{background:var(--x-surface-2);}" +
+      "html#aikm body #aikmShipHub :is(th,td).r{text-align:right !important;}" +
+      "html#aikm body #aikmShipHub td.r .nb-w{margin-left:auto;display:block;text-align:right;}" +
+      "html#aikm body #aikmShipHub .hub-pf{font-weight:700;font-size:13.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}" +
+      "html#aikm body #aikmShipHub .hub-pf.ok{color:var(--x-green);}html#aikm body #aikmShipHub .hub-pf.low{color:var(--x-amber);}html#aikm body #aikmShipHub .hub-pf.neg{color:var(--x-red);}" +
+      "html#aikm body #aikmShipHub .hub-pf .nb-loss{font-size:11px;}" +
+      "html#aikm body #aikmShipHub #psTable tr.nb-row-loss td{background:color-mix(in srgb,var(--x-red-soft) 55%,transparent) !important;}" +
+      "html#aikm body #aikmShipHub .nb-actions{position:sticky;bottom:0;background:var(--x-surface);padding:12px 0 2px;margin-top:0;border-top:1px solid var(--x-line);z-index:2;}" +
+      "html#aikm body #aikmShipHub .lb-bar{background:var(--x-surface-2) !important;border:1px solid var(--x-line) !important;border-radius:12px !important;padding:10px 14px !important;margin:0 0 12px !important;}" +
+      "html#aikm body #aikmShipHub .lb-bar b.lb-loss{color:var(--x-red) !important;}" +
       "@media (max-width:900px){html#aikm body .ps-grid{grid-template-columns:1fr 1fr;}}" +
       "}";
     document.head.appendChild(css);
@@ -275,7 +299,7 @@
             '<th>SLA</th><th>Order</th><th>Buyer</th><th>Items</th><th>AWB &amp; courier</th><th>Status</th><th>Booked</th><th></th>' +
           '</tr></thead><tbody id="hubShipBody"></tbody></table></div></div>' +
           '<div id="psPoolWrap"><div class="table-scroll"><table class="data" id="psTable"><thead><tr>' +
-            '<th style="width:28px;"><input type="checkbox" id="psAll" title="Select all"></th><th>SLA</th><th>Order</th><th>Buyer &amp; address</th><th>Items</th><th>Weight (kg)</th><th>Status</th>' +
+            '<th style="width:28px;"><input type="checkbox" id="psAll" title="Select all"></th><th>SLA</th><th>Order</th><th>Buyer &amp; address</th><th>Items</th><th class="r">Exp. profit</th><th class="r">Weight</th><th>Status</th>' +
           '</tr></thead><tbody id="psBody"></tbody></table></div></div>' +
           '<div class="nb-actions"><button type="button" id="psShip" class="btn-gold"><i class="ti ti-truck-delivery"></i> Ship via ProShip</button>' +
           '<button type="button" id="psLabels"><i class="ti ti-printer"></i> Download labels</button>' +
@@ -341,6 +365,24 @@
       setTimeout(function () { if (testing) { testing = 0; showConn(); alert("The test did not finish. Try again in a minute; if it repeats, tell Claude."); } }, 240000);
     });
 
+    /* Self-Ship sub-menu: "Sync OMS + NimbusPost now" -> "Sync OMS + ProShip now" (NimbusPost is off, owner 14 Nov 2026) */
+    function fixSyncBtn() {
+      var b = document.querySelector('#subtab-selfship [data-sync-now="oms,nimbus"]');
+      if (!b || b.dataset.hubFixed) return;
+      var n = b.cloneNode(false); n.dataset.hubFixed = "1"; n.removeAttribute("data-sync-now"); n.className = b.className;
+      n.innerHTML = '<i class="ti ti-refresh"></i> Sync OMS + ProShip now'; n.title = "Fetch new OMS Guru orders and refresh ProShip shipment statuses";
+      n.addEventListener("click", function () {
+        if (typeof window.aikmGhDispatch !== "function") { alert("Please reload the console (Ctrl + Shift + R) and try again."); return; }
+        n.disabled = true; n.innerHTML = '<i class="ti ti-loader-2 ps-spin"></i> Syncing\u2026';
+        Promise.all([window.aikmGhDispatch("sync-workflow.yml", {}), window.aikmGhDispatch("proship.yml", { mode: "sync" })])
+          .then(function () { n.innerHTML = '<i class="ti ti-check"></i> Started \u2014 new data in 2\u20133 min'; })
+          .catch(function (e) { alert(e.message || e); })
+          .then(function () { setTimeout(function () { n.disabled = false; n.innerHTML = '<i class="ti ti-refresh"></i> Sync OMS + ProShip now'; }, 90000); });
+      });
+      b.parentNode.replaceChild(n, b);
+    }
+    fixSyncBtn(); [1500, 5000, 10000, 20000].forEach(function (t) { setTimeout(fixSyncBtn, t); });
+
     if (isOpen()) setTimeout(function () { hookPanel(); hookIdx(); fillSettings(); pickupNote(); showConn(); build(); }, 0);
 
     /* ---------- pending self-ship pool (same rules as the NimbusPost / Zippy files) ---------- */
@@ -378,6 +420,36 @@
       items.forEach(function (it) { var w = settings.skuWeights[it.sku] || otherWeights[it.sku]; if (w) tot += w * it.qty; else all = false; });
       return all && tot > 0 ? r2(tot) : num(settings.weight) || DEF.weight;
     }
+    /* ---------- expected profit from OUR tool (owner 14 Nov 2026) ----------
+       listingIndex/<account> (written by every SP-API sync): per SKU cost c, courier k, GST g, Amazon fee fp. Same maths as the
+       price robot and the Loss Orders tab: price + 85% of the buyer's shipping - cost - courier - fees - GST on the margin - Rs 3.
+       Falls back to OMS Guru's profit when a SKU has no cost mapped. Re-uses the console's copy (__nbLIX) when it is loaded. */
+    var myLix = {}, lixUnsub = null;
+    function lixAll() { return window.__nbLIX && Object.keys(window.__nbLIX).length ? window.__nbLIX : myLix; }
+    function hookLix() {
+      var d = db(); if (lixUnsub || !d || (window.__nbLIX && Object.keys(window.__nbLIX).length)) return;
+      lixUnsub = true;
+      lixUnsub = d.collection("listingIndex").onSnapshot(function (sn) {
+        var m = {}; sn.forEach(function (x) { m[x.id] = x.data() || {}; }); myLix = m; if (isOpen()) setTimeout(buildPool, 0);
+      }, function (e) { console.warn("Self-Ship: listing index", e); });
+    }
+    function acctKey(ch) {
+      var n = account(ch).toLowerCase().replace(/[^a-z0-9]/g, ""), ks = Object.keys(lixAll());
+      return ks.filter(function (k) { return n === k; })[0] || ks.filter(function (k) { return n.indexOf(k) === 0 || k.indexOf(n) === 0; })[0] || "";
+    }
+    function listingOf(o) {
+      var ix = lixAll()[acctKey(o.channel)]; if (!ix) return null;
+      var skus = ix.skus || {}, sku = o.sku;
+      if (!skus[sku]) { var ol = (ix.orders || {})[nid(o.channelOrderId)] || []; if (ol.length === 1) sku = ol[0].s; }
+      return skus[sku] || null;
+    }
+    function lineProfit(o) {
+      var L = listingOf(o); if (!L || L.c == null || L.k == null) return null;
+      var price = num(o.price), q = Math.max(1, num(o.qty) || 1); if (!(price > 0)) return null;
+      var g = (L.g != null ? L.g : 5) / 100, fee = L.fp != null ? L.fp : 2, courier = L.k * (1 + 0.25 * (q - 1));
+      var gst = g > 0 ? (price - L.c) * g / (1 + g) * q : 0;
+      return price * q + 0.85 * num(o.shippingCharge) - L.c * q - courier - fee * q - gst - 3;
+    }
     function isSelfShipPending(o) {
       return /amazon/i.test(o.channel || "") && phone10(o.buyerPhone).length >= 10 && !String(o.awb || "").trim() &&
         /^(new|ready to ship|pending|confirmed)$/i.test(String(o.status || "").trim());
@@ -394,8 +466,15 @@
       var isCod = cod > 0 || /^cod$/i.test(String(o.orderType || "").trim());
       var total = list.reduce(function (s, it) { return s + it.price * it.qty + it.ship; }, 0);
       var r = { id: id, o: o, sla: ymd(o.slaDate), items: list, isCod: isCod, cod: r2(cod > 0 ? cod : (isCod ? total : 0)), weight: weightFor(list), state: "ok", note: "Ready" };
-      r.loss = typeof isOmsOrderLoss === "function" && live.some(function (x) { return isOmsOrderLoss(x); });
-      r.profit = r2(live.reduce(function (s, x) { return s + (parseFloat(x.profit) || 0); }, 0));
+      var omsLoss = typeof isOmsOrderLoss === "function" && live.some(function (x) { return isOmsOrderLoss(x); });
+      r.omsProfit = r2(live.reduce(function (s, x) { return s + (parseFloat(x.profit) || 0); }, 0));
+      var ep = 0, all = true; live.forEach(function (x) { var p = lineProfit(x); if (p == null) all = false; else ep += p; });
+      r.src = all ? "tool" : "oms";
+      r.profit = all ? Math.round(ep) : r.omsProfit;
+      var orderVal = live.reduce(function (s, x) { return s + num(x.price) * (num(x.qty) || 1) + num(x.shippingCharge); }, 0);
+      /* flagged: our tool's profit decides when it can be worked out (under the robot's rule: Rs 15 or 10% of the order);
+         OMS Guru's own flag only for orders our tool cannot price (no cost mapped) */
+      r.loss = all ? r.profit < Math.min(15, 0.1 * orderVal) : omsLoss;
       var missing = [];
       if (!String(o.buyerAddress1 || "").trim() && !String(o.buyerAddress2 || "").trim()) missing.push("address");
       if (!/^\d{6}$/.test(String(o.buyerPincode || "").trim())) missing.push("pincode");
@@ -405,6 +484,7 @@
       return r;
     }
     function buildPool() {
+      hookLix();
       var data = window.omsOrdersRaw || [], by = {};
       data.forEach(function (o) { if (!isSelfShipPending(o)) return; var k = nid(o.channelOrderId); if (k) (by[k] = by[k] || []).push(o); });
       var keep = {}; pool.forEach(function (r) { keep[r.id] = r; });
@@ -520,10 +600,10 @@
     function kpi(l, n, cls) { return '<div class="nb-kpi ' + cls + '"><div class="nb-kpi-n">' + n + '</div><div class="nb-kpi-l">' + l + "</div></div>"; }
     function render() {
       var sel = 0, bad = 0, done = 0, loss = 0;
-      lastRows.forEach(function (r) { if (r.sel) sel++; if (r.state !== "ok") bad++; if (r.ship) done++; if (r.loss) loss++; });
+      var selP = 0; lastRows.forEach(function (r) { if (r.sel) { sel++; selP += r.profit || 0; } if (r.state !== "ok") bad++; if (r.ship) done++; if (r.loss) loss++; });
       $("psKpis").innerHTML =
-        kpi(view === "hold" ? "On hold" : "Orders to ship", lastRows.length, "") + kpi("Selected to ship", sel, "nb-ok") + kpi("Loss orders", loss, loss ? "nb-bad" : "") +
-        kpi("Need a fix", bad, bad ? "nb-bad" : "") + kpi("Shipped in ProShip", done, done ? "nb-warnk" : "");
+        kpi(view === "hold" ? "On hold" : "Orders to ship", lastRows.length, "") + kpi("Selected to ship", sel, "nb-ok") + kpi("Expected profit (selected)", rs(Math.round(selP)), selP < 0 ? "nb-bad" : "nb-ok") +
+        kpi("Loss / low profit", loss, loss ? "nb-bad" : "") + kpi("Need a fix", bad, bad ? "nb-bad" : "");
       var body = $("psBody");
       body.innerHTML = lastRows.length ? lastRows.map(function (r, i) {
         var o = r.o, ok = r.state === "ok", sh = r.ship, f = inFile[r.id], err = jobRes[r.id] && jobRes[r.id].e;
@@ -540,15 +620,18 @@
           '<td><div class="ps-sla' + (r.sla && r.sla < todayYmd() ? " over" : "") + '">' + (r.sla ? esc(niceDay(r.sla)) : '<span class="nb-muted">\u2014</span>') + "</div>" +
             (r.sla && r.sla < todayYmd() ? '<div class="nb-small" style="color:var(--x-red);">Overdue</div>' : "") + "</td>" +
           '<td><div class="cx-awb">' + esc(r.id) + '</div><div class="nb-muted nb-small">' + esc(account(o.channel)) + "</div>" +
-            '<div style="margin-top:5px;">' + (r.isCod ? '<span class="nb-pay nb-cod">COD ' + rs(r.cod) + "</span>" : '<span class="nb-pay">Prepaid</span>') + "</div>" +
-            '<div style="margin-top:5px;">' + (r.loss ? '<span class="nb-loss">LOSS \u00b7 ' + rs(r.profit) + "</span>" : '<span class="nb-muted nb-small">Profit ' + rs(r.profit) + "</span>") + "</div></td>" +
+            '<div style="margin-top:6px;">' + (r.isCod ? '<span class="nb-pay nb-cod">COD ' + rs(r.cod) + "</span>" : '<span class="nb-pay">Prepaid</span>') + "</div></td>" +
           '<td><div class="nb-name">' + esc(o.buyerName || "") + "</div>" +
             '<div class="ps-addr">' + esc([o.buyerAddress1, o.buyerAddress2].filter(Boolean).join(", ")) + "</div>" +
             '<div class="nb-muted nb-small">' + esc([o.buyerCity, o.buyerState, o.buyerPincode].filter(Boolean).join(" \u00b7 ")) + "</div></td>" +
           '<td class="ps-items">' + r.items.map(function (it) { return "<div>" + esc(it.name) + " <b>\u00d7 " + it.qty + '</b> <span class="nb-muted nb-small">' + rs(it.price) + "</span></div>"; }).join("") + "</td>" +
-          '<td><input type="number" step="0.01" min="0.01" class="nb-w" data-i="' + i + '" value="' + r.weight + '"' + (sh ? " disabled" : "") + "></td>" +
+          '<td class="r"><div class="hub-pf ' + (r.profit < 0 ? "neg" : r.loss && !profitOk(r) ? "low" : "ok") + '"' +
+            (r.src === "oms" ? ' title="No cost mapped for this product in the Amazon tool - OMS Guru profit shown"' : ' title="Our tool: price + 85% shipping - cost - courier - Amazon fees - GST on margin - Rs 3 (OMS Guru says ' + rs(r.omsProfit) + ')"') + ">" +
+            (r.loss ? '<span class="nb-loss">LOSS \u00b7 ' + rs(r.profit) + "</span>" : rs(r.profit)) + "</div>" +
+            '<div class="nb-muted nb-small">' + (r.src === "tool" ? "our calc" : "OMS") + "</div></td>" +
+          '<td class="r"><input type="number" step="0.01" min="0.01" class="nb-w" data-i="' + i + '" value="' + r.weight + '"' + (sh ? " disabled" : "") + "></td>" +
           '<td><span class="nb-tag ' + tag + '">' + esc(note) + "</span>" + under + "</td></tr>";
-      }).join("") : '<tr><td colspan="7" class="nb-muted" style="text-align:center;padding:22px !important;">' + (pool.length ? "No orders here." : "No self-ship orders waiting right now.") + "</td></tr>";
+      }).join("") : '<tr><td colspan="8" class="nb-muted" style="text-align:center;padding:22px !important;">' + (pool.length ? "No orders here." : "No self-ship orders waiting right now.") + "</td></tr>";
       body.querySelectorAll(".nb-w").forEach(function (inp) {
         inp.addEventListener("change", function () {
           var r = lastRows[+inp.dataset.i], w = num(inp.value);

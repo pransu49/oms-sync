@@ -175,7 +175,12 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   it is the Amazon Self-Ship screen itself: `#aikmShipHub` is the first child of `#tab-selfship`; the old Self-Ship screen (`.wrap`: confirmation
   file, manual tracking) is hidden behind the "Old tools" button. Pickup address + default box + rates sit behind the header "Settings" button
   (`#hubSettings`, hidden; owner 14 Nov 2026: "remove pickup address from the screen, saved in backend" = `aikm_admin/proshipSettings`). The old screen (class `hub-old-on` on #tab-selfship). Status tabs: To ship · On hold (real loss,
-  profit at/below the Loss-bar amount `aikm_loss_above`, missing address) · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).
+  profit at/below the Loss-bar amount `aikm_loss_above`, missing address)
+  EXPECTED PROFIT = our tool (owner 14 Nov 2026), not OMS Guru: per OMS line from `listingIndex/<acct>` skus {c cost, k courier, g GST, fp fee}
+  — same maths as the price robot / Loss Orders tab (price + 85% buyer shipping − cost − courier − fees − GST on margin − ₹3); OMS profit only when a
+  SKU has no cost ("OMS" under the number). Flag = our profit < min(₹15, 10% of order) (OMS flag only for un-priced orders). Own "Exp. profit" column
+  (the "LOSS · ₹x" tag lives there — loss-bulk reads it). listingIndex: re-uses window.__nbLIX, else 1 listener (4 docs + 1 read per changed account sync).
+  Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).
   No own side-menu tab any more: a hidden `.tabbtn[data-tab=proship]` keeps old `?tab=proship` links working (opens Self-Ship). NOT built (owner asked,
   declined): fake tracking numbers sent to Amazon for orders we don't ship: tick orders -> job doc main `proshipJobs/<id>` {ids:{orderId:weightKg}, box, pickup}
   -> robot reads the orders FRESH from OMS chunks, skips cancelled / already-AWB (OMS, nimbusIndex, zippyIndex, proshipIndex) and creates the
