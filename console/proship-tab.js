@@ -345,7 +345,7 @@
       "</div>";
     tpanel.appendChild(panel);
     function $(id) { return document.getElementById(id); }
-    var shipSel = {}, shipShown = [];   // Shipped tabs: orders ticked for bulk labels
+    var shipSel = {}, shipShown = [], lblInfo = {};   // Shipped tabs: orders ticked for bulk labels
 
     var MAP = { psName: "name", psPhone: "phone", psEmail: "email", psAddr: "address", psCity: "city", psState: "state", psPin: "pin", psGst: "gstin", psW: "weight", psL: "l", psB: "b", psH: "h" };
     function fillSettings() {
@@ -653,6 +653,7 @@
           "<td>" + (r.stage === "shipped" && /pickup pending|booked|manifest/i.test(st) ? '<button type="button" class="ps-x" data-awb="' + esc(v.a) + '" data-id="' + esc(r.id) + '">Cancel</button>' : "") + "</td></tr>";
       }).join("") : '<tr><td colspan="10" class="nb-muted" style="text-align:center;padding:22px !important;">Nothing here.</td></tr>';
       shipShown = rows.slice(0, 1500).map(function (r) { return r.id; });
+      rows.forEach(function (r) { lblInfo[r.id] = { acct: r.acct || "", items: Object.keys(r.items).map(function (k) { return [k, r.items[k]]; }) }; });
       Object.keys(shipSel).forEach(function (k) { if (shipShown.indexOf(k) < 0) delete shipSel[k]; });
       $("hubShipBody").querySelectorAll(".hub-lsel").forEach(function (c) { c.addEventListener("change", function () { if (c.checked) shipSel[c.dataset.id] = 1; else delete shipSel[c.dataset.id]; lblBtnText(); }); });
       $("hubShipBody").querySelectorAll(".hub-lbl").forEach(function (b) { b.addEventListener("click", function () { labelsFor([b.dataset.id], b); }); });
@@ -712,6 +713,7 @@
         cb.addEventListener("change", function () { var r = lastRows[+cb.dataset.i]; r.sel = cb.checked; r.touched = true; render(); });
       });
       body.querySelectorAll(".ps-x").forEach(function (b) { b.addEventListener("click", function () { cancelShip(b.dataset.id, b.dataset.awb); }); });
+      lastRows.forEach(function (r) { if (r.ship) lblInfo[r.id] = { acct: acctOf(r), items: (r.items || []).map(function (x) { return [x.name, x.qty]; }) }; });
       body.querySelectorAll(".hub-lbl").forEach(function (b) { b.addEventListener("click", function () { labelsFor([b.dataset.id], b); }); });
       lblBtnText();
       body.querySelectorAll(".hub-map").forEach(function (b) { b.addEventListener("click", function () { var r = lastRows[+b.dataset.i]; if (r) openMap(r, r.items[+b.dataset.k]); }); });
@@ -887,7 +889,9 @@
       ids = (ids || []).filter(Boolean);
       if (!ids.length) return;
       if (ids.length > 2000) { alert("Please choose up to 2,000 orders at a time."); return; }
-      runLabelJob({ ids: ids, sla: "", acct: "" }, ids.length === 1 ? "Label " + ids[0] : ids.length + " labels", rowBtn);
+      /* send the product names with the job, so the robot does not have to read all OMS orders again (faster) */
+      var info = {}, all = true; ids.forEach(function (k) { if (lblInfo[k] && lblInfo[k].items.length) info[k] = lblInfo[k]; else all = false; });
+      runLabelJob({ ids: ids, sla: "", acct: "", orders: all ? JSON.stringify(info) : "" }, ids.length === 1 ? "Label " + ids[0] : ids.length + " labels", rowBtn);
     }
     function shippedHere() { return (lastRows || []).filter(function (r) { return r.ship; }).map(function (r) { return r.id; }); }
     function labels() {

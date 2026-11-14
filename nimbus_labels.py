@@ -405,7 +405,16 @@ def main():
         raise RuntimeError('No SLA date given')
     note('running', step='Reading OMS Guru orders…', sla=sla, acct=acct)
 
-    orders = oms_orders(sla, acct, pick_ids or None)
+    orders = {}
+    if pick_ids and job.get('orders'):   # console sent the product names: skip reading every OMS order (saves ~15 s)
+        try:
+            for k, v in (json.loads(job['orders']) or {}).items():
+                if nid(k) in pick_ids:
+                    orders[nid(k)] = {'id': nid(k), 'acct': v.get('acct') or '', 'items': [[str(n), int(float(q or 1))] for n, q in (v.get('items') or [])]}
+        except Exception as e:
+            print('Console order list not usable, reading OMS:', e); orders = {}
+    if not orders:
+        orders = oms_orders(sla, acct, pick_ids or None)
     if not orders:
         note('done', step='These orders were not found in OMS Guru (or are cancelled).' if pick_ids else 'No orders for this SLA date.', count=0, url='', missing=[]); return
     if pick_ids:   # chosen orders: ProShip only (NimbusPost is switched off)
