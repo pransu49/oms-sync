@@ -651,7 +651,7 @@
 /* ===== DO NOT REMOVE — loads the Meesho Listing tab (console/meesho-listing.js) on this Amazon page. Keep this block when replacing amazon-name-search.js. ===== */
 (function () { try { if (document.getElementById("aikmMeeshoListingJs")) return;
   function add(ref) { if (document.getElementById("aikmMeeshoListingJs")) return; var s = document.createElement("script"); s.id = "aikmMeeshoListingJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/meesho-listing.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/meesho-listing.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/meesho-listing.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -662,7 +662,7 @@
 /* ===== DO NOT REMOVE — loads 💡 Price suggestions (console/price-suggest.js) on this Amazon page. Keep this block when replacing amazon-name-search.js. ===== */
 (function () { try { if (document.getElementById("aikmPriceSuggestJs")) return;
   function add(ref) { if (document.getElementById("aikmPriceSuggestJs")) return; var s = document.createElement("script"); s.id = "aikmPriceSuggestJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/price-suggest.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/price-suggest.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/price-suggest.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -673,7 +673,7 @@
 /* ===== DO NOT REMOVE — loads 🩺 API health pill (console/api-health.js) on this Amazon page. Keep this block when replacing amazon-name-search.js. ===== */
 (function () { try { if (document.getElementById("aikmApiHealthJs")) return;
   function add(ref) { if (document.getElementById("aikmApiHealthJs")) return; var s = document.createElement("script"); s.id = "aikmApiHealthJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/api-health.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/api-health.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/api-health.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -684,7 +684,7 @@
 /* ===== DO NOT REMOVE — loads bulk price drop (console/bulk-price.js) on the Competitor Pricing tab. Keep this block when replacing amazon-name-search.js. ===== */
 (function () { try { if (document.getElementById("aikmBulkPriceJs")) return;
   function add(ref) { if (document.getElementById("aikmBulkPriceJs")) return; var s = document.createElement("script"); s.id = "aikmBulkPriceJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/bulk-price.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/bulk-price.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/bulk-price.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -695,7 +695,7 @@
 /* ===== DO NOT REMOVE — loads Referral fee + Closing fee columns on the Orders tab (console/order-fees.js). Keep this block when replacing amazon-name-search.js. ===== */
 (function () { try { if (document.getElementById("aikmOrderFeesJs")) return;
   function add(ref) { if (document.getElementById("aikmOrderFeesJs")) return; var s = document.createElement("script"); s.id = "aikmOrderFeesJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/order-fees.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/order-fees.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/order-fees.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -870,7 +870,7 @@
 /* ===== DO NOT REMOVE — loads Duplicate ASIN bulk delete + listing dates on the Inventory tab (console/dup-asin.js). Keep this block when replacing amazon-name-search.js. ===== */
 (function () { try { if (document.getElementById("aikmDupAsinJs")) return;
   function add(ref) { if (document.getElementById("aikmDupAsinJs")) return; var s = document.createElement("script"); s.id = "aikmDupAsinJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/dup-asin.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/dup-asin.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/dup-asin.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -1076,7 +1076,7 @@
 (function () { try { if (document.getElementById("aikmNewListingJs")) return;
   if (/[?&]app=meesho/.test(location.search)) return;
   function add(ref) { if (document.getElementById("aikmNewListingJs")) return; var s = document.createElement("script"); s.id = "aikmNewListingJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/new-listing.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/new-listing.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/new-listing.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -1089,7 +1089,7 @@
 (function () { try { if (document.getElementById("aikmCostAlertsJs")) return;
   if (/[?&]app=meesho/.test(location.search)) return;
   function add(ref) { if (document.getElementById("aikmCostAlertsJs")) return; var s = document.createElement("script"); s.id = "aikmCostAlertsJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/cost-alerts.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/cost-alerts.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/cost-alerts.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })

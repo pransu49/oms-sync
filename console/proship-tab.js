@@ -990,7 +990,7 @@
    NimbusPost and Zippy tables (owner 13 Nov 2026). Keep this block when replacing proship-tab.js. ===== */
 (function () { try { if (document.getElementById("aikmLossBulkJs")) return;
   function add(ref) { if (document.getElementById("aikmLossBulkJs")) return; var s = document.createElement("script"); s.id = "aikmLossBulkJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/loss-bulk.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/loss-bulk.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/loss-bulk.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })

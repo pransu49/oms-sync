@@ -649,7 +649,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
 /* ===== Loads the Loss Orders "Fix prices" panel (console/loss-tab.js). Keep this block. ===== */
 (function () { try { if (document.getElementById("aikmLossJs")) return;
   function add(ref) { if (document.getElementById("aikmLossJs")) return; var s = document.createElement("script"); s.id = "aikmLossJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/loss-tab.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/loss-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/loss-tab.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -661,7 +661,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
    every piece. Keep this block when replacing refund-tab.js. ===== */
 (function () { try { if (document.getElementById("aikmReadSaverJs")) return;
   function add(ref) { if (document.getElementById("aikmReadSaverJs")) return; var s = document.createElement("script"); s.id = "aikmReadSaverJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/read-saver.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/read-saver.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/read-saver.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -672,7 +672,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
 /* ===== DO NOT REMOVE — loads the Zippy file + Zippy tracking upload in Self-Ship (console/zippy-tab.js) ===== */
 (function () { try { if (document.getElementById("aikmZippyJs")) return;
   function add(ref) { if (document.getElementById("aikmZippyJs")) return; var s = document.createElement("script"); s.id = "aikmZippyJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/zippy-tab.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/zippy-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/zippy-tab.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -683,7 +683,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
 /* ===== DO NOT REMOVE — loads the RTO Check tab (console/rto-tab.js). Keep this block when replacing refund-tab.js. ===== */
 (function () { try { if (document.getElementById("aikmRtoJs")) return;
   function add(ref) { if (document.getElementById("aikmRtoJs")) return; var s = document.createElement("script"); s.id = "aikmRtoJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/rto-tab.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/rto-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/rto-tab.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -694,7 +694,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
 /* ===== DO NOT REMOVE — loads the LOTS Products "Price mismatch" button (console/price-mismatch.js). Keep this block when replacing refund-tab.js. ===== */
 (function () { try { if (document.getElementById("aikmPriceMismatchJs")) return;
   function add(ref) { if (document.getElementById("aikmPriceMismatchJs")) return; var s = document.createElement("script"); s.id = "aikmPriceMismatchJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/price-mismatch.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/price-mismatch.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/price-mismatch.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -705,7 +705,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
 /* ===== DO NOT REMOVE — loads the Complaints tab (console/complaints-tab.js). Keep this block when replacing refund-tab.js. ===== */
 (function () { try { if (document.getElementById("aikmComplaintsJs")) return;
   function add(ref) { if (document.getElementById("aikmComplaintsJs")) return; var s = document.createElement("script"); s.id = "aikmComplaintsJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/complaints-tab.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/complaints-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/complaints-tab.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -716,7 +716,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
 /* ===== DO NOT REMOVE — loads the Failed Refunds tab (console/refund-failed.js). Keep this block when replacing refund-tab.js. ===== */
 (function () { try { if (document.getElementById("aikmRefundFailedJs")) return;
   function add(ref) { if (document.getElementById("aikmRefundFailedJs")) return; var s = document.createElement("script"); s.id = "aikmRefundFailedJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-failed.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-failed.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/refund-failed.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -727,7 +727,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
 /* ===== DO NOT REMOVE — loads the ProShip panel in Self-Ship (console/proship-tab.js). Keep this block when replacing refund-tab.js. ===== */
 (function () { try { if (document.getElementById("aikmProshipJs")) return;
   function add(ref) { if (document.getElementById("aikmProshipJs")) return; var s = document.createElement("script"); s.id = "aikmProshipJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/proship-tab.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/proship-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/proship-tab.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })

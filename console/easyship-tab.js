@@ -390,7 +390,7 @@
    Loads the exact latest version (by commit) so updates show at once; falls back to @main. */
 (function () { try { if (document.getElementById("aikmRefundJs")) return;
   function add(ref) { if (document.getElementById("aikmRefundJs")) return; var s = document.createElement("script"); s.id = "aikmRefundJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-tab.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/refund-tab.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -423,7 +423,7 @@
    Keep this block at the end of this file when editing the Easy Ship tab. Loads the latest version (by commit); falls back to @main. */
 (function () { try { if (document.getElementById("aikmMeeshoJs")) return;
   function add(ref) { if (document.getElementById("aikmMeeshoJs")) return; var s = document.createElement("script"); s.id = "aikmMeeshoJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/meesho-tab.js"; document.head.appendChild(s); }
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/meesho-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/meesho-tab.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
