@@ -88,10 +88,29 @@
       "html#aikm body .hub-tabs button.on{color:var(--x-text);border-bottom-color:#D4AF37;}" +
       "html#aikm body .hub-tabs button.on span{background:#0F1E35;color:#F3E2A6;border-color:#0F1E35;}" +
       "html#aikm body .hub-tabs button.hold span{color:var(--x-red);}" +
-      "html#aikm body #hubShipTable{width:100%;}html#aikm body #hubShipTable td{vertical-align:top !important;font-size:12.5px;}" +
-      "html#aikm body #hubShipTable thead th{position:sticky;top:0;z-index:1;background:var(--x-surface-2);}" +
-      "html#aikm body #hubShipTable .ps-items div+div{margin-top:4px;}html#aikm body #hubShipTable .ps-items b{color:var(--x-gold);}" +
-      "html#aikm body #hubShipTable .ps-x{all:unset;cursor:pointer;font-size:11px;color:var(--x-red);text-decoration:underline;}" +
+      "html#aikm body #hubShipTable{width:100%;border-collapse:separate;border-spacing:0;}" +
+      "html#aikm body #hubShipTable thead th{position:sticky;top:0;z-index:1;background:#FBF9F4 !important;font-size:10.5px !important;letter-spacing:.06em;padding:9px 10px !important;white-space:nowrap;}" +
+      "html#aikm body #hubShipTable td{vertical-align:middle !important;font-size:12.5px;padding:7px 10px !important;border-bottom:1px solid #F0ECE2 !important;line-height:1.3;}" +
+      "html#aikm body #hubShipTable tbody tr{transition:background .12s;}html#aikm body #hubShipTable tbody tr:hover td{background:#FCFBF7 !important;}" +
+      "html#aikm body #hubShipTable tr.hs-on td{background:#FBF5E6 !important;}html#aikm body #hubShipTable tr.hs-on td:first-child{box-shadow:inset 3px 0 0 #C9A24B;}" +
+      "html#aikm body #hubShipTable .hs-ck{width:30px;padding-right:0 !important;}html#aikm body #hubShipTable .hs-ck input{accent-color:#0F1E35;width:15px;height:15px;}" +
+      "html#aikm body #hubShipTable .hs-nw{white-space:nowrap;}" +
+      "html#aikm body #hubShipTable .hs-mono{display:block;font:600 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#14213D;letter-spacing:.01em;}" +
+      "html#aikm body #hubShipTable .hs-acc,html#aikm body #hubShipTable .hs-cour,html#aikm body #hubShipTable .hs-buy span,html#aikm body #hubShipTable .hs-time span{display:block;font-size:10.5px;color:#8B909B;margin-top:2px;letter-spacing:.02em;}" +
+      "html#aikm body #hubShipTable .hs-acc{text-transform:uppercase;font-weight:600;}" +
+      "html#aikm body #hubShipTable .hs-cour{font-weight:600;color:#B08A36;}" +
+      "html#aikm body #hubShipTable .hs-buy{max-width:200px;}html#aikm body #hubShipTable .hs-buy b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}" +
+      "html#aikm body #hubShipTable .hs-buy span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}" +
+      "html#aikm body #hubShipTable .hs-it{max-width:340px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;}" +
+      "html#aikm body #hubShipTable .hs-it em{font-style:normal;font-weight:700;color:#B08A36;}html#aikm body #hubShipTable .hs-more{font-style:normal;font-size:10.5px;font-weight:700;background:#F1F0EC;color:#4A5468;border-radius:10px;padding:1px 6px;}" +
+      "html#aikm body #hubShipTable .hs-time{font-size:12px;color:#4A5468;}" +
+      "html#aikm body #hubShipTable .hs-act{width:1%;white-space:nowrap;text-align:right;}" +
+      "html#aikm body #hubShipTable .hs-ib{all:unset;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;height:28px;min-width:28px;padding:0 9px;box-sizing:border-box;border-radius:8px;border:1px solid #E7E1D3;background:#fff;font-size:12px;font-weight:600;color:#0F1E35;margin-left:5px;transition:all .12s;}" +
+      "html#aikm body #hubShipTable .hs-ib:hover{background:#0F1E35;border-color:#0F1E35;color:#fff;}html#aikm body #hubShipTable .hs-ib[disabled]{opacity:.6;pointer-events:none;}" +
+      "html#aikm body #hubShipTable .hs-cx{padding:0;width:28px;color:#B42318;}html#aikm body #hubShipTable .hs-cx:hover{background:#B42318;border-color:#B42318;color:#fff;}" +
+      "html#aikm body #hubLblPill{position:fixed;right:22px;bottom:84px;z-index:2147483000;display:none;align-items:center;gap:10px;background:#0F1E35;color:#fff;border-radius:12px;padding:11px 15px;font:500 12.5px Inter,system-ui,sans-serif;box-shadow:0 12px 34px rgba(15,30,53,.3);border-left:3px solid #C9A24B;max-width:360px;}" +
+      "html#aikm body #hubLblPill b{color:#E3C47A;font-variant-numeric:tabular-nums;}html#aikm body #hubLblPill a{color:#E3C47A;font-weight:700;}html#aikm body #hubLblPill .x{cursor:pointer;opacity:.6;margin-left:4px;}" +
+      "html#aikm body #hubLblPill .sp{width:14px;height:14px;border:2px solid rgba(255,255,255,.25);border-top-color:#C9A24B;border-radius:50%;animation:hubspin2 .8s linear infinite;flex:none;}@keyframes hubspin2{to{transform:rotate(360deg)}}" +
       "html#aikm body .hub-st{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;background:var(--x-surface-2);border:1px solid var(--x-line);color:var(--x-text-2);}" +
       "html#aikm body .hub-st.t{background:var(--x-gold-soft);color:var(--x-gold);border-color:var(--x-gold-line);}" +
       "html#aikm body .hub-st.d{background:var(--x-green-soft);color:var(--x-green);border-color:transparent;}" +
@@ -176,6 +195,7 @@
       return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
     }
     function todayYmd() { return ymd(new Date().toDateString()); }
+    function ago(ts) { var m = Math.round((Date.now() - ts) / 6e4); if (m < 1) return "just now"; if (m < 60) return m + " min ago"; var h = Math.round(m / 60); return h < 48 ? h + " h ago" : Math.round(h / 24) + " days ago"; }
     function when(ts) { return new Date(ts).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }); }
     function rs(n) { return "\u20b9" + r2(n).toLocaleString("en-IN"); }
 
@@ -331,7 +351,7 @@
         '<div id="psResult" style="display:none;">' +
           '<div class="nb-kpis" id="psKpis"></div>' +
           '<div id="hubShipWrap" style="display:none;"><div class="table-scroll"><table class="data" id="hubShipTable"><thead><tr>' +
-            '<th style="width:28px;"><input type="checkbox" id="hubShipAll" title="Select all (for bulk labels)"></th><th>SLA</th><th>Order</th><th>Buyer</th><th>Items</th><th>AWB &amp; courier</th><th>Status</th><th>Booked</th><th>Label</th><th></th>' +
+            '<th class="hs-ck"><input type="checkbox" id="hubShipAll" title="Select all (for bulk labels)"></th><th>SLA</th><th>Order</th><th>Buyer</th><th>Items</th><th>AWB \u00b7 courier</th><th>Status</th><th>Booked</th><th class="hs-act">Actions</th>' +
           '</tr></thead><tbody id="hubShipBody"></tbody></table></div></div>' +
           '<div id="psPoolWrap"><div class="table-scroll"><table class="data" id="psTable"><thead><tr>' +
             '<th style="width:28px;"><input type="checkbox" id="psAll" title="Select all"></th><th>SLA</th><th>Order</th><th>Buyer &amp; address</th><th>Items</th><th class="r hub-sort" id="hubPSort" title="Sort by profit">Profit <i class="ti ti-arrows-sort" id="hubPSortI"></i><div class="hub-sub">our tool \u00b7 OMS</div></th><th class="r">Weight</th><th>Status</th>' +
@@ -640,22 +660,24 @@
         kpi("Accounts", Object.keys(rows.reduce(function (m, r) { m[r.acct] = 1; return m; }, {})).length, "");
       $("hubShipBody").innerHTML = rows.length ? rows.slice(0, 1500).map(function (r) {
         var o = r.o, v = r.v, st = prettySt(v), cls = r.stage === "delivered" ? "d" : r.stage === "rto" ? "r" : /pickup pending/i.test(st) ? "" : "t";
-        return "<tr>" +
-          '<td><input type="checkbox" class="hub-lsel" data-id="' + esc(r.id) + '"' + (shipSel[r.id] ? " checked" : "") + "></td>" +
-          '<td><div class="ps-sla">' + (r.sla ? esc(niceDay(r.sla)) : '<span class="nb-muted">\u2014</span>') + "</div></td>" +
-          '<td><div class="cx-awb">' + esc(r.id) + '</div><div class="nb-muted nb-small">' + esc(r.acct) + "</div></td>" +
-          '<td><div class="nb-name">' + esc(o.buyerName || "") + '</div><div class="nb-muted nb-small">' + esc([o.buyerCity, o.buyerPincode].filter(Boolean).join(" \u00b7 ")) + "</div></td>" +
-          '<td class="ps-items">' + Object.keys(r.items).map(function (k) { return "<div>" + esc(k) + " <b>\u00d7 " + r.items[k] + "</b></div>"; }).join("") + "</td>" +
-          '<td><div class="cx-awb">' + esc(v.a) + '</div><div class="nb-muted nb-small">' + esc(v.c || "ProShip") + "</div></td>" +
+        var its = Object.keys(r.items), itTxt = its.map(function (k) { return k + " \u00d7 " + r.items[k]; }).join(" + ");
+        var canCancel = r.stage === "shipped" && /pickup pending|booked|manifest/i.test(st);
+        return '<tr' + (shipSel[r.id] ? ' class="hs-on"' : "") + ">" +
+          '<td class="hs-ck"><input type="checkbox" class="hub-lsel" data-id="' + esc(r.id) + '"' + (shipSel[r.id] ? " checked" : "") + "></td>" +
+          '<td class="hs-nw"><b>' + (r.sla ? esc(niceDay(r.sla)) : "\u2014") + "</b></td>" +
+          '<td class="hs-nw"><span class="hs-mono">' + esc(r.id) + '</span><span class="hs-acc">' + esc(r.acct) + "</span></td>" +
+          '<td class="hs-buy"><b>' + esc(o.buyerName || "\u2014") + "</b><span>" + esc([o.buyerCity, o.buyerPincode].filter(Boolean).join(" \u00b7 ")) + "</span></td>" +
+          '<td class="hs-it" title="' + esc(itTxt) + '">' + (its.length ? esc(its[0]) + ' <em>\u00d7 ' + r.items[its[0]] + "</em>" + (its.length > 1 ? ' <i class="hs-more">+' + (its.length - 1) + "</i>" : "") : "") + "</td>" +
+          '<td class="hs-nw"><span class="hs-mono">' + esc(v.a) + '</span><span class="hs-cour">' + esc(v.c || "ProShip") + "</span></td>" +
           '<td><span class="hub-st ' + cls + '">' + esc(st) + "</span></td>" +
-          '<td class="nb-muted nb-small">' + (v.t ? esc(when(v.t)) : "") + "</td>" +
-          '<td><button type="button" class="hub-lbl" data-id="' + esc(r.id) + '" title="Download this label (PDF)"><i class="ti ti-printer"></i> Label</button></td>' +
-          "<td>" + (r.stage === "shipped" && /pickup pending|booked|manifest/i.test(st) ? '<button type="button" class="ps-x" data-awb="' + esc(v.a) + '" data-id="' + esc(r.id) + '">Cancel</button>' : "") + "</td></tr>";
-      }).join("") : '<tr><td colspan="10" class="nb-muted" style="text-align:center;padding:22px !important;">Nothing here.</td></tr>';
+          '<td class="hs-nw hs-time">' + (v.t ? esc(when(v.t)) + "<span>" + esc(ago(v.t)) + "</span>" : "") + "</td>" +
+          '<td class="hs-act"><button type="button" class="hs-ib hub-lbl" data-id="' + esc(r.id) + '" title="Download this label (PDF)"><i class="ti ti-printer"></i><span>Label</span></button>' +
+          (canCancel ? '<button type="button" class="hs-ib hs-cx ps-x" data-awb="' + esc(v.a) + '" data-id="' + esc(r.id) + '" title="Cancel this shipment"><i class="ti ti-x"></i></button>' : "") + "</td></tr>";
+      }).join("") : '<tr><td colspan="9" class="nb-muted" style="text-align:center;padding:22px !important;">Nothing here.</td></tr>';
       shipShown = rows.slice(0, 1500).map(function (r) { return r.id; });
       rows.forEach(function (r) { lblInfo[r.id] = { acct: r.acct || "", items: Object.keys(r.items).map(function (k) { return [k, r.items[k]]; }) }; });
       Object.keys(shipSel).forEach(function (k) { if (shipShown.indexOf(k) < 0) delete shipSel[k]; });
-      $("hubShipBody").querySelectorAll(".hub-lsel").forEach(function (c) { c.addEventListener("change", function () { if (c.checked) shipSel[c.dataset.id] = 1; else delete shipSel[c.dataset.id]; lblBtnText(); }); });
+      $("hubShipBody").querySelectorAll(".hub-lsel").forEach(function (c) { c.addEventListener("change", function () { if (c.checked) shipSel[c.dataset.id] = 1; else delete shipSel[c.dataset.id]; c.closest("tr").classList.toggle("hs-on", c.checked); lblBtnText(); }); });
       $("hubShipBody").querySelectorAll(".hub-lbl").forEach(function (b) { b.addEventListener("click", function () { labelsFor([b.dataset.id], b); }); });
       var all = $("hubShipAll"); if (all) all.checked = shipShown.length > 0 && shipShown.every(function (k) { return shipSel[k]; });
       lblBtnText();
@@ -931,10 +953,18 @@
       if (typeof window.aikmGhDispatch !== "function") { alert("Please reload the console (Ctrl + Shift + R) and try again."); return; }
       if (lblBusy) { alert("A label download is already running \u2014 please wait a moment."); return; }
       lblBusy = true; lblRowBtn = rowBtn || null;
-      if (lblRowBtn) { lblRowBtn.disabled = true; lblRowBtn.innerHTML = '<i class="ti ti-loader"></i> Making\u2026'; }
-      var head = "<b>" + esc(title) + "</b> \u2014 ", fresh = true;
-      show("psLblStatus", head + "starting on the server (about 1 minute)\u2026", "run");
-      var done = function () { lblBusy = false; if (lblRowBtn) { lblRowBtn.disabled = false; lblRowBtn.innerHTML = '<i class="ti ti-printer"></i> Label'; lblRowBtn = null; } };
+      if (lblRowBtn) { lblRowBtn.disabled = true; lblRowBtn.innerHTML = '<i class="ti ti-loader"></i><span>Making\u2026</span>'; }
+      var head = "<b>" + esc(title) + "</b> \u2014 ", fresh = true, t0 = Date.now(), nLbl = (job.ids || []).length || 0;
+      var est = nLbl ? Math.round(18 + nLbl * 0.25) : 60, stepTxt = "Starting the label robot\u2026";
+      show("psLblStatus", head + "starting on the server (about " + est + " s)\u2026", "run");
+      /* floating timer (owner 14 Nov 2026: "deploy time as well"): elapsed seconds + estimate, visible wherever you scroll */
+      var pill = document.getElementById("hubLblPill");
+      if (!pill) { pill = document.createElement("div"); pill.id = "hubLblPill"; document.body.appendChild(pill); }
+      var secs = function () { return Math.round((Date.now() - t0) / 1000); };
+      var tick = function () { if (!lblBusy) return; pill.style.display = "flex"; pill.innerHTML = '<span class="sp"></span><span>' + esc(title) + " \u00b7 <b>" + secs() + " s</b> of about " + est + " s<br><span style=\"opacity:.7;font-size:11.5px\">" + esc(stepTxt) + "</span></span>"; };
+      var timer = setInterval(tick, 1000); tick();
+      var finish = function (html) { clearInterval(timer); pill.style.display = "flex"; pill.innerHTML = html + '<span class="x" title="Close">\u00d7</span>'; pill.querySelector(".x").onclick = function () { pill.style.display = "none"; }; };
+      var done = function () { lblBusy = false; clearInterval(timer); if (lblRowBtn) { lblRowBtn.disabled = false; lblRowBtn.innerHTML = '<i class="ti ti-printer"></i><span>Label</span>'; lblRowBtn = null; } };
       var ref = d.collection("labelJobs").doc();
       ref.set(Object.assign({ onlyNew: false, status: "queued", step: "Waiting for the server\u2026", createdAt: firebase.firestore.FieldValue.serverTimestamp() }, job))
         .then(function () {
@@ -942,9 +972,11 @@
           lblUnsub = ref.onSnapshot(function (doc) {
             if (!doc.exists) return;
             var j = doc.data(), st = j.status || "queued";
-            if (st === "queued" || st === "running") { show("psLblStatus", head + esc(j.step || "Starting\u2026"), "run"); return; }
+            if (st === "queued" || st === "running") { stepTxt = j.step || "Starting\u2026"; show("psLblStatus", head + esc(stepTxt), "run"); return; }
             done();
-            if (st === "failed") { show("psLblStatus", head + "could not make the labels. " + esc(j.step || ""), "bad"); return; }
+            if (st === "failed") { show("psLblStatus", head + "could not make the labels. " + esc(j.step || ""), "bad"); finish('<span>\u26a0 ' + esc(title) + " failed after " + secs() + " s</span>"); return; }
+            if (j.url) finish('<span>\u2713 ' + esc(title) + " ready in <b>" + secs() + ' s</b> \u00b7 <a href="' + esc(j.url) + '" rel="noopener">Download again</a></span>');
+            else finish("<span>" + esc(j.step || "No labels.") + "</span>");
             if (j.url) {
               show("psLblStatus", head + "<b>" + j.count + ' label' + (j.count > 1 ? "s" : "") + ' ready</b> <a class="ps-dl" href="' + esc(j.url) + '" rel="noopener"><i class="ti ti-download"></i> Download PDF</a>' +
                 (j.noLabel && j.noLabel.length ? '<div class="nb-muted nb-small" style="margin-top:6px;">' + j.noLabel.length + " label(s) not returned by ProShip: " + esc(j.noLabel.slice(0, 5).join(", ")) + "</div>" : "") +
@@ -960,7 +992,7 @@
     $("psShip").addEventListener("click", ship);
     $("hubShipAll").addEventListener("change", function () {
       var on = this.checked; shipShown.forEach(function (k) { if (on) shipSel[k] = 1; else delete shipSel[k]; });
-      $("hubShipBody").querySelectorAll(".hub-lsel").forEach(function (c) { c.checked = on; }); lblBtnText();
+      $("hubShipBody").querySelectorAll(".hub-lsel").forEach(function (c) { c.checked = on; c.closest("tr").classList.toggle("hs-on", on); }); lblBtnText();
     });
     $("hubPSort").addEventListener("click", function () {
       pSort = pSort === 0 ? 1 : pSort === 1 ? -1 : 0;

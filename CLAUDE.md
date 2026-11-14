@@ -194,6 +194,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Self-Ship toasts when the window closes without saving. Self-Ship also uses the cost of another SKU of the same ASIN (old/relisted SKUs).
   LABELS one-by-one + bulk (owner 14 Nov 2026): Shipped / Delivered / RTO tabs have a tick box + "Label" button per row; the bottom
   button = "Download N labels" when rows are ticked, else the SLA-date label run. Job labelJobs/<id> {ids:[orderIds]} -> nimbus_labels.py
+  Shipped table = compact premium rows (owner 14 Nov 2026): one-line cells, Booked shows time + "N h ago", Actions = Label + red x Cancel;
+  floating timer pill #hubLblPill ("Label X · 12 s of about 18 s", then "ready in N s · Download again").
   To ship / On hold: shipped rows get the same Label button; bottom button = "Download N shipped labels" (those rows).
   (ids mode: ProShip labels only, SLA ignored, no picklist/Telegram; file "Label <order>.pdf" / "Self-Ship Labels N orders.pdf"). ~25 reads per job.
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
