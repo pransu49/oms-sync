@@ -5,6 +5,8 @@ const oms = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(p
 const num = (v) => { const n = parseFloat(String(v ?? '').replace(/[^0-9.\-]/g, '')); return isFinite(n) ? n : 0; };
 const nid = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').replace(/\s+/g, '').trim();
 (async () => {
+  let PIDX = {}; try { PIDX = JSON.parse((await main.collection('aikm_admin').doc('proshipIndex').get()).get('data') || '{}'); } catch (e) {}
+  const FR = {}; Object.values(PIDX).forEach((v) => { if (v.r > 0) (FR[v.ac || ''] = FR[v.ac || ''] || []).push(v.r); }); const frAvg = (a) => { const l = FR[a]; return l && l.length >= 5 ? l.reduce((x, y) => x + y, 0) / l.length : null; };
   const lix = {}; (await main.collection('listingIndex').get()).forEach((d) => (lix[d.id] = d.data()));
   const orders = []; (await oms.collection('aikm_admin').doc('omsOrders').collection('chunks').get()).forEach((d) => (d.get('orders') || []).forEach((o) => orders.push(o)));
   const acctOf = (ch) => { const n = String(ch || '').toLowerCase().replace(/ - amazon.*$/, '').replace(/[^a-z0-9]/g, ''); return Object.keys(lix).find((k) => n === k || n.startsWith(k) || k.startsWith(n)) || ''; };
@@ -15,8 +17,8 @@ const nid = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').replace(
     let sku = o.sku; if (!ix.skus[sku]) { const ol = (ix.orders || {})[nid(o.channelOrderId)] || []; if (ol.length === 1) sku = ol[0].s; }
     const L = ix.skus[sku]; if (!L || L.c == null || L.k == null) continue;
     const price = num(o.price), q = Math.max(1, num(o.qty) || 1), ship = num(o.shippingCharge), g = (L.g ?? 5) / 100, fee = L.fp ?? 2;
-    const courier = L.k * (1 + 0.25 * (q - 1)), gst = g > 0 ? (price - L.c) * g / (1 + g) * q : 0;
-    const ours = price * q + 0.85 * ship * q - L.c * q - courier - fee * q - gst - 3, om = num(o.profit), cogs = num(o.cogs);
+    const accName = String(o.channel || '').replace(/ - Amazon.*$/i, '').trim(), fa = frAvg(accName), courier = fa != null ? fa : L.k * (1 + 0.25 * (q - 1)), gst = g > 0 ? (price - L.c) * g / (1 + g) * q : 0;
+    const ours = price * q + ship * q / (1 + g) - L.c * q - courier - fee * q - gst - 3, om = num(o.profit), cogs = num(o.cogs);
     rows.push({ id: nid(o.channelOrderId), a, sku, nm: String(o.productName || '').slice(0, 40), price, q, ship, total: num(o.total), c: L.c, cogs, k: L.k, fee, g: L.g, gst: Math.round(gst), ours: Math.round(ours), oms: Math.round(om), d: Math.round(ours - om) });
   }
   const avg = (f) => Math.round(rows.reduce((s, r) => s + f(r), 0) / Math.max(1, rows.length) * 10) / 10;
@@ -25,6 +27,10 @@ const nid = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').replace(
   // what would OMS profit look like = price*q - cogs - X ?  print implied "other costs" of OMS
   console.log('avg OMS implied costs (price*q + ship - cogs - omsProfit)', avg((r) => r.price * r.q + r.ship - r.cogs - r.oms), ' ours (courier+fee+gst+3-0.15ship)', avg((r) => r.k + r.fee * r.q + r.gst + 3 - 0.15 * r.ship));
   console.log('cogs 0 count', rows.filter((r) => !r.cogs).length, ' |cost-cogs|>20%', rows.filter((r) => r.cogs && Math.abs(r.c * r.q - r.cogs) > 0.2 * r.cogs).length);
+  const ov = (r) => r.price * r.q + r.ship * r.q;
+  console.log('FLAG old rule (<min(15,10%)):', rows.filter((r) => r.ours < Math.min(15, 0.1 * ov(r))).length, ' negative:', rows.filter((r) => r.ours < 0).length, ' <15:', rows.filter((r) => r.ours < 15).length, ' <40:', rows.filter((r) => r.ours < 40).length, ' OMS<0:', rows.filter((r) => r.oms < 0).length, ' OMS<40:', rows.filter((r) => r.oms < 40).length, ' total:', rows.length);
+  console.log('FREIGHT AVG', JSON.stringify(Object.fromEntries(Object.keys(FR).map((a) => [a, frAvg(a)]))));
+  rows.filter((r) => r.oms < 0 && r.ours >= Math.min(15, 0.1 * ov(r))).slice(0, 15).forEach((r) => console.log('OMSLOSS_NOTOURS', JSON.stringify(r)));
   rows.sort((x, y) => Math.abs(y.d) - Math.abs(x.d));
   rows.slice(0, 40).forEach((r) => console.log('ROW', JSON.stringify(r)));
   const byQ = rows.filter((r) => r.q > 1); const q1 = rows.filter((r) => r.q === 1); console.log('qty=1 rows', q1.length, 'avg diff', Math.round(q1.reduce((s, r) => s + r.d, 0) / Math.max(1, q1.length)), 'avg cost diff', Math.round(q1.reduce((s, r) => s + (r.c - r.cogs), 0) / Math.max(1, q1.length)));
