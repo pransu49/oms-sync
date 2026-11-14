@@ -178,7 +178,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   profit at/below the Loss-bar amount `aikm_loss_above`, missing address)
   EXPECTED PROFIT = our tool (owner 14 Nov 2026), not OMS Guru: per OMS line from `listingIndex/<acct>` skus {c cost, k courier, g GST, fp fee}
   — same maths as the price robot / Loss Orders tab (price + 85% buyer shipping − cost − courier − fees − GST on margin − ₹3); OMS profit only when a
-  SKU has no cost ("OMS" under the number). Flag = our profit < min(₹15, 10% of order) (OMS flag only for un-priced orders). Own "Exp. profit" column
+  SKU has no cost. Owner 14 Nov 2026: show BOTH - our profit big, "OMS ₹x" under it. Flag = our profit < min(₹15, 10% of order) (OMS flag only for un-priced orders). Own "Exp. profit" column
   (the "LOSS · ₹x" tag lives there — loss-bulk reads it). listingIndex: re-uses window.__nbLIX, else 1 listener (4 docs + 1 read per changed account sync).
   Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).
   No own side-menu tab any more: a hidden `.tabbtn[data-tab=proship]` keeps old `?tab=proship` links working (opens Self-Ship). NOT built (owner asked,
