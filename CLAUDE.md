@@ -180,10 +180,14 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   — same maths as the price robot / Loss Orders tab (price + 85% buyer shipping − cost − courier − fees − GST on margin − ₹3); OMS profit only when a
   SKU has no cost. Owner 14 Nov 2026: show BOTH - our profit big, "OMS ₹x" under it. Flag = our profit < min(₹15, 10% of order) (OMS flag only for un-priced orders). Own "Exp. profit" column
   (the "LOSS · ₹x" tag lives there — loss-bulk reads it). listingIndex: re-uses window.__nbLIX, else 1 listener (4 docs + 1 read per changed account sync).
-  MAP BUTTON (owner 14 Nov 2026: "use the SP-API mapping window, it has images etc" - do NOT build a separate mapping window):
-  "Map"/"Remap" per item opens /pages/amazon?map=<ASIN>&acct=<label> in ONE reusable tab ("aikmAmazonMap"; if open, postMessage
-  {aikmMap, acct}). Block "Open mapping from Self-Ship" at the end of `amazon-name-search.js` (keep it) switches account and calls
-  openSpapiMatchModal(asin) - saves to spapiAsinLotsMap + masterMapping as always. Self-Ship profit updates at the next SP-API sync.
+  MAP BUTTON (owner 14 Nov 2026: "use the SP-API mapping window, it has images etc" + "deploy it inside, don't redirect" - do NOT
+  build a separate mapping window): Shopify blocks framing /pages/amazon (X-Frame-Options DENY, frame-ancestors 'none'), so
+  proship-tab.js fetches the page HTML and runs it in a srcdoc iframe (own globals, window.AIKM_EMBED, embed CSS shows only
+  #spapiMatchModal), loaded once per console visit, reused. Block "Open mapping from Self-Ship" at the end of `amazon-name-search.js`
+  (keep it) = window.aikmOpenMap(asin, acct): switches account, calls openSpapiMatchModal(asin), reports parent.aikmMapEvt
+  open / close {saved, cost per unit} / error. Saves = the Amazon page's own save (spapiAsinLotsMap, overflow ...2). A saved cost is
+  applied in Self-Ship at once via localStorage `aikm_map_patch` {"acct|ASIN":{c,at}} until listingIndex is newer (max 6 h).
+  Firebase: the Amazon page's normal load, once per console visit and only when Map is clicked.
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
   "Rejected · N" in the Self-Ship top bar = console's tracking-push alert (OMS 'stuck' Shipped-without-AWB + Amazon confirm errors), click = reasons.
   Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).

@@ -1125,37 +1125,69 @@
 } catch (e) {} })();
 
 /* ===== Open mapping from Self-Ship (owner 14 Nov 2026) - keep this block =====
-   The console's Self-Ship "Map" button opens this page as /pages/amazon?map=<ASIN>&acct=<label>
-   (or sends {aikmMap, acct} to an already-open Amazon tab). We switch to that account and open the
-   normal SP-API mapping window (openSpapiMatchModal). 0 extra Firebase reads. */
+   The console's Self-Ship screen runs this page inside a hidden frame (window.AIKM_EMBED) and calls
+   window.aikmOpenMap(asin, acct): we switch to that account and open the normal SP-API mapping window
+   (openSpapiMatchModal). When it closes we tell the console (parent.aikmMapEvt) whether a mapping was saved
+   and its cost per unit, so Self-Ship profit updates at once. Also works as /pages/amazon?map=<ASIN>&acct=<label>. */
 (function () {
+  function tell(ev) { try { if (window.parent && window.parent !== window && typeof window.parent.aikmMapEvt === "function") window.parent.aikmMapEvt(ev); } catch (e) {} }
   function ready(acct) {
     try {
       if (typeof openSpapiMatchModal !== "function") return false;
-      if (acct && typeof spapiCurrentAccount !== "undefined" && spapiCurrentAccount !== acct) return false;
-      if (typeof spapiSessionCache !== "undefined" && acct && !spapiSessionCache[acct]) return false;
+      if (acct && spapiCurrentAccount !== acct) return false;
+      if (!spapiSessionCache[spapiCurrentAccount]) return false;
+      if (!lotsVendor || !lotsVendor.prepped) return false;
       return true;
     } catch (e) { return false; }
   }
+  function recOf(asin) { try { return JSON.stringify(STORE.asinLotsMap[asin] || null); } catch (e) { return "null"; } }
+  function costOf(asin) {
+    try {
+      matchMemo.clear();
+      var nm = typeof spMatchName === "function" ? spMatchName(asin) : "";
+      var m = resolveSpapiLotsMatch(nm || asin, asin), p = m && m.code ? lotsPriceByCode[m.code] : null, sl = p ? bestSlabFor(p.slabs) : null;
+      return { cost: sl ? sl.price : null, name: m ? m.name : "" };
+    } catch (e) { return { cost: null, name: "" }; }
+  }
+  var seq = 0, lastObs = null;
   function openFor(asin, acct) {
     if (!asin) return;
-    try {
-      if (acct && typeof SPAPI_ACCOUNTS !== "undefined" && !SPAPI_ACCOUNTS.some(function (a) { return a.label === acct; })) acct = "";
-    } catch (e) {}
-    var tries = 0, switched = false;
+    asin = String(asin).toUpperCase();
+    try { if (acct && !SPAPI_ACCOUNTS.some(function (a) { return a.label === acct; })) acct = ""; } catch (e) {}
+    var my = ++seq, tries = 0, switched = false;
     (function tick() {
+      if (my !== seq) return;
       tries++;
       try {
-        if (acct && !switched && typeof setSpapiAccount === "function" && typeof spapiCurrentAccount !== "undefined" && spapiCurrentAccount !== acct) {
+        if (acct && !switched && typeof setSpapiAccount === "function" && spapiCurrentAccount !== acct) {
           switched = true; setSpapiAccount(acct);
-          try { document.querySelectorAll("[data-acct]").forEach(function (b) { b.classList.toggle("active", b.dataset.acct === acct); }); } catch (e) {}
+          try { document.querySelectorAll("[data-acct]").forEach(function (b) { var on = b.dataset.acct === acct; b.classList.toggle("on", on); b.classList.toggle("active", on); }); } catch (e) {}
         }
-        if (ready(acct)) { setTimeout(function () { openSpapiMatchModal(asin); }, 400); return; }
+        if (ready(acct)) {
+          var before = recOf(asin);
+          if (lastObs) { lastObs.disconnect(); lastObs = null; }
+          openSpapiMatchModal(asin);
+          var mm = document.getElementById("spapiMatchModal");
+          tell({ type: "open", asin: asin, acct: acct });
+          if (mm) {
+            var obs = new MutationObserver(function () {
+              if (mm.style.display !== "none") return;
+              obs.disconnect();
+              setTimeout(function () {
+                var after = recOf(asin), saved = after !== before && after !== "null", c = saved ? costOf(asin) : { cost: null, name: "" };
+                tell({ type: "close", asin: asin, acct: acct || spapiCurrentAccount, saved: saved, cost: c.cost, name: c.name });
+              }, 250);
+            });
+            obs.observe(mm, { attributes: true, attributeFilter: ["style"] }); lastObs = obs;
+          }
+          return;
+        }
       } catch (e) {}
-      if (tries < 120) setTimeout(tick, 500);
-      else if (typeof openSpapiMatchModal === "function") openSpapiMatchModal(asin);
+      if (tries < 160) setTimeout(tick, 500);
+      else tell({ type: "error", msg: "Amazon data did not load in time. Close and press Map again." });
     })();
   }
+  window.aikmOpenMap = openFor;
   try {
     var p = new URLSearchParams(location.search), a = p.get("map");
     if (a) {
@@ -1164,8 +1196,4 @@
       openFor(a, acct);
     }
   } catch (e) {}
-  window.addEventListener("message", function (e) {
-    if (e.origin !== location.origin || !e.data || !e.data.aikmMap) return;
-    openFor(String(e.data.aikmMap), String(e.data.acct || ""));
-  });
 })();

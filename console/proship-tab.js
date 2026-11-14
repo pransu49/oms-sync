@@ -477,7 +477,17 @@
       var ix = lixAll()[acctKey(o.channel)]; if (!ix) return null;
       var skus = ix.skus || {}, sku = o.sku;
       if (!skus[sku]) { var ol = (ix.orders || {})[nid(o.channelOrderId)] || []; if (ol.length === 1) sku = ol[0].s; }
-      return skus[sku] || null;
+      var L = skus[sku] || null, asin = String((L && L.a) || o.asin || "").toUpperCase(), P = mapPatch(acctKey(o.channel), asin, ix);
+      if (!P) return L;
+      return Object.assign({ a: asin, g: 5, fp: 2 }, L || {}, { c: P.c, k: L && L.k != null ? L.k : 45 });
+    }
+    /* Mapping saved just now on this computer: used until the next SP-API sync rebuilds listingIndex with it (max 6 h). */
+    function mapPatches() { try { return JSON.parse(localStorage.getItem("aikm_map_patch") || "{}") || {}; } catch (e) { return {}; } }
+    function mapPatch(acct, asin, ix) {
+      if (!asin) return null; var all = mapPatches(), P = all[acct + "|" + asin]; if (!P) return null;
+      var up = 0; try { up = ix && ix.updatedAt && ix.updatedAt.toMillis ? ix.updatedAt.toMillis() : 0; } catch (e) {}
+      if (Date.now() - P.at > 6 * 36e5 || (up && up > P.at + 60e3)) return null;
+      return P.c != null ? P : null;
     }
     function lineProfit(o) {
       var L = listingOf(o); if (!L || L.c == null || L.k == null) return null;
@@ -768,20 +778,84 @@
         .catch(function (e) { alert(e.message || e); });
     }
 
-    /* ---------- MAP = the SP-API (Amazon page) mapping window (owner 14 Nov 2026: "use the SP-API one, it has images etc").
-       Opens /pages/amazon in ONE reusable tab ("aikmAmazonMap"): first time with ?map=<ASIN>&acct=<label>; when that tab is
-       already open the same window gets a message and opens the mapping for the new ASIN without reloading (no extra Firebase reads).
-       The Amazon page saves to spapiAsinLotsMap + masterMapping as always; profit here updates at the next SP-API sync. ---------- */
+    /* ---------- MAP = the SP-API (Amazon page) mapping window, opened INSIDE this screen (owner 14 Nov 2026:
+       "use the SP-API one, it has images etc" + "deploy it inside, don't redirect").
+       Shopify forbids framing /pages/amazon (frame-ancestors 'none'), so the page HTML is fetched and run in a srcdoc
+       iframe (same site, own globals - no clash with the console). Only its mapping window is shown (embed CSS).
+       Loaded once per console visit, then reused: window.aikmOpenMap(asin, acct) inside the frame.
+       The frame reports back (window.aikmMapEvt): open / close {saved, cost} / error. A saved mapping is applied here at
+       once (localStorage aikm_map_patch, until the next SP-API sync has it). Firebase: the Amazon page's normal load
+       (~1 per console visit, only when Map is clicked); saving = the Amazon page's own save (spapiAsinLotsMap / ...2). ---------- */
+    var MF = null;
+    var EMBED_CSS = "html,body{background:transparent!important;overflow:hidden!important}" +
+      "body>*:not(#spapiMatchModal):not(#spToast):not(#premiumPromptModal):not(#premiumConfirmModal):not(script):not(style){display:none!important}";
+    function mapFrame() {
+      if (MF) return MF;
+      var ov = document.createElement("div"); ov.id = "hubMapOv";
+      ov.style.cssText = "position:fixed;inset:0;z-index:2147482000;display:none;align-items:center;justify-content:center;background:rgba(15,30,53,.45);";
+      ov.innerHTML = '<div id="hubMapLoad" style="background:#fff;border-radius:14px;border-top:3px solid #C9A24B;padding:22px 26px;font:500 13.5px Inter,system-ui,sans-serif;color:#14213D;box-shadow:0 24px 70px rgba(15,30,53,.3);display:flex;gap:12px;align-items:center;max-width:420px">' +
+        '<span style="width:18px;height:18px;border:2px solid #E7E1D3;border-top-color:#C9A24B;border-radius:50%;animation:hubspin .8s linear infinite;flex:none"></span><span id="hubMapMsg">Opening the mapping window…</span>' +
+        '<button type="button" id="hubMapX" style="all:unset;cursor:pointer;margin-left:8px;color:#8B909B;font-size:18px">×</button></div>' +
+        '<style>@keyframes hubspin{to{transform:rotate(360deg)}}</style>';
+      var f = document.createElement("iframe"); f.title = "Map product";
+      f.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border:0;background:transparent;visibility:hidden;";
+      f.setAttribute("allowtransparency", "true");
+      ov.appendChild(f); document.body.appendChild(ov);
+      ov.querySelector("#hubMapX").onclick = function () { closeMapOv(); };
+      MF = { ov: ov, f: f, ready: null, cur: null };
+      return MF;
+    }
+    function closeMapOv() { if (!MF) return; MF.ov.style.display = "none"; MF.f.style.visibility = "hidden"; MF.cur = null; }
+    function loadMapFrame() {
+      var M = mapFrame(); if (M.ready) return M.ready;
+      M.ready = fetch("/pages/amazon", { credentials: "same-origin", cache: "no-store" }).then(function (r) {
+        if (!r.ok) throw new Error("Amazon page answered " + r.status); return r.text();
+      }).then(function (html) {
+        var inject = '<base href="' + location.origin + '/"><script>window.AIKM_EMBED=1;<\/script><style>' + EMBED_CSS + "</style>";
+        html = /<head[^>]*>/i.test(html) ? html.replace(/<head[^>]*>/i, function (m) { return m + inject; }) : inject + html;
+        return new Promise(function (ok) { M.f.onload = function () { ok(M.f.contentWindow); }; M.f.srcdoc = html; });
+      }).catch(function (e) { M.ready = null; throw e; });
+      return M.ready;
+    }
+    window.aikmMapEvt = function (ev) {
+      if (!MF || !ev) return;
+      if (ev.type !== "close" && (!MF.cur || (ev.asin && ev.asin !== MF.cur.asin))) return;
+      if (ev.type === "open") { MF.f.style.visibility = "visible"; MF.ov.querySelector("#hubMapLoad").style.display = "none"; MF.ov.style.background = "transparent"; return; }
+      if (ev.type === "error") { var m = MF.ov.querySelector("#hubMapMsg"); m && (m.textContent = ev.msg || "Mapping window could not open."); return; }
+      if (ev.type === "close") {
+        closeMapOv();
+        if (ev.saved && ev.asin) {
+          var all = mapPatches(), key = (ev.acct || (MF.cur && MF.cur.acct) || "") + "|" + String(ev.asin).toUpperCase();
+          if (ev.cost != null) { all[key] = { c: Math.round(ev.cost * 100) / 100, at: Date.now(), name: ev.name || "" }; }
+          Object.keys(all).forEach(function (k) { if (Date.now() - all[k].at > 6 * 36e5) delete all[k]; });
+          try { localStorage.setItem("aikm_map_patch", JSON.stringify(all)); } catch (e) {}
+          toastHub(ev.cost != null ? "✓ Mapping saved · cost ₹" + (Math.round(ev.cost * 100) / 100) + " · profit updated" : "✓ Mapping saved · profit updates at the next SP-API sync");
+          setTimeout(buildPool, 0);
+        }
+      }
+    };
+    function toastHub(msg) {
+      var t = document.getElementById("hubToast");
+      if (!t) { t = document.createElement("div"); t.id = "hubToast"; t.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#0F1E35;color:#fff;font:500 13px Inter,system-ui,sans-serif;padding:11px 18px;border-radius:10px;border-left:3px solid #C9A24B;box-shadow:0 10px 30px rgba(15,30,53,.25);z-index:2147483600;transition:opacity .25s"; document.body.appendChild(t); }
+      t.textContent = msg; t.style.opacity = "1"; clearTimeout(t._h); t._h = setTimeout(function () { t.style.opacity = "0"; }, 3500);
+    }
     function openMap(r, it) {
       if (!it) return;
-      if (!it.asin) { alert("This order has no ASIN yet, so it cannot be mapped on the Amazon page.\n\nMap it in Order Mapper, or wait for the next SP-API sync."); return; }
-      var acct = acctKey(it.line.channel) || "";
-      var url = "/pages/amazon?map=" + encodeURIComponent(it.asin) + (acct ? "&acct=" + encodeURIComponent(acct) : "");
-      var w = window.open("", "aikmAmazonMap");
-      if (!w) { location.href = url; return; }
-      var blank = true; try { blank = !w.location.href || w.location.href === "about:blank" || !/\/pages\/amazon/.test(w.location.pathname); } catch (e) { blank = true; }
-      if (blank) { try { w.location.href = url; } catch (e) { window.open(url, "aikmAmazonMap"); } }
-      else { try { w.postMessage({ aikmMap: it.asin, acct: acct }, location.origin); w.focus(); } catch (e) { w.location.href = url; } }
+      if (!it.asin) { alert("This order has no ASIN yet, so it cannot be mapped here.\n\nMap it in Order Mapper, or wait for the next SP-API sync."); return; }
+      var M = mapFrame(), acct = acctKey(it.line.channel) || "";
+      M.cur = { asin: it.asin, acct: acct };
+      M.f.style.visibility = "hidden"; M.ov.style.background = "rgba(15,30,53,.45)";
+      var ld = M.ov.querySelector("#hubMapLoad"); ld.style.display = "flex"; M.ov.querySelector("#hubMapMsg").textContent = M.ready ? "Opening the mapping window…" : "Loading the mapping window (first time takes a few seconds)…";
+      M.ov.style.display = "flex";
+      loadMapFrame().then(function (w) {
+        var tries = 0;
+        (function go() {
+          if (!M.cur || M.cur.asin !== it.asin) return;
+          if (w && typeof w.aikmOpenMap === "function") return void w.aikmOpenMap(it.asin, acct);
+          if (++tries < 120) return void setTimeout(go, 500);
+          window.aikmMapEvt({ type: "error", msg: "Mapping window did not load. Close and try again." });
+        })();
+      }).catch(function (e) { window.aikmMapEvt({ type: "error", msg: "Mapping window could not load: " + (e.message || e) }); });
     }
 
     /* ---------- labels (the normal label robot: NimbusPost + ProShip labels of the SLA date, product name + QTY printed) ---------- */
