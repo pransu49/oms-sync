@@ -392,6 +392,8 @@ async function modeSync() {
       v.s = u.s; v.st = u.st; if (u.c && !v.c) v.c = u.c; if (u.r > 0) v.r = u.r; });
   });
   console.log(`SYNC DONE — ${open.length} live AWBs, ${seen} found in ProShip's list, ${changed} changed.`);
+  const fa = {}; Object.keys(idx).forEach((k) => { const v = idx[k], r = (upd[k] && upd[k].r) || v.r; if (r > 0) (fa[v.ac || '?'] = fa[v.ac || '?'] || []).push(r); });
+  Object.keys(fa).forEach((a) => console.log(`AVG FREIGHT ${a}: Rs ${r2(fa[a].reduce((x, y) => x + y, 0) / fa[a].length)} over ${fa[a].length} shipments (min ${Math.min(...fa[a])}, max ${Math.max(...fa[a])})`));
 }
 
 // read-only look at the newest console ship jobs (to see why a job did not start): 6 reads
