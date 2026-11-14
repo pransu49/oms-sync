@@ -794,6 +794,52 @@
     new MutationObserver(addHint).observe(document.body, { childList: true, subtree: true });
   })();
 
+  /* ---------- purchase bill screen: WIDE view — bill copy folds away, whole bill + every column on one screen (owner 14 Nov 2026) ---------- */
+  (function billWide() {
+    const KEY = "aikm_bill_wide";
+    const getW = () => { try { return localStorage.getItem(KEY) !== "0"; } catch (e) { return true; } };
+    const setW = v => { try { localStorage.setItem(KEY, v ? "1" : "0"); } catch (e) {} };
+    const st = document.createElement("style"); st.id = "abBillWide";
+    st.textContent = `
+      @media (min-width:900px){
+        .dbody.abWide{grid-template-columns:minmax(0,1fr)!important}
+        .dbody.abWide>.viewer{display:none!important}
+        .dbody.abWide>#bf{padding:14px 18px}
+        .dbody.abWide #bf .grid3{grid-template-columns:repeat(6,minmax(0,1fr))}
+        .dbody.abWide #bf .grid3>.span2,.dbody.abWide #bf .grid3>.gspan{grid-column:span 2}
+        .dbody.abWide #bf table.items{width:100%}
+        .dbody.abWide #bf .items td:not(.nm) input{width:100%!important;min-width:36px!important;box-sizing:border-box}
+        .dbody.abWide #bf .items td input[data-k="hsn"]{min-width:76px!important}.dbody.abWide #bf .items td input[data-k="batch"]{min-width:44px!important}.dbody.abWide #bf .items td input[data-k="exp"]{min-width:44px!important}.dbody.abWide #bf .items td input[data-k="pack"]{min-width:60px!important}.dbody.abWide #bf .items td input[data-k="qty"]{min-width:42px!important}.dbody.abWide #bf .items td input[data-k="free"]{min-width:36px!important}.dbody.abWide #bf .items td input[data-k="mrp"]{min-width:50px!important}.dbody.abWide #bf .items td input[data-k="rate"]{min-width:64px!important}.dbody.abWide #bf .items td input[data-k="discPct"]{min-width:40px!important}.dbody.abWide #bf .items td input[data-k="disc2"]{min-width:36px!important}.dbody.abWide #bf .items td input[data-k="gstPct"]{min-width:36px!important}.dbody.abWide #bf .items td input[data-k="taxable"]{min-width:76px!important}.dbody.abWide #bf .items td input[data-k="lineTotal"]{min-width:76px!important}
+        .dbody.abWide #bf .items th{padding:6px 3px;font-size:9.5px}
+        .dbody.abWide #bf .items td{padding:3px 2px}
+        .dbody.abWide #bf .items input{font-size:12.5px;padding:6px 5px}
+        .dbody.abWide #bf .items td.nm input{min-width:250px!important;width:250px}
+        .dbody.abWide #bf .items td.xx,.dbody.abWide #bf .items th:last-child{width:26px!important;min-width:0!important;padding:3px 0!important}
+      }
+      @media (min-width:900px) and (max-width:1200px){ .dbody.abWide #bf .items td.nm input{min-width:96px!important;width:96px} .dbody.abWide #bf .items td.nm,.dbody.abWide #bf .items th:first-child{min-width:0!important;width:auto!important} .dbody.abWide #bf .items th{font-size:9px;letter-spacing:0} }
+      @media (min-width:1500px){ .dbody.abWide #bf .items td.nm input{min-width:340px!important;width:340px} }
+      .abWideBtn{white-space:nowrap}`;
+    document.head.append(st);
+    const apply = () => {
+      const f = document.getElementById("bf"); if (!f) return;
+      const body = f.parentElement; if (!body || !body.classList.contains("dbody")) return;
+      const viewer = body.querySelector(":scope>.viewer");
+      const wide = getW();
+      if (body.classList.contains("abWide") !== wide) body.classList.toggle("abWide", wide);
+      const head = body.parentElement && body.parentElement.querySelector(".dhead"); if (!head || !viewer) return;
+      let b = head.querySelector(".abWideBtn");
+      if (!b) {
+        b = document.createElement("button"); b.type = "button"; b.className = "btn small abWideBtn";
+        b.onclick = () => { setW(!getW()); apply(); };
+        const close = [...head.querySelectorAll("button")].pop();
+        head.insertBefore(b, close || null);
+      }
+      const t = wide ? "📄 Show bill copy" : "⇔ Wide view";
+      if (b.textContent !== t) { b.textContent = t; b.title = wide ? "Show the bill photo / PDF next to the form" : "Hide the bill photo and use the full screen"; }
+    };
+    new MutationObserver(apply).observe(document.body, { childList: true, subtree: true });
+  })();
+
   let S = { date: "", co: "praso", drafts: [], busy: false };
 
   function mount() {
