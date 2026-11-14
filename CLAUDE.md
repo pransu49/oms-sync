@@ -204,6 +204,9 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   WITHOUT GST at the item's GST rate (ship/(1+g), was flat 0.85); courier taken ONCE per order = ProShip freight `r` (priceAfterTax of the
   cheapest courier at the weight actually sent, saved by proship.js ship into proshipIndex) -> else median `r` of the account (5+ shipments)
   -> else listingIndex estimate k. Shown under the profit as "ship Rs x · ProShip / ProShip avg / est.". (Price robot in spapi-sync still uses 0.85.)
+  REAL FREIGHT: ProShip's order list gives merchantPricing.price (= freightTotalWithTax, e.g. 24.78); `sync` (every 30 min) saves it as `r`
+  for every live AWB (backfills old ones). KPI "Avg shipping cost · ProShip" on To ship (all accounts, per-account in the tooltip) and on
+  the Shipped tabs (rows shown); unshipped orders' profit uses the account's AVERAGE r (5+ shipments).
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
   "Rejected · N" in the Self-Ship top bar = console's tracking-push alert (OMS 'stuck' Shipped-without-AWB + Amazon confirm errors), click = reasons.
   Sub-menu "Sync OMS + NimbusPost now" is replaced by "Sync OMS + ProShip now" (sync-workflow.yml + proship.yml mode sync). · Shipped · Delivered · RTO / Cancelled (from proshipIndex + OMS buyer data).

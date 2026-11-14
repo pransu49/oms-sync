@@ -118,7 +118,7 @@
       /* premium + aligned (owner 14 Nov 2026) */
       "html#aikm body #aikmShipHub .nb-card{padding:26px 28px !important;border-radius:16px;}" +
       "html#aikm body #aikmShipHub .nb-title{font-size:22px;letter-spacing:-.01em;}" +
-      "html#aikm body #aikmShipHub .nb-kpis{grid-template-columns:repeat(5,minmax(0,1fr)) !important;gap:12px;margin:16px 0 14px;}" +
+      "html#aikm body #aikmShipHub .nb-kpis{grid-template-columns:repeat(6,minmax(0,1fr)) !important;gap:12px;margin:16px 0 14px;}" +
       "html#aikm body #aikmShipHub .nb-kpi{padding:12px 16px;border-radius:12px;background:var(--x-surface);}" +
       "html#aikm body #aikmShipHub .nb-kpi-n{font-size:22px;}" +
       "html#aikm body #aikmShipHub .nb-kpi.nb-bad{background:var(--x-surface);border:1px solid color-mix(in srgb,var(--x-red) 35%,transparent);}" +
@@ -526,15 +526,18 @@
     }
     /* Courier cost: the real ProShip freight of this shipment (proshipIndex r, saved at booking); not booked yet = the median
        ProShip freight of this account's recent shipments; no ProShip data yet = the robot's estimate. */
-    var frMed = {}, frMedAt = 0;
+    var frMed = {}, frMedAt = 0, frAll = null;
     function freightMedian(acct) {
       if (Date.now() - frMedAt > 60000) {
-        frMedAt = Date.now(); var by = {};
-        Object.keys(idx || {}).forEach(function (k) { var v = idx[k]; if (v && v.r > 0 && v.s !== "cancelled") (by[v.ac || ""] = by[v.ac || ""] || []).push(v.r); });
-        frMed = {}; Object.keys(by).forEach(function (a) { var l = by[a].sort(function (x, y) { return x - y; }); if (l.length >= 5) frMed[a] = l[Math.floor(l.length / 2)]; });
+        frMedAt = Date.now(); var by = {}, all = [];
+        Object.keys(idx || {}).forEach(function (k) { var v = idx[k]; if (v && v.r > 0 && v.s !== "cancelled") { (by[v.ac || ""] = by[v.ac || ""] || []).push(v.r); all.push(v.r); } });
+        var avg = function (l) { return Math.round(l.reduce(function (a, b) { return a + b; }, 0) / l.length * 100) / 100; };
+        frMed = {}; Object.keys(by).forEach(function (a) { if (by[a].length >= 5) frMed[a] = { v: avg(by[a]), n: by[a].length }; });
+        frAll = all.length ? { v: avg(all), n: all.length, by: frMed } : null;
       }
-      return frMed[acct] || null;
+      return frMed[acct] ? frMed[acct].v : null;
     }
+    function freightAvg() { freightMedian(""); return frAll; }
     function isSelfShipPending(o) {
       return /amazon/i.test(o.channel || "") && phone10(o.buyerPhone).length >= 10 && !String(o.awb || "").trim() &&
         /^(new|ready to ship|pending|confirmed)$/i.test(String(o.status || "").trim());
@@ -675,7 +678,8 @@
       var pick = rows.filter(function (r) { return /pickup pending|booked|manifest/i.test(prettySt(r.v)); }).length;
       $("psKpis").innerHTML = kpi("Orders", rows.length, "") +
         (view === "shipped" ? kpi("Pickup pending", pick, pick ? "nb-warnk" : "") + kpi("In transit", rows.length - pick, "nb-ok") : "") +
-        kpi("Accounts", Object.keys(rows.reduce(function (m, r) { m[r.acct] = 1; return m; }, {})).length, "");
+        kpi("Accounts", Object.keys(rows.reduce(function (m, r) { m[r.acct] = 1; return m; }, {})).length, "") +
+        avgShipKpi(rows.map(function (r) { return r.v.r || 0; }));
       $("hubShipBody").innerHTML = rows.length ? rows.slice(0, 1500).map(function (r) {
         var o = r.o, v = r.v, st = prettySt(v), cls = r.stage === "delivered" ? "d" : r.stage === "rto" ? "r" : /pickup pending/i.test(st) ? "" : "t";
         var its = Object.keys(r.items), itTxt = its.map(function (k) { return k + " \u00d7 " + r.items[k]; }).join(" + ");
@@ -703,13 +707,21 @@
       $("psResult").style.display = "block";
       $("psNote").textContent = "Labels: tick orders (or press Label on one), then Download. Nothing ticked = all labels of the SLA date chip.";
     }
-    function kpi(l, n, cls) { return '<div class="nb-kpi ' + cls + '"><div class="nb-kpi-n">' + n + '</div><div class="nb-kpi-l">' + l + "</div></div>"; }
+    function kpi(l, n, cls, tip) { return '<div class="nb-kpi ' + cls + '"' + (tip ? ' title="' + esc(tip) + '"' : "") + '><div class="nb-kpi-n">' + n + '</div><div class="nb-kpi-l">' + l + "</div></div>"; }
+    /* Average ProShip shipping cost (owner 14 Nov 2026): real freight incl. GST that ProShip charged (proshipIndex r) */
+    function avgShipKpi(list) {
+      var a = list ? (function () { var l = list.filter(function (x) { return x > 0; }); return l.length ? { v: l.reduce(function (s, x) { return s + x; }, 0) / l.length, n: l.length } : null; })() : freightAvg();
+      if (!a) return kpi("Avg shipping cost", "\u2014", "", "Shows once ProShip has charged shipments");
+      var tip = "Real ProShip freight incl. GST, " + a.n + " shipments";
+      if (!list && a.by) tip += " \u00b7 " + Object.keys(a.by).map(function (k) { return k + " \u20b9" + a.by[k].v.toFixed(1) + " (" + a.by[k].n + ")"; }).join(" \u00b7 ");
+      return kpi("Avg shipping cost \u00b7 ProShip", "\u20b9" + a.v.toFixed(1), "", tip);
+    }
     function render() {
       var sel = 0, bad = 0, done = 0, loss = 0;
       var selP = 0; lastRows.forEach(function (r) { if (r.sel) { sel++; selP += r.profit || 0; } if (r.state !== "ok") bad++; if (r.ship) done++; if (r.loss) loss++; });
       $("psKpis").innerHTML =
         kpi(view === "hold" ? "On hold" : "Orders to ship", lastRows.length, "") + kpi("Selected to ship", sel, "nb-ok") + kpi("Expected profit (selected)", rs(Math.round(selP)), selP < 0 ? "nb-bad" : "nb-ok") +
-        kpi("Loss / low profit", loss, loss ? "nb-bad" : "") + kpi("Need a fix", bad, bad ? "nb-bad" : "");
+        kpi("Loss / low profit", loss, loss ? "nb-bad" : "") + kpi("Need a fix", bad, bad ? "nb-bad" : "") + avgShipKpi();
       var body = $("psBody");
       body.innerHTML = lastRows.length ? lastRows.map(function (r, i) {
         var o = r.o, ok = r.state === "ok", sh = r.ship, f = inFile[r.id], err = jobRes[r.id] && jobRes[r.id].e;

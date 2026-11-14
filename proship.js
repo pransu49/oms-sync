@@ -378,7 +378,10 @@ async function modeSync() {
     rows.forEach((o) => {
       const k = byAwb[String(o.awbNumber || '')]; if (!k) return; seen++;
       const st = clip(o.orderStatus || '', 40), s = bucket(NaN, st), c = courierOf(o.courierDetail);
-      if (st && (idx[k].s !== s || idx[k].st !== st)) { upd[k] = { a: String(idx[k].a), s, st, c }; changed++; }
+      // real freight ProShip charged (merchantPricing.price = freight incl. GST), kept as r for the console's profit + average
+      const mp = o.merchantPricing || {}, fr = r2(num(mp.price || mp.freightTotalWithTax || 0));
+      const stCh = st && (idx[k].s !== s || idx[k].st !== st), frCh = fr > 0 && idx[k].r !== fr;
+      if (stCh || frCh) { upd[k] = { a: String(idx[k].a), s: stCh ? s : idx[k].s, st: stCh ? st : idx[k].st, c, r: fr > 0 ? fr : undefined }; changed++; }
     });
     if (rows.length < 50 || seen >= open.length) break;
     await sleep(200);
@@ -386,7 +389,7 @@ async function modeSync() {
   if (changed) await mergeIndex((cur) => {
     Object.keys(upd).forEach((k) => { const v = cur[k], u = upd[k]; if (!v || String(v.a) !== u.a) return; // AWB replaced meanwhile: leave it
       if (v.s === 'cancelled' && u.s !== 'cancelled') return;                                              // our own cancel wins
-      v.s = u.s; v.st = u.st; if (u.c && !v.c) v.c = u.c; });
+      v.s = u.s; v.st = u.st; if (u.c && !v.c) v.c = u.c; if (u.r > 0) v.r = u.r; });
   });
   console.log(`SYNC DONE — ${open.length} live AWBs, ${seen} found in ProShip's list, ${changed} changed.`);
 }
