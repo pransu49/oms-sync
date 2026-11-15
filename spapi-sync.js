@@ -2696,6 +2696,37 @@ async function runStockGuard(sellerId) {
       }
     }
   } catch (e) { console.warn('Restock skipped:', e.message || e); }
+  // LOTS-62 RESTOCK (owner 13/15 Nov 2026, Sasta Store: "if LOTS-62 has stock it should not go out of stock"): a self-ship listing
+  // at 0 whose LOTS-GN stock is low but LOTS-62 has 10+ gets stock = what LOTS-62 can cover (max 50) - also OMS-managed SKUs,
+  // because OMS Guru's stock only counts LOTS-GN (it does not push again while its own number stays the same). Max 60 per run.
+  let restocked62 = 0;
+  if (LOTS62_STOCK) {
+    try {
+      const done = new Set();
+      const back = Object.values(SNAP.inventory).filter((it) => it && it.account === ACCOUNT_LABEL && it.sku && it.asin && reportSkus.has(it.sku)
+        && (it.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (parseInt(it.quantity, 10) || 0) <= 0
+        && !(it.lastStockPush && it.lastStockPush.status === 'applied' && it.lastStockPush.qty > 0 && Date.now() - (it.lastStockPush.at || 0) < 6 * 3600e3));
+      for (const it of back) {
+        if (restocked62 >= 60) break;
+        const m = L.asinMap[it.asin];
+        if (!m || (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS')) continue;
+        const parts = Array.isArray(m.parts) && m.parts.length ? m.parts : [{ code: m.code, qty: 1 }];
+        let units = Infinity, low = Infinity, from62 = false;
+        for (const x of parts) { const p = L.lotsByCode[String(x.code)], q = p ? parseFloat(p.qty) : NaN; if (isNaN(q)) { units = 0; break; }
+          if (p.from62) from62 = true;
+          const need = Math.max(1, Number(x.qty) || 1) / Math.max(1, parseInt(x.lotsPack) || 1); units = Math.min(units, Math.floor(q / need)); low = Math.min(low, q); }
+        if (!from62 || !(low >= OOS_LOTS_BELOW) || !(units >= 1) || done.has(it.sku)) continue;
+        done.add(it.sku);
+        const q = Math.min(units, 50), docId = `${ACCOUNT_LABEL}_${sidSafe(it.sku)}`;
+        try {
+          await setAmazonQuantity(sellerId, it.sku, q);
+          snapPatch('inventory', docId, { quantity: q, lastStockPush: { status: 'applied', at: Date.now(), qty: q, reason: `LOTS-62 has ${low} - restocked (LOTS-GN low)` } });
+          restocked62++; console.log(`LOTS-62 restock ${it.sku}: 0 -> ${q} (LOTS-62 ${low})`);
+        } catch (e) { console.warn(`LOTS-62 restock ${it.sku} failed:`, e.message || e); }
+      }
+      console.log(`LOTS-62 restock: ${restocked62} listing(s) put back in stock from LOTS-62.`);
+    } catch (e) { console.warn('LOTS-62 restock skipped:', e.message || e); }
+  }
   await guardRef.set({ items: {}, blocked: null, rule: 'lots_zero', updatedAt: Date.now() });
   console.log(`Out-of-stock rule (LOTS stock below ${OOS_LOTS_BELOW} -> Amazon 0): ${zeroed} marked out of stock, ${restocked} restocked (LOTS back, not in OMS Guru), ${failed} failed, ${linkedInStock} LOTS-linked in-stock listings checked.`);
 }

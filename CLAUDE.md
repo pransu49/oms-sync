@@ -115,7 +115,8 @@
 - **LOTS-62 stock for Sasta Store** (owner 13 Nov 2026): `spapi-sync-sastastore.yml` sets `LOTS62_STOCK=on` -> the out-of-stock rule and its restock use
   the HIGHER of LOTS-GN and LOTS-62 stock (main `aikm_admin/lots62Catalog`, read only when its savedAt changed; cached in `.cache/lots62-catalog.json`).
   Other accounts stay LOTS-GN only. `loadLotsForGuard` now uses the cached LOTS catalogue (was ~25 fresh reads every run).
-  OMS Guru's stock push is shared by all accounts and still uses LOTS-GN only.
+  OMS Guru's stock push is shared by all accounts and still uses LOTS-GN only, so (15 Nov 2026) the Sasta robot also RESTOCKS self-ship listings at 0
+  whose LOTS-GN is low but LOTS-62 has 10+ (also OMS-managed SKUs; qty = LOTS-62 units, max 50, max 60 per full run; log line "LOTS-62 restock").
 - **Quota savers in `spapi-sync.js`** (owner 12 Nov 2026, "ensure all syncs work under free limits"):
   old per-item collections `spapiInventory` / `spapiOrders` / `spapiCompetitivePricing` are NOT written any more (nothing reads them —
   page + robots use the snapshot; `SPAPI_LEGACY_MIRROR=on` brings the writes back). Sent-price checks: max 150 per run, check counts in ONE doc
