@@ -321,6 +321,7 @@ async function main() {
     (bySku[sku] = bySku[sku] || { sku, name: r['Product Name'], list: [] }).list.push({ asin: (r['Extra Data'] || '').toUpperCase(), title: r['Channel Listing Title'], channel: r['Channel Name'], lsku: r['Channel Listing SKU Code'] });
   }
   const rows = [], unlinked = [], mappedElse = []; let notLinked = 0, conflicts = 0;
+  const robotSkus = new Set();   // Amazon SKUs whose stock THIS robot sets in OMS Guru (fix 15 Nov 2026)
   for (const g of Object.values(bySku)) {
     if (!(g.sku in omsQty)) continue;                               // not a stock product in this warehouse
     const seen = new Map();
@@ -351,10 +352,18 @@ async function main() {
     if (differ) conflicts++;
     const cur = omsQty[g.sku], newQty = best.target;
     const why = best.oos ? (best.lotsQty < OOS_BELOW ? `LOTS ${best.lotsQty} is below ${OOS_BELOW}` : `LOTS ${best.lotsQty} - blocked ${bl}${best.units !== best.lotsQty && bl ? ' (in LOTS units)' : ''} = ${best.free}, below ${OOS_BELOW}`) + ' - Amazon 0' : '';
+    g.list.forEach((l) => l.lsku && robotSkus.add(l.lsku));
     rows.push({ sku: g.sku, name: g.name, asin: best.asin, lots: best.codes, lotsName: best.lotsName, lotsQty: best.lotsQty, via: best.via, omsQty: cur, newQty, blocked: bl, oos: best.oos,
       change: newQty === cur ? 'same' : best.oos ? 'zero' : newQty > cur ? 'up' : 'down',
       note: [why, differ ? `Listings linked differently (${opts.map((o) => (o.oos ? 0 : o.free)).join(' / ')} free) - lowest used` : ''].filter(Boolean).join(' · ') });
   }
+  // Fix 15 Nov 2026 (owner: "LOTS has stock but Amazon shows OOS", watchdog every time): Amazon SKUs that OMS Guru
+  // maps but this robot does NOT manage (combo products, OMS listing with no ASIN + no name match, product missing from
+  // the OMS stock export) were never restocked by anyone once set to 0. Save the list the robot really manages, so the
+  // Amazon robot's restock step can look after all the others.
+  if (!DRY) await db.collection('spapiSnapshots').doc('omsManagedSkus').set({ robotSkus: [...robotSkus].join('\n'), robotCount: robotSkus.size, robotAt: runAt }, { merge: true })
+    .catch((e) => console.warn('Robot SKU list not saved:', e.message || e));
+  console.log(`Amazon SKUs whose stock this robot manages: ${robotSkus.size}.`);
   const push = rows.filter((r) => r.change !== 'same');
   const linkedInStock = rows.filter((r) => r.omsQty - r.blocked > 0).length, goingZero = push.filter((r) => r.change === 'zero').length;
   const stats = { linked: rows.length, push: push.length, zero: goingZero, up: push.filter((r) => r.change === 'up').length, down: push.filter((r) => r.change === 'down').length,

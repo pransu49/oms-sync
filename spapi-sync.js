@@ -2664,12 +2664,19 @@ async function runStockGuard(sellerId) {
   let restocked = 0;
   try {
     const od = await db.collection('spapiSnapshots').doc('omsManagedSkus').get();
-    const om = od.exists && Date.now() - (od.data().at || 0) < 3 * 3600e3 ? new Set(String(od.data().skus || '').split('\n')) : null;
+    const odd = od.exists ? od.data() : {};
+    const om = od.exists && Date.now() - (odd.at || 0) < 3 * 3600e3 ? new Set(String(odd.skus || '').split('\n')) : null;
+    // Fix 15 Nov 2026: listings the OMS stock robot really manages. OMS Guru maps more SKUs than the robot updates (combos,
+    // no-ASIN listings, products missing from its stock export) - those stayed at 0 for ever, so they are restocked here too.
+    const robot = odd.robotSkus && Date.now() - (odd.robotAt || 0) < 3 * 3600e3 ? new Set(String(odd.robotSkus).split('\n')) : null;
+    const managed = robot && robot.size >= 300 ? robot : om;
     if (!om || om.size < 1000) console.log('Restock skipped: OMS Guru SKU list missing or old.');
     else {
-      const back = Object.values(SNAP.inventory).filter((it) => it && it.account === ACCOUNT_LABEL && it.sku && reportSkus.has(it.sku) && !om.has(it.sku)
-        && (it.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (parseInt(it.quantity, 10) || 0) <= 0 && it.lastStockPush && it.lastStockPush.qty === 0
-        && /marked out of stock|No stock in LOTS/.test(it.lastStockPush.reason || '') && Date.now() - (it.lastStockPush.at || 0) < 14 * 864e5);
+      if (managed === om) console.log('Restock: robot SKU list missing - only SKUs OMS Guru does not map are restocked.');
+      const back = Object.values(SNAP.inventory).filter((it) => it && it.account === ACCOUNT_LABEL && it.sku && reportSkus.has(it.sku) && !managed.has(it.sku)
+        && (it.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' && (parseInt(it.quantity, 10) || 0) <= 0
+        // robot-set 0 (any age), or any 0 on a listing OMS Guru maps but the stock robot does not manage
+        && ((it.lastStockPush && it.lastStockPush.qty === 0 && /marked out of stock|No stock in LOTS/.test(it.lastStockPush.reason || '')) || (managed !== om && om.has(it.sku))));
       for (const it of back.slice(0, 60)) {
         const m = L.asinMap[it.asin];
         if (!m || (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS')) continue;          // only confirmed ASIN links
