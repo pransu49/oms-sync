@@ -147,3 +147,32 @@
     var box = document.querySelector(".fb-box"); if (box && !box.__aikmFixed) { box.__aikmFixed = 1; fix(box); }
   }).observe(document.documentElement, { childList: true, subtree: true });
 })();
+
+/* Header chip: real Google bill always visible next to the Firebase pill (owner 15 Nov 2026: "deploy real time billing data on console").
+   Reads aikm_admin/firebaseUsage once per 10 min (1 read). Click = opens the Firebase card. */
+(function () {
+  if (window.__aikmBillChip) return; window.__aikmBillChip = 1;
+  var R = function (n) { n = Number(n) || 0; return "₹" + n.toLocaleString("en-IN", { maximumFractionDigits: n < 100 ? 2 : 0 }); };
+  function draw(u) {
+    var host = document.getElementById("aikmStatus"); if (!host) return;
+    var rb = u && u.realBill, chip = document.getElementById("aikmBillChip");
+    if (!chip) {
+      chip = document.createElement("div"); chip.id = "aikmBillChip"; chip.title = "Real Google Cloud bill (click for details)";
+      chip.style.cssText = "display:flex;align-items:center;gap:8px;margin-left:8px;padding:0 12px;height:34px;border-radius:10px;border:1px solid rgba(227,196,122,.45);background:#0F1E35;color:#F8F1E1;font:500 12px Lexend,Inter,sans-serif;cursor:pointer;white-space:nowrap";
+      chip.onclick = function () { var f = document.getElementById("aikmFb"); if (f) f.click(); };
+      host.insertAdjacentElement("afterend", chip);
+    }
+    if (!rb || !rb.ok || !rb.exportedAt) { chip.innerHTML = '<span style="opacity:.7">Google bill</span> <b>waiting for data</b>'; return; }
+    var h = Math.max(0, Math.round((Date.now() - Date.parse(rb.exportedAt)) / 36e5));
+    chip.innerHTML = '<span style="opacity:.7">Google bill</span> <b>' + R(rb.monthInr) + '</b> <span style="opacity:.7">month</span> · <b>' + R(rb.yesterdayInr) + '</b> <span style="opacity:.7">yesterday</span> · <b>' + R(rb.todayInr) + '</b> <span style="opacity:.7">today</span> <span style="opacity:.5;font-size:10.5px">' + (h < 1 ? "<1h" : h + "h") + ' old</span>';
+  }
+  var last = 0, busy = false;
+  function tick() {
+    if (busy || document.hidden || typeof fbDb === "undefined" || !fbDb) return;
+    if (Date.now() - last < 10 * 60e3) { return; }
+    busy = true;
+    fbDb.collection("aikm_admin").doc("firebaseUsage").get().then(function (d) { last = Date.now(); busy = false; window.__aikmBillU = d.exists ? d.data() : {}; draw(window.__aikmBillU); }, function () { busy = false; });
+  }
+  new MutationObserver(function () { if (!document.getElementById("aikmBillChip") && document.getElementById("aikmStatus")) { if (window.__aikmBillU) draw(window.__aikmBillU); else tick(); } }).observe(document.documentElement, { childList: true, subtree: true });
+  setInterval(tick, 60e3); setTimeout(tick, 4000);
+})();
