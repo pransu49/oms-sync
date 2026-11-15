@@ -63,7 +63,7 @@ const csvCell = (v) => { v = String(v == null ? '' : v); return /[",\n\r]/.test(
 
 async function main() {
   // 1) data
-  const chunks = require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'));
+  const chunks = await require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'));
   const oms = []; chunks.forEach((d) => oms.push(...(d.get('orders') || [])));
   const nbDoc = await db.collection('nimbusIndex').doc('byOrder').get();
   const nimbus = {}; let nbAll = {};

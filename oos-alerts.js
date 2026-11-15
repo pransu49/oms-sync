@@ -63,7 +63,7 @@ function ymd(x) {
     const oms = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_OMS)) }, 'oms').firestore();
     const skuAsin = {}; lixS.forEach((d) => Object.entries((d.data() || {}).skus || {}).forEach(([sku, x]) => { if (x && x.a) skuAsin[sku] = x.a; }));
     const from = new Date(Date.now() + IST - SALES_DAYS * 864e5).toISOString().slice(0, 10);
-    const ord = require('./oms-chunks').cachedChunks(oms.collection('aikm_admin').doc('omsOrders').collection('chunks'));
+    const ord = await require('./oms-chunks').cachedChunks(oms.collection('aikm_admin').doc('omsOrders').collection('chunks'));
     ord.forEach((d) => (d.data().orders || []).forEach((o) => {
       if (!/amazon/i.test(o.channel || '') || /cancel/i.test(o.status || '')) return;
       const day = ymd(o.orderDate); if (!day || day < from) return;

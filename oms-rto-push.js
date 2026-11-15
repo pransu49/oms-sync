@@ -53,7 +53,7 @@ async function main() {
 
   // ---- OMS data ----
   const lines = {}, chanId = {};
-  (require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => (d.data().orders || []).forEach((o) => {
+  (await require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => (d.data().orders || []).forEach((o) => {
     const id = nid(o.channelOrderId); if (!id) return;
     (lines[id] = lines[id] || []).push({ sub: String(o.channelSubOrderId || '').trim(), q: num(o.qty) || 1, st: String(o.status || ''), ch: o.channel || '', chId: String(o.channelId || '').trim(), awb: String(o.awb || '').trim() });
     if (o.channel && o.channelId) chanId[o.channel] = String(o.channelId);

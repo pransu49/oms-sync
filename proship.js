@@ -276,7 +276,7 @@ async function modeShip() {
     await signin();
 
     await note('running', { step: 'Reading fresh order details…' });
-    const chunks = require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'));
+    const chunks = await require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'));
     const by = {}; const wanted = new Set(ids);
     chunks.forEach((d) => (d.get('orders') || []).forEach((o) => { const k = nid(o.channelOrderId); if (wanted.has(k)) (by[k] = by[k] || []).push(o); }));
     const [idx, nimbus, zippy] = await Promise.all([readIndex(), readJsonDoc('nimbusIndex', 'byOrder'), readJsonDoc('aikm_admin', 'zippyIndex')]);

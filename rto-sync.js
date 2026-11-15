@@ -82,7 +82,7 @@ async function main() {
 
   // ---- OMS Guru orders: name, payment, awb (and account for NimbusPost rows) ----
   const omsBy = {}, accByAwb = {};
-  (require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => {
+  (await require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => {
     (d.data().orders || []).forEach((o) => {
       const id = baseOrder(o.channelOrderId); if (!id) return;
       const acc = String(o.channel || '').replace(/\s*-\s*(Amazon|Meesho|Flipkart|Snapdeal|Shopify).*$/i, '').trim();

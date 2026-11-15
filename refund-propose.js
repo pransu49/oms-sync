@@ -55,7 +55,7 @@ async function main() {
   const add = (o) => { const l = lines[o.o] = lines[o.o] || []; if (o.i && !l.some((x) => x.i === o.i)) l.push(o); };
   const rf = (await omsDb.collection('aikm_admin').doc('omsRefundOrders').get()).data() || {};
   (rf.orders || []).forEach((o) => add({ a: o.a, o: o.o, i: o.i, q: o.q || 1, p: o.p, s: o.s, t: o.t, st: o.st, d: o.d, ty: o.ty, n: o.n, db: o.db || '' }));
-  (require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => (d.data().orders || []).forEach((o) => {
+  (await require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => (d.data().orders || []).forEach((o) => {
     if (!isAmazon(o.channel)) return;
     const id = base(o.channelOrderId); if (!id || (lines[id] && lines[id].length)) return;
     add({ a: accName(o.channel), o: id, i: String(o.channelSubOrderId || '').trim(), q: num(o.qty) || 1, p: num(o.price), s: num(o.shippingCharge), t: num(o.taxRate),

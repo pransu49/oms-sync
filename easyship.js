@@ -207,7 +207,7 @@ async function payMap() {
   if (PAY) return PAY;
   PAY = {};
   try {
-    (require('./oms-chunks').cachedChunks(db.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => (d.data().orders || []).forEach((o) => {
+    (await require('./oms-chunks').cachedChunks(db.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => (d.data().orders || []).forEach((o) => {
       const id = String(o.channelOrderId || '').trim().replace(/_\d+$/, ''); if (!id) return;
       const cod = /\bcod\b|cash/i.test(o.orderType || '') || (parseFloat(String(o.codCollectible || '').replace(/[^\d.]/g, '')) || 0) > 0;
       if (o.orderType || o.codCollectible) PAY[id] = PAY[id] === 'cod' || cod ? 'cod' : 'prepaid';
