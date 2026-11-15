@@ -43,6 +43,14 @@ jobs:
           key: lots-catalog-${{ github.run_id }}
           restore-keys: lots-catalog-
 
+      - name: Restore saved snapshot copy
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/snapshot-copy.json
+          key: snap-praso-${{ github.run_id }}
+          restore-keys: snap-praso-
+
       - name: Run SP-API sync
         env:
           SPAPI_CLIENT_ID: ${{ secrets.SPAPI_CLIENT_ID }}
@@ -56,6 +64,14 @@ jobs:
           ACCOUNT_LABEL: praso
         shell: bash
         run: node spapi-sync.js 2>&1 | tee run.log
+
+      - name: Keep snapshot copy for the next run
+        if: always() && hashFiles('.cache/snapshot-copy.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/snapshot-copy.json
+          key: snap-praso-${{ github.run_id }}
 
       - name: Keep LOTS catalogue copy for the next run
         if: always() && hashFiles('.cache/lots-catalog.json') != ''

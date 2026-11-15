@@ -107,6 +107,7 @@ const SNAP_KINDS = ['inventory', 'pricing', 'orders'];
 const SNAP_COL = 'spapiSnapshots';
 const ORDERS_WINDOW_DAYS = 90;
 const CHUNK_BYTES = 700 * 1024; // Firestore max is 1 MiB per document - stay well under
+const SNAP_CACHE_FILE = '.cache/snapshot-copy.json';
 let prevSnapMeta = null;
 let mrpCheckedAt = null;
 let feesPostedAt = null;           // Finance API: fees read up to this time (kept in the snapshot meta doc)            // when verifyMrpPushes last ran (kept in the snapshot meta doc)
@@ -123,6 +124,17 @@ async function loadSnapshot() {
   const metaDoc = await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_meta`).get();
   if (metaDoc.exists && metaDoc.data().run) {
     prevSnapMeta = metaDoc.data();
+    // Download saver (15 Nov 2026): Google bills Firestore DOWNLOADS. The snapshot is several MB and every run
+    // (~380/day over 4 accounts) used to download all of it. Now a copy is kept in a file between runs
+    // (GitHub cache, see workflows); it is used only when its run id equals the meta doc's run id (= identical data).
+    try {
+      const c = JSON.parse(require('fs').readFileSync(SNAP_CACHE_FILE, 'utf8'));
+      if (c && c.run === prevSnapMeta.run && c.account === ACCOUNT_LABEL && c.snap) {
+        SNAP_KINDS.forEach((k) => { Object.assign(SNAP[k], c.snap[k] || {}); });
+        console.log(`Snapshot loaded from saved copy (1 read, 0 chunk downloads): inventory ${Object.keys(SNAP.inventory).length}, pricing ${Object.keys(SNAP.pricing).length}, orders ${Object.keys(SNAP.orders).length}`);
+        return;
+      }
+    } catch (e) { /* no saved copy yet */ }
     const refs = [];
     for (const kind of SNAP_KINDS) {
       const n = (prevSnapMeta.chunks || {})[kind] || 0;
@@ -206,6 +218,10 @@ async function writeSnapshot() {
     }
     await batch.commit();
   }
+  try {
+    const fs = require('fs'); fs.mkdirSync('.cache', { recursive: true });
+    fs.writeFileSync(SNAP_CACHE_FILE, JSON.stringify({ run, account: ACCOUNT_LABEL, snap: SNAP }));
+  } catch (e) { console.log('Could not save snapshot copy:', e.message); }
   console.log(`Snapshot written: ${JSON.stringify(counts)} in ${JSON.stringify(chunks)} chunk(s)`);
 }
 

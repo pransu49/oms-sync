@@ -52,6 +52,14 @@ jobs:
           key: lots62-catalog-${{ github.run_id }}
           restore-keys: lots62-catalog-
 
+      - name: Restore saved snapshot copy
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/snapshot-copy.json
+          key: snap-sastastore-${{ github.run_id }}
+          restore-keys: snap-sastastore-
+
       - name: Run SP-API sync
         env:
           # Same Amazon developer app as Praso - only the refresh token and seller ID differ per account.
@@ -69,6 +77,14 @@ jobs:
           LOTS62_STOCK: 'on'
         shell: bash
         run: node spapi-sync.js 2>&1 | tee run.log
+
+      - name: Keep snapshot copy for the next run
+        if: always() && hashFiles('.cache/snapshot-copy.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/snapshot-copy.json
+          key: snap-sastastore-${{ github.run_id }}
 
       - name: Keep LOTS catalogue copy for the next run
         if: always() && hashFiles('.cache/lots-catalog.json') != ''

@@ -282,7 +282,8 @@ async function pushToFirestore(orders, docName = 'omsOrders') {
   const chunksRef = db.collection('aikm_admin').doc(docName).collection('chunks');
 
   // Read existing chunk hashes so unchanged chunks aren't rewritten every run.
-  const existingSnap = await chunksRef.get();
+  // Download saver (15 Nov 2026): only the small 'hash' field is downloaded, not every order of every chunk (Google bills downloads).
+  const existingSnap = await chunksRef.select('hash').get();
   const existingHashes = {};
   existingSnap.forEach((doc) => { existingHashes[doc.id] = doc.data().hash; });
   const existingIds = new Set(existingSnap.docs.map((d) => d.id));
