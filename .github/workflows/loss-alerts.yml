@@ -41,9 +41,25 @@ jobs:
         with:
           node-version: '20'
       - run: npm install --no-audit --no-fund firebase-admin
+      - name: Restore saved OMS orders copy
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ github.run_id }}
+          restore-keys: omsorders-
+
       - run: node loss-alerts.js
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Keep OMS orders copy for the next run
+        if: always() && hashFiles('.cache/oms-chunks.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ hashFiles('.cache/oms-chunks.json') }}

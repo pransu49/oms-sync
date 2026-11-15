@@ -94,6 +94,14 @@ jobs:
         with:
           node-version: '20'
       - run: npm install --no-save cheerio@1.0.0 pdf-lib@1.17.1 firebase-admin@12
+      - name: Restore saved OMS orders copy
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ github.run_id }}
+          restore-keys: omsorders-
+
       - shell: bash
         run: node easyship.js 2>&1 | tee run.log
         env:
@@ -110,6 +118,14 @@ jobs:
           PROBE: ${{ inputs.probe_vids != '' && inputs.probe_vids != null && 'true' || 'false' }}
           PROBE_VIDS: ${{ inputs.probe_vids || '' }}
           TRIGGER: ${{ needs.gate.outputs.auto == 'true' && 'schedule' || inputs.trigger || 'manual' }}
+
+      - name: Keep OMS orders copy for the next run
+        if: always() && hashFiles('.cache/oms-chunks.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ hashFiles('.cache/oms-chunks.json') }}
 
       - name: Report sync health to console
         if: always()

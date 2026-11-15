@@ -28,6 +28,14 @@ jobs:
         with:
           node-version: '20'
       - run: npm install
+      - name: Restore saved OMS orders copy
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ github.run_id }}
+          restore-keys: omsorders-
+
       - shell: bash
         run: set -o pipefail; node oms-rto-push.js 2>&1 | tee run.log
         env:
@@ -37,6 +45,14 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
           ONLY_ORDERS: ${{ inputs.only_orders || '' }}
+
+      - name: Keep OMS orders copy for the next run
+        if: always() && hashFiles('.cache/oms-chunks.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ hashFiles('.cache/oms-chunks.json') }}
 
       - name: Report sync health to console
         if: always() && inputs.only_orders == ''

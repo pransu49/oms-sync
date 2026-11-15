@@ -103,7 +103,7 @@ async function main() {
 
   // ---- match each complaint to the order ----
   const ord = {};
-  (await omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks').get()).forEach((d) => (d.data().orders || []).forEach((o) => {
+  (require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => (d.data().orders || []).forEach((o) => {
     const id = base(o.channelOrderId); if (!id || ord[id]) return;
     ord[id] = { p: String(o.productName || o.sku || '').slice(0, 80), q: o.qty, n: o.buyerName || '', ci: o.buyerCity || '', pin: o.buyerPincode || '', st: o.status || '', a: o.awb || '', cour: o.courier || '', pay: o.orderType || '', od: o.orderDate || '' };
   }));

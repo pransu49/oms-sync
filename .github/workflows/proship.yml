@@ -47,6 +47,14 @@ jobs:
         with:
           node-version: '20'
       - run: npm install firebase-admin
+      - name: Restore saved OMS orders copy
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ github.run_id }}
+          restore-keys: omsorders-
+
       - id: run
         shell: bash
         run: set -o pipefail; node proship.js 2>&1 | tee run.log
@@ -64,6 +72,14 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ inputs.mode != 'selftest' && secrets.FIREBASE_SERVICE_ACCOUNT_OMS || '' }}
 
       # new AWBs -> OMS Guru right away (Amazon is confirmed after the next OMS sync), same as NimbusPost / Zippy
+      - name: Keep OMS orders copy for the next run
+        if: always() && hashFiles('.cache/oms-chunks.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ hashFiles('.cache/oms-chunks.json') }}
+
       - name: Push tracking to OMS Guru
         if: ${{ steps.run.outputs.shipped != '' && steps.run.outputs.shipped != '0' }}
         shell: bash

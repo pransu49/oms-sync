@@ -25,6 +25,14 @@ jobs:
         with:
           node-version: '20'
       - run: npm install --no-save amazon-sp-api firebase-admin@12
+      - name: Restore saved OMS orders copy
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ github.run_id }}
+          restore-keys: omsorders-
+
       - shell: bash
         run: set -o pipefail; node complaints-sync.js 2>&1 | tee run.log
         env:
@@ -37,6 +45,14 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
+
+      - name: Keep OMS orders copy for the next run
+        if: always() && hashFiles('.cache/oms-chunks.json') != ''
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: .cache/oms-chunks.json
+          key: omsorders-${{ hashFiles('.cache/oms-chunks.json') }}
 
       - name: Report sync health to console
         if: always() && inputs.dry_run != 'true'

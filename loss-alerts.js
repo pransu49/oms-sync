@@ -31,7 +31,7 @@ const timeLbl = (ms) => new Date(ms + IST).toISOString().slice(11, 16).replace(/
   const now = Date.now(), today = new Date(now + IST).toISOString().slice(0, 10);
 
   const [chunks, lixS, stS] = await Promise.all([
-    oms.collection('aikm_admin').doc('omsOrders').collection('chunks').get(),
+    require('./oms-chunks').cachedChunks(oms.collection('aikm_admin').doc('omsOrders').collection('chunks')),
     main.collection('listingIndex').get(),
     main.collection('aikm_admin').doc('lossAlerts').get(),
   ]);
