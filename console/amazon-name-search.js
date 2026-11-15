@@ -1220,3 +1220,30 @@
     }
   } catch (e) {}
 })();
+
+/* ===== NOT SELLING FIX (owner 15 Nov 2026): "when any ASIN is detected not selling and gets relisted, it must be removed
+   from the Not selling tab immediately". An ASIN the robot relisted in the last 24 h (pricing record relist.status
+   relisted / relisted_old_not_deleted / new_listing) is left out of the Not selling count + list. Still no offer after 24 h -> it comes back. ===== */
+(function () {
+  var HOLD = 24 * 3600e3;
+  function relistedNow(p) { var r = p && p.relist; return !!(r && r.at && /^(relisted|new_listing)/.test(r.status || "") && Date.now() - r.at < HOLD); }
+  function withoutRelisted(fn) {
+    return function () {
+      if (typeof spapiPricingRaw === "undefined" || !spapiPricingRaw) return fn.apply(this, arguments);
+      var all = spapiPricingRaw; spapiPricingRaw = all.filter(function (p) { return !relistedNow(p); });
+      try { return fn.apply(this, arguments); } finally { spapiPricingRaw = all; }
+    };
+  }
+  function setup(n) {
+    if (typeof computeSpapiKpis !== "function" || typeof renderPricingCards !== "function") { if ((n || 0) < 120) setTimeout(function () { setup((n || 0) + 1); }, 500); return; }
+    if (window.__aikmNsFix) return; window.__aikmNsFix = 1;
+    var k = computeSpapiKpis;
+    var kpi = function () { var full = k.apply(this, arguments), ns = withoutRelisted(k).apply(this, arguments); full.notSelling = ns.notSelling; return full; };
+    try { computeSpapiKpis = kpi; } catch (e) {} window.computeSpapiKpis = kpi;
+    var rp = renderPricingCards, rpNs = withoutRelisted(rp);
+    var rpc = function () { return (typeof spapiKpiFilter !== "undefined" && spapiKpiFilter === "notSelling" ? rpNs : rp).apply(this, arguments); };
+    try { renderPricingCards = rpc; } catch (e) {} window.renderPricingCards = rpc;
+    try { typeof spRender === "function" && spRender(); } catch (e) {}
+  }
+  setup(0);
+})();
