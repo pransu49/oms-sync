@@ -115,7 +115,8 @@ const chName = (c) => String(c || '').replace(/\s*-\s*Ama[a-z]*$/i, ' · Amazon'
       const acc = /sasta/i.test(key) ? 'Sasta Store' : /praso/i.test(key) ? 'Praso' : '';
       const parts = [], refundParts = [];
       if (a.price.length) parts.push(`💰 <b>Price updates · ${a.price.length}</b>${acc ? `  <i>${acc}</i>` : ''}\n` + a.price.slice(0, 8).map(priceLine).join('\n') + more(a.price.length - 8));
-      if (a.relist.length) parts.push(`🔁 <b>Relisted · ${a.relist.length}</b>${acc ? `  <i>${acc}</i>` : ''}\n` + a.relist.slice(0, 6).map(relistLine).join('\n') + more(a.relist.length - 6));
+      // Owner 15 Nov 2026: "stop sending alerts of relisted" - relists are still counted (daily summary) but no Telegram message.
+      if (false && a.relist.length) parts.push(`🔁 <b>Relisted · ${a.relist.length}</b>${acc ? `  <i>${acc}</i>` : ''}\n` + a.relist.slice(0, 6).map(relistLine).join('\n') + more(a.relist.length - 6));
       if (a.refund.length) {
         const m = a.refund[0].match(/(\d+) refunded, (\d+) failed(?:, (\d+) skipped)?/);
         refundParts.push(m ? `💸 <b>Bulk refund done</b>\n✅ ${m[1]} refunded   ❌ ${m[2]} failed${m[3] ? `   ⏭ ${m[3]} skipped` : ''}` : `💸 <b>Bulk refund</b>\n${esc(a.refund[0])}`);
