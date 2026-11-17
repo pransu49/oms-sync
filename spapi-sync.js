@@ -230,6 +230,30 @@ async function writeSnapshot() {
 // The dashboard (/pages/aikm) reads only these 4 docs (4 reads per open) instead of the big order chunks.
 //   days.<YYYY-MM-DD IST> = { o: orders, r: revenue (₹, cancelled excluded), u: units, c: cancelled, s: {status group: n}, p: {ASIN: [units, revenue]} }
 //   names.<ASIN> = product title · open = { toShip, late, pending } for self-ship / Easy Ship orders still to be shipped
+// PII CHECK (owner 17 Nov 2026: "process orders from our tool, OMS will stop"): can this app get buyer name / address / phone
+// (restricted role "Direct-to-Consumer Shipping")? Once a day per account: asks Amazon for a Restricted Data Token for ONE
+// unshipped order's address + buyer info and reads it. Saves only yes/no + Amazon's message (no buyer data) in
+// spapiSnapshots/<acct>_piiCheck. 1 read + 1 write per day.
+async function checkPiiAccess() {
+  const ref = db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_piiCheck`), prev = await ref.get().catch(() => null);
+  if (prev && prev.exists && Date.now() - (prev.get('at') || 0) < 20 * 3600e3 && !process.env.PII_CHECK_NOW) return;
+  const o = Object.values(SNAP.orders || {}).find((x) => x && x.account === ACCOUNT_LABEL && /unshipped/i.test(x.status || '') && !/^AFN$/i.test(x.fulfillmentChannel || ''));
+  if (!o) return;
+  const out = { at: Date.now(), order: o.orderId.replace(/\d(?=\d{4})/g, 'x') };
+  try {
+    const tok = await spClient.callAPI({ operation: 'createRestrictedDataToken', endpoint: 'tokens', body: { restrictedResources: [
+      { method: 'GET', path: `/orders/v0/orders/${o.orderId}/address` }, { method: 'GET', path: `/orders/v0/orders/${o.orderId}/buyerInfo` }] } });
+    out.token = !!(tok && tok.restrictedDataToken);
+    if (out.token) {
+      const a = await spClient.callAPI({ operation: 'getOrderAddress', endpoint: 'orders', path: { orderId: o.orderId }, restricted_data_token: tok.restrictedDataToken });
+      const sa = (a && a.ShippingAddress) || {};
+      out.address = { name: !!sa.Name, line1: !!sa.AddressLine1, phone: !!sa.Phone, pincode: !!sa.PostalCode, city: !!sa.City };
+    }
+    out.ok = !!(out.address && out.address.name && out.address.line1);
+  } catch (e) { out.ok = false; out.error = String(e.message || e).slice(0, 300); }
+  await ref.set(out);
+  console.log(`PII check (buyer address access): ${out.ok ? 'YES - full address available' : 'NO'}${out.error ? ' - ' + out.error : ''}`);
+}
 async function writeDashSummary() {
   const IST = 5.5 * 3600e3, now = Date.now(), dk = (ms) => new Date(ms + IST).toISOString().slice(0, 10);
   const from = dk(now - 31 * 864e5), days = {}, names = {}, open = { toShip: 0, late: 0, pending: 0 };
@@ -3066,6 +3090,7 @@ async function runSync() {
   console.log('Step 3b: saving compact snapshot for the Amazon page...');
   await writeSnapshot();
   await writeDashSummary().catch((e) => console.warn('Dashboard summary skipped (sync continues):', e.message || e));
+  await checkPiiAccess().catch((e) => console.warn('PII check skipped:', e.message || e));
   await publishDeliverByIndex().catch((e) => console.warn('Deliver-by index skipped (sync continues):', e.message || e));
   await publishListingIndex().catch((e) => console.warn('Listing index skipped (sync continues):', e.message || e));
 
