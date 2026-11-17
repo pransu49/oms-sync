@@ -2620,7 +2620,8 @@ async function runCentralInventory(sellerId) {
   const info = (k, ownOnly) => { if (keyInfo[k]) return keyInfo[k];
     const gn = ownOnly ? null : num(lots[k] && lots[k].qty), s62 = ownOnly || !q62 ? null : num(q62[k]), o = Math.max(0, Number(own[k] && own[k].q) || 0);
     const lotsQ = Math.max(gn || 0, s62 || 0), avail = lotsQ + o, pd = Math.round((pendK[k] || 0) * 100) / 100;
-    return (keyInfo[k] = { gn, s62, o, pd, avail, free: avail - pd, known: ownOnly || gn != null || s62 != null || o > 0 }); };
+    // vendor products (not in LOTS): managed only once own stock has been typed for them - never zeroed just because none was entered
+    return (keyInfo[k] = { gn, s62, o, pd, avail, free: avail - pd, known: ownOnly ? own[k] != null : (gn != null || s62 != null || o > 0) }); };
   // 3. target per listing
   const rows = []; let inStock = 0, toZero = 0;
   for (const it of Object.values(SNAP.inventory)) {
@@ -2633,7 +2634,9 @@ async function runCentralInventory(sellerId) {
     if (!ok) { rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), null, amz, 'nostock']); continue; }
     const min = ownOnly ? 1 : OOS_LOTS_BELOW, target = low < min || units < 1 ? 0 : Math.min(units, INV_CAP);
     if (target === 0 && amz > 0) toZero++;
-    rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), target, amz, target === amz || (target > 0 && amz >= target) ? 'ok' : 'diff']);
+    // small moves are left to the next real change (Amazon already takes its own orders off) - fewer API calls
+    const near = target > 0 && amz > 0 && (Math.abs(target - amz) < Math.max(5, amz * 0.25) || (target >= INV_CAP && amz >= INV_CAP));
+    rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), target, amz, target === amz || near ? 'ok' : 'diff']);
   }
   const keys = {}; Object.entries(keyInfo).forEach(([k, I]) => { keys[k] = [I.gn, I.s62, I.o, I.pd]; });
   const broken = toZero >= 20 && toZero > inStock * 0.6;
@@ -2642,7 +2645,7 @@ async function runCentralInventory(sellerId) {
   CENTRAL_LIVE = live && !broken;
   if (live && broken) console.warn(`Central inventory: ${toZero} of ${inStock} in-stock listings would go to 0 - stock data looks broken, NOTHING pushed.`);
   if (CENTRAL_LIVE && sellerId) {
-    const todo = rows.filter((r) => r[3] != null && r[3] !== r[4] && (r[3] === 0 || r[4] === 0 || r[3] < r[4] || r[3] - r[4] >= Math.max(5, r[4] * 0.25)))
+    const todo = rows.filter((r) => r[3] != null && r[5] === 'diff')
       .sort((a, b) => (a[3] === 0 ? 0 : 1) - (b[3] === 0 ? 0 : 1)).slice(0, INV_MAX_PUSH);
     for (const r of todo) {
       const docId = `${ACCOUNT_LABEL}_${sidSafe(r[0])}`;

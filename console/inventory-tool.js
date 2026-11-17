@@ -161,7 +161,7 @@
       var shownU = unl.slice(0, 100 * (page + 1));
       body = '<div class="iv-scroll"><table class="iv-tbl"><thead><tr><th>Account</th><th>SKU</th><th>ASIN</th><th class="r">Amazon stock</th><th>Why</th><th></th></tr></thead><tbody>' + shownU.map(function (u) {
         return "<tr><td>" + esc(u.acct) + '</td><td style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px">' + esc(u.sku) + '</td><td><a href="https://www.amazon.in/dp/' + esc(u.asin) + '" target="_blank" rel="noopener">' + esc(u.asin) + '</a></td><td class="r">' + nf(u.amz) +
-          "</td><td>" + (u.why === "unlinked" ? "Not mapped to LOTS / a vendor - stock not managed" : "LOTS has no stock figure and no own stock entered") + "</td><td>" + (u.asin ? '<button type="button" class="iv-btn" data-map="' + esc(u.asin) + '"><i class="ti ti-link"></i>Map</button>' : "") + "</td></tr>"; }).join("") + "</tbody></table>" +
+          "</td><td>" + (u.why === "unlinked" ? "Not mapped to LOTS / a vendor - stock not managed" : "Not in LOTS - type its own stock in the table to manage it") + "</td><td>" + (u.asin ? '<button type="button" class="iv-btn" data-map="' + esc(u.asin) + '"><i class="ti ti-link"></i>Map</button>' : "") + "</td></tr>"; }).join("") + "</tbody></table>" +
         (unl.length > shownU.length ? '<div class="iv-more"><button type="button" class="iv-btn" data-more>Show 100 more · ' + (unl.length - shownU.length) + " left</button></div>" : "") + "</div>";
     } else {
       var shown = list.slice(0, 100 * (page + 1));
