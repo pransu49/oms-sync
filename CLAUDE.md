@@ -287,5 +287,5 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   `firebase.initializeApp(<same project>, name)` returns that app, so one sign-in covers all tabs (first time per browser: one Google click per project — popups opened together get cancelled;
   safelisting the main client ID in the other projects failed in the Firebase console). Allowed: aikmpharma@gmail.com,
   prabhat786kushwah@gmail.com (same list in the Firestore rules). REST callers send `Authorization: Bearer` from `window.aikmIdToken(projectId)`
-  (sale-autobill.js). Robots use firebase-admin -> not affected. NOT yet covered: the 3 Gmail complaints Apps Scripts write `amazon_complaints` with
-  the API key only -> that collection stays open in the rules until they sign in.
+  (sale-autobill.js). Robots use firebase-admin -> not affected. The 3 Gmail complaints Apps Scripts (write `amazon_complaints` with the API key only) are NOT in use (owner 17 Nov 2026) ->
+  the rules lock that collection too; they must sign in (or use a service account) before they are switched back on.
