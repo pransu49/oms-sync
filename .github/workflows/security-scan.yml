@@ -1,0 +1,32 @@
+name: Monthly security scan (OWASP ZAP baseline)
+# Owner 17 Nov 2026 (Amazon restricted-role control "vulnerability scans every 30 days"): passive, non-intrusive scan of the
+# internal tool pages on the 1st of every month. Findings are opened as a GitHub issue (fix: critical 7 days, high 30 days).
+on:
+  schedule:
+    - cron: '30 22 28-31 * *'   # last days of the month, ~04:00 IST; the job only runs on the actual last day
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+jobs:
+  zap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        page: [console, amazon, aikm, label]
+    steps:
+      - name: Only on the last day of the month (or a manual run)
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$(date -u -d tomorrow +%d)" = "01" ]; then echo "go=1" >> $GITHUB_OUTPUT; fi
+      - uses: zaproxy/action-baseline@v0.14.0
+        if: steps.gate.outputs.go == '1'
+        with:
+          target: 'https://dalbhaat.in/pages/${{ matrix.page }}'
+          allow_issue_writing: true
+          issue_title: 'Monthly security scan - pages/${{ matrix.page }}'
+          fail_action: false
+          cmd_options: '-a'

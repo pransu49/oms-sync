@@ -276,3 +276,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   may be kept at most 90 days after shipment. Today: OMS live orders 15 days (replaced each sync), proshipIndex 15 days, rtoIndex rebuilt from
   90-day reports, omsArchive has NO buyer fields. Any new store of buyer details MUST drop them within 90 days of shipment, never go into
   git/logs/Telegram, and be readable only by signed-in staff. Code scanning: `codeql.yml` (every push + weekly) + `dependabot.yml`.
+- **Security controls for Amazon restricted role** (owner 17 Nov 2026, first application REJECTED for: no test environment, no 30-day scans +
+  yearly pen test, no audit logs with 2-weekly review / 12-month retention). Owner does NOT want OMS Guru -> re-apply once all 3 are real:
+  `security-scan.yml` (monthly OWASP ZAP baseline of the tool pages, findings -> GitHub issue; fix critical 7 d / high 30 d) + `codeql.yml` (weekly).
+  Still to build: test Firebase project + staging workflows; Cloud audit logs (12-month bucket) + 2-weekly Telegram review; yearly in-house pen test report.
+  Until approved, OMS Guru Order Sync must stay ON (only source of buyer addresses).
