@@ -258,3 +258,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   self-ship SKUs up to Rs 300, but the Finance API shows Rs 20 + 18% GST (Rs 23.60) is really charged. `feeFor()` in `spapi-sync.js`
   uses the higher of the estimate and the rate card (Sasta Store = `selfShipClosing()`: 20 / 26 / 51 / 61; others `closingFee()`),
   x 1.18 for GST on Amazon fees (not claimed back). Feeds the price robot, listingIndex `fp` and the Self-Ship profit. Don't go back to the raw estimate.
+- **GST in profit** (owner 17 Nov 2026): GST is never paid in cash - input credit (purchase + Amazon fees + courier) is larger than the GST
+  on sales, so per-order profit does NOT deduct GST on the sale and counts every cost incl. its GST (purchase incl. GST, fees x1.18, courier
+  as billed). Robot `gstOnMargin()` = 0 and buyer shipping counted 100% unless env `GST_CASH=on`; console (`proship-tab.js`, `loss-tab.js`,
+  `order-fees.js`) the same unless `window.AIKM_GST_CASH = true`. Switch both back if the owner starts paying GST in cash.

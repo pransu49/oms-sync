@@ -141,7 +141,7 @@
       var g = base > 0 ? outGst / base : .05;
       var shipIn = Math.max(0, total - itemSum), shipGst = shipIn * g / (1 + g);
       var refund = f && f.refundAmt > 0 ? Math.min(f.refundAmt, total) : 0, keep = total > 0 ? (total - refund) / total : 1;
-      var gstOut = (outGst + shipGst) * keep, gstIn = x.v.cost * g / (1 + g), gstPay = Math.max(0, gstOut - gstIn);
+      var gstOut = (outGst + shipGst) * keep, gstIn = x.v.cost * g / (1 + g), gstPay = window.AIKM_GST_CASH === true ? Math.max(0, gstOut - gstIn) : 0; /* owner 17 Nov 2026: GST is never paid in cash - input credit (purchase, Amazon fees, courier) is bigger than the GST on sales, so the GST on a sale is paid from credit that would otherwise sit idle -> it is NOT a cost per order. Costs are counted incl. their GST. Set back by GST_CASH=on (robot) / window.AIKM_GST_CASH=true (console) if cash GST starts being paid. */
       var ref = f ? f.ref : est.ref, close = f ? f.close : est.close, other = f ? (f.other || 0) : 0;
       var cour = e.isEasyShip ? (f && f.ship ? f.ship : (est.ship || 55)) : courier(kg), courSrc = e.isEasyShip ? (f && f.ship ? "Amazon Easy Ship fee" : "Easy Ship fee (estimate)") : "courier (estimate ₹40/kg)";
       /* GST on Amazon's fees (owner 13 Nov 2026: "we don't claim" it back) = a real cost. Amazon's real fee amounts (Finance API)
@@ -150,7 +150,7 @@
       var value = total - refund - gstPay - x.v.cost - ref - close - other - (f && !e.isEasyShip ? (f.ship || 0) : 0) - cour - feeGst - 3;
       var L = [["Order total (incl. GST & shipping)", total]];
       if (refund) L.push(["Refunded to buyer", -refund]);
-      L.push(["GST payable (₹" + gstOut.toFixed(2) + " collected − ₹" + gstIn.toFixed(2) + " paid on purchase)", -gstPay],
+      L.push([window.AIKM_GST_CASH === true ? "GST payable (₹" + gstOut.toFixed(2) + " collected − ₹" + gstIn.toFixed(2) + " paid on purchase)" : "GST ₹" + gstOut.toFixed(2) + " · paid from GST credit, no cash", -gstPay],
         ["Product cost", -x.v.cost], ["Referral fee" + (f ? "" : " (estimate)"), -ref], ["Closing fee" + (f ? "" : " (estimate)"), -close]);
       if (other) L.push(["Other Amazon fees", -other]);
       if (f && !e.isEasyShip && f.ship) L.push(["Amazon shipping fees", -f.ship]);
