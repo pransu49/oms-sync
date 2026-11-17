@@ -264,3 +264,11 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   `order-fees.js`) the same unless `window.AIKM_GST_CASH = true`. Switch both back if the owner starts paying GST in cash.
 - **Return buffer OFF** (owner 17 Nov 2026, 'will add later'): the Rs 3 per order RTO buffer is removed from every profit (robot `RETURN_BUF = 0`,
   proship-tab / loss-tab / order-fees). Amazon page Orders courier = ProShip charge of the order, else account's ProShip average, else Rs 40/kg.
+- **Central inventory** (owner 17 Nov 2026, "combined inventory like OMS - OMS will be stopped"): `runCentralInventory()` in `spapi-sync.js`
+  (every run, Step 3a). Stock per key (LOTS code, or `A:<ASIN>` for vendor products) = max(LOTS-GN, LOTS-62 if `LOTS62_STOCK`) + own stock
+  − pending units of ALL 4 accounts; every listing gets that full stock (`/need` per pack/combo part), < 10 free -> 0 (own-only keys: < 1), cap 500.
+  Each account writes `spapiSnapshots/<acct>_pending` {u:{asin:units}} and `<acct>_invPlan` {rows JSON [sku, asin, "code*need+..", target, amz, st], keys JSON {k:[gn,62,own,pending]}, stats}.
+  Own stock + switches: main `aikm_admin/invCentral` {own:{k:{q,n,at}}, live:{acct:true}}. It PUSHES to Amazon only for accounts switched to
+  "AIKM tool" (max 300 per run, zeros first; stops if 60%+ in-stock would go 0); for those `runStockGuard` (OOS rule + restocks) is skipped.
+  Owner must also switch OFF OMS Guru's inventory sync for that channel. Screen: `console/inventory-tool.js`, opened as `/pages/amazon?app=inventory`
+  (loader block `aikmInventoryJs` at the end of `amazon-name-search.js` — keep it). Firebase: ~4 reads + 2 writes per sync run (~1,500 reads, ~770 writes/day all accounts); screen 5 reads per open.

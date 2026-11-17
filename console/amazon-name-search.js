@@ -1247,3 +1247,15 @@
   }
   setup(0);
 })();
+
+/* ===== DO NOT REMOVE — loads the Central Inventory tool (console/inventory-tool.js, owner 17 Nov 2026) when the page is opened as
+   /pages/amazon?app=inventory (own tool on the AIKM dashboard). Keep this block when replacing amazon-name-search.js. ===== */
+(function () { try { if (!/[?&]app=inventory(&|$)/.test(location.search) || document.getElementById("aikmInventoryJs")) return;
+  function add(ref) { if (document.getElementById("aikmInventoryJs")) return; var s = document.createElement("script"); s.id = "aikmInventoryJs"; s.defer = true;
+    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/inventory-tool.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); document.head.appendChild(s); }
+  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
+  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/inventory-tool.js&per_page=1")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
+} catch (e) {} })();

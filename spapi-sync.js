@@ -2579,6 +2579,85 @@ async function setAmazonQuantity(sellerId, sku, qty) {
   }));
 }
 
+// ── CENTRAL INVENTORY (owner 17 Nov 2026: "combined inventory like OMS, from where stock gets distributed - OMS will be stopped") ──
+// ONE stock per product = LOTS-GN (+ LOTS-62 where this account may sell it, higher of the two) + OWN stock typed on the
+// Inventory screen (/pages/amazon?app=inventory), minus units in PENDING orders of ALL 4 Amazon accounts. Every listing of the
+// product gets that same full stock (owner's choice); below 10 free -> 0 (old rule). Products not in LOTS (vendor-mapped) use own stock only.
+// Each run: publishes this account's pending units (spapiSnapshots/<acct>_pending), reads the 4 pending docs + main
+// aikm_admin/invCentral {own:{<LOTS code | A:<ASIN>>:{q,n}}, live:{<acct>:true}} and writes the plan spapiSnapshots/<acct>_invPlan
+// (rows shown on the Inventory screen). It CHANGES Amazon stock only for accounts switched to "AIKM tool" (live) on that screen;
+// then the old out-of-stock rule + restock steps are skipped for that account (no fights). Firebase per run: ~6 reads, 2-3 writes.
+const INV_ACCOUNTS = ['praso', 'sastastore', 'vishal', 'munda'];
+const INV_CAP = 500, INV_MAX_PUSH = 300;
+let CENTRAL_LIVE = false;
+async function runCentralInventory(sellerId) {
+  if (!inventoryFresh) { console.log('Central inventory skipped: listings report not read this run.'); return; }
+  const cd = await loadCostData(), lots = cd.lots || {}, amap = cd.map || {};
+  if (Object.keys(lots).length < 500) { console.warn('Central inventory STOPPED: LOTS catalogue looks incomplete.'); return; }
+  let q62 = null; if (LOTS62_STOCK) { try { q62 = await loadLots62(); } catch (e) { console.warn('Central inventory: LOTS-62 not read -', e.message || e); } }
+  // 1. this account's pending orders (unshipped / partly shipped / payment pending, last 30 days) -> units per ASIN
+  const cut = Date.now() - 30 * 864e5, mine = {};
+  Object.values(SNAP.orders || {}).forEach((o) => {
+    if (!o || o.account !== ACCOUNT_LABEL || o.isCanceled || !/unshipped|partially|pending/i.test(o.status || '') || (o.purchaseDate && Date.parse(o.purchaseDate) < cut)) return;
+    if (/^AFN$/i.test(o.fulfillmentChannel || '')) return;
+    (o.items || []).forEach((it) => { if (it.asin) mine[it.asin] = (mine[it.asin] || 0) + (Math.max(0, (Number(it.qty) || 1) - (Number(it.qtyShipped) || 0))); });
+  });
+  const P = db.collection(SNAP_COL);
+  await P.doc(`${ACCOUNT_LABEL}_pending`).set({ u: mine, at: Date.now() });
+  const [pend, ctl] = await Promise.all([Promise.all(INV_ACCOUNTS.map((a) => (a === ACCOUNT_LABEL ? null : P.doc(`${a}_pending`).get().catch(() => null)))),
+    dbMain.collection('aikm_admin').doc('invCentral').get().catch(() => null)]);
+  const C = (ctl && ctl.exists && ctl.data()) || {}, own = C.own || {}, live = !!(C.live && C.live[ACCOUNT_LABEL]);
+  const allPend = [mine]; pend.forEach((d) => { if (d && d.exists && Date.now() - (d.get('at') || 0) < 6 * 3600e3) allPend.push(d.get('u') || {}); });
+  // 2. pending units per stock key (LOTS code, or A:<ASIN> for products not in LOTS)
+  const partsOf = (asin) => { const m = amap[asin]; if (!m) return null;
+    if (m.vendorName && String(m.vendorName).toUpperCase() !== 'LOTS') return [{ k: 'A:' + asin, need: 1, own: true }];
+    const ps = Array.isArray(m.parts) && m.parts.length ? m.parts : (m.code ? [{ code: m.code, qty: 1 }] : []);
+    return ps.length ? ps.map((x) => ({ k: String(x.code), need: Math.max(1, Number(x.qty) || 1) / Math.max(1, parseInt(x.lotsPack) || 1) })) : null; };
+  const pendK = {};
+  allPend.forEach((u) => Object.entries(u).forEach(([asin, q]) => { const ps = partsOf(asin); if (ps) ps.forEach((x) => { pendK[x.k] = (pendK[x.k] || 0) + q * x.need; }); }));
+  const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
+  const keyInfo = {};
+  const info = (k, ownOnly) => { if (keyInfo[k]) return keyInfo[k];
+    const gn = ownOnly ? null : num(lots[k] && lots[k].qty), s62 = ownOnly || !q62 ? null : num(q62[k]), o = Math.max(0, Number(own[k] && own[k].q) || 0);
+    const lotsQ = Math.max(gn || 0, s62 || 0), avail = lotsQ + o, pd = Math.round((pendK[k] || 0) * 100) / 100;
+    return (keyInfo[k] = { gn, s62, o, pd, avail, free: avail - pd, known: ownOnly || gn != null || s62 != null || o > 0 }); };
+  // 3. target per listing
+  const rows = []; let inStock = 0, toZero = 0;
+  for (const it of Object.values(SNAP.inventory)) {
+    if (!it || it.account !== ACCOUNT_LABEL || !it.sku || !reportSkus.has(it.sku) || (it.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT') continue;
+    const amz = parseInt(it.quantity, 10) || 0, ps = it.asin ? partsOf(it.asin) : null;
+    if (amz > 0) inStock++;
+    if (!ps) { rows.push([it.sku, it.asin || '', '', null, amz, 'unlinked']); continue; }
+    let units = Infinity, low = Infinity, ok = true, ownOnly = ps.every((x) => x.own);
+    for (const x of ps) { const I = info(x.k, x.own); if (!I.known) { ok = false; break; } units = Math.min(units, Math.floor(Math.max(0, I.free) / x.need)); low = Math.min(low, I.free); }
+    if (!ok) { rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), null, amz, 'nostock']); continue; }
+    const min = ownOnly ? 1 : OOS_LOTS_BELOW, target = low < min || units < 1 ? 0 : Math.min(units, INV_CAP);
+    if (target === 0 && amz > 0) toZero++;
+    rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), target, amz, target === amz || (target > 0 && amz >= target) ? 'ok' : 'diff']);
+  }
+  const keys = {}; Object.entries(keyInfo).forEach(([k, I]) => { keys[k] = [I.gn, I.s62, I.o, I.pd]; });
+  const broken = toZero >= 20 && toZero > inStock * 0.6;
+  // 4. push (only when this account is switched to the AIKM tool)
+  let pushed = 0, failed = 0; const errs = [];
+  CENTRAL_LIVE = live && !broken;
+  if (live && broken) console.warn(`Central inventory: ${toZero} of ${inStock} in-stock listings would go to 0 - stock data looks broken, NOTHING pushed.`);
+  if (CENTRAL_LIVE && sellerId) {
+    const todo = rows.filter((r) => r[3] != null && r[3] !== r[4] && (r[3] === 0 || r[4] === 0 || r[3] < r[4] || r[3] - r[4] >= Math.max(5, r[4] * 0.25)))
+      .sort((a, b) => (a[3] === 0 ? 0 : 1) - (b[3] === 0 ? 0 : 1)).slice(0, INV_MAX_PUSH);
+    for (const r of todo) {
+      const docId = `${ACCOUNT_LABEL}_${sidSafe(r[0])}`;
+      try { await setAmazonQuantity(sellerId, r[0], r[3]); r[4] = r[3]; r[5] = 'ok'; pushed++;
+        snapPatch('inventory', docId, { quantity: r[3], lastStockPush: { status: 'applied', at: Date.now(), qty: r[3], reason: 'Central inventory (AIKM tool): LOTS + own stock - pending orders' } });
+      } catch (e) { failed++; r[5] = 'fail'; if (errs.length < 20) errs.push([r[0], String(e.message || e).slice(0, 140)]);
+        snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: r[3], error: e.message || String(e) } }); }
+    }
+  }
+  const st = { listings: rows.length, linked: rows.filter((r) => r[3] != null).length, unlinked: rows.filter((r) => r[5] === 'unlinked').length,
+    diff: rows.filter((r) => r[5] === 'diff').length, zero: rows.filter((r) => r[3] === 0).length, pendingUnits: Object.values(mine).reduce((a, b) => a + b, 0), pushed, failed };
+  await P.doc(`${ACCOUNT_LABEL}_invPlan`).set({ at: Date.now(), live, broken, lots62: !!q62, stats: st, errs, rows: JSON.stringify(rows), keys: JSON.stringify(keys) });
+  console.log(`Central inventory: ${live ? 'LIVE' : 'preview (OMS Guru still owns stock)'} - ${st.linked} linked listings, ${st.diff} differ, ${st.unlinked} not linked, pending units ${st.pendingUnits}${live ? `, pushed ${pushed}, failed ${failed}` : ''}.`);
+}
+
 // ── ONE-TIME REPAIR (25 Oct 2026) ─────────────────────────────────────────────────────────────
 // On 24 Oct 07:3x-08:0x UTC the stock rule was on for ALL listings for ~30 min and set up to 100 listings per account
 // to 0; the undo then skipped them (stale listings report) and forgot them. Each such listing still carries
@@ -2969,7 +3048,9 @@ async function runSync() {
   } else console.log('Step 3: quick sync - competitor prices skipped (done in the full sync).');
 
   console.log('Step 3a: out-of-stock rule (LOTS stock below 10 -> Amazon 0; OMS Guru owns all other stock)...');
-  if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
+  await runCentralInventory(sellerId).catch((e) => console.warn('Central inventory skipped (sync continues):', e.message || e));
+  if (CENTRAL_LIVE) console.log('Out-of-stock rule + restock skipped: this account\'s stock is run by the central inventory.');
+  else if (SYNC_MODE === 'full') await runStockGuard(sellerId).catch((e) => console.warn('Stock guard skipped (sync continues):', e.message || e));
 
   console.log('Step 3a1: relist robot ("Not selling" -> new SKU, old SKU deleted)...');
   if (SYNC_MODE === 'full') await refreshFeeEstimates().catch((e) => console.warn('Fee estimates skipped (sync continues):', e.message || e));
