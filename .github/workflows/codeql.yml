@@ -1,0 +1,27 @@
+name: Code scanning (CodeQL)
+# Owner 17 Nov 2026 (Amazon restricted-role security answers): every change is scanned for security problems before it runs.
+on:
+  push:
+    branches: [main]
+    paths: ['**/*.js', '**/*.py']
+  schedule:
+    - cron: '17 21 * * 0'   # weekly full scan (Monday 02:47 IST)
+  workflow_dispatch:
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+concurrency: { group: codeql, cancel-in-progress: true }
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with: { languages: '${{ matrix.language }}' }
+      - uses: github/codeql-action/analyze@v3
