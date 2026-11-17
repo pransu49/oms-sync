@@ -46,7 +46,7 @@
   var NAMES = ["Main data", "Amazon data", "Order data"];
   function missing() { return auths.map(function (a, i) { return okUser(a.currentUser) ? -1 : i; }).filter(function (i) { return i >= 0; }); }
   Promise.all(auths.map(firstState)).then(function (users) {
-    if (users.every(okUser)) { window.aikmUser = users[0].email; return; }
+    if (users.every(okUser)) { window.aikmUser = users[0].email; audit(); return; }
     gate();
   });
 
@@ -70,11 +70,28 @@
       if (tok) await Promise.all(missing().map(function (i) {
         return auths[i].signInWithCredential(fb.auth.GoogleAuthProvider.credential(null, tok)).catch(function () {});
       }));
-      if (!missing().length) { msg.textContent = "✓ Signed in - loading…"; location.reload(); return; }
+      if (!missing().length) { try { sessionStorage.setItem("aikmSignedIn", "1"); } catch (e) {} msg.textContent = "✓ Signed in - loading…"; location.reload(); return; }
       btn.disabled = false; label(btn, msg);
     }).catch(function (e) { btn.disabled = false; msg.textContent = (e && e.message) || "Sign-in failed - try again."; });
   }
-  window.aikmSignOut = function () { Promise.all(auths.map(function (a) { return a.signOut(); })).then(function () { location.reload(); }); };
+  /* ---- 4. access log (Amazon PII rule: audit logs, 12-month retention, 2-weekly review) ----
+     ONE small record per page open / sign-in / sign-out in OMS Firebase aikm_audit (create-only in the rules: nobody can edit or
+     delete it from a browser). REST, so the page's own Firestore set-up is never touched. Review + 400-day clean-up: audit-review.js. */
+  function audit(ev) {
+    try {
+      if (window.AIKM_EMBED || location.protocol !== "https:") return Promise.resolve();
+      if (!ev) { ev = "open"; try { if (sessionStorage.getItem("aikmSignedIn")) { ev = "signin"; sessionStorage.removeItem("aikmSignedIn"); } } catch (e) {} }
+      var u = auths[2].currentUser; if (!u) return Promise.resolve();
+      return u.getIdToken().then(function (t) {
+        var S = function (v) { return { stringValue: String(v || "").slice(0, 160) }; };
+        return fetch("https://firestore.googleapis.com/v1/projects/" + CFG.oms.projectId + "/databases/(default)/documents/aikm_audit", {
+          method: "POST", headers: { Authorization: "Bearer " + t, "Content-Type": "application/json" }, keepalive: true,
+          body: JSON.stringify({ fields: { e: S(u.email), ev: S(ev), p: S(location.pathname + location.search), t: { timestampValue: new Date().toISOString() }, ua: S(navigator.userAgent) } })
+        });
+      }).catch(function () {});
+    } catch (e) { return Promise.resolve(); }
+  }
+  window.aikmSignOut = function () { Promise.resolve(audit("signout")).then(function () { return Promise.all(auths.map(function (a) { return a.signOut(); })); }).then(function () { location.reload(); }); };
 
   function gate() {
     var draw = function () {

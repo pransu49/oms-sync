@@ -289,3 +289,9 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   prabhat786kushwah@gmail.com (same list in the Firestore rules). REST callers send `Authorization: Bearer` from `window.aikmIdToken(projectId)`
   (sale-autobill.js). Robots use firebase-admin -> not affected. The 3 Gmail complaints Apps Scripts (write `amazon_complaints` with the API key only) are NOT in use (owner 17 Nov 2026) ->
   the rules lock that collection too; they must sign in (or use a service account) before they are switched back on.
+- **Access log + 2-weekly review** (owner 17 Nov 2026, Amazon restricted-role control "audit logs, reviewed bi-weekly, kept 12 months"):
+  `aikm-auth.js` writes ONE record per page open / sign-in / sign-out to OMS `aikm_audit` {e, ev, p, t, ua} by REST (never touches the page's
+  Firestore set-up; skipped inside the AIKM_EMBED iframe). OMS rules: `aikm_audit` = create-only by staff with e == own email (no update/delete
+  from browsers), `aikm_auditReview` = read-only. `audit-review.js` (workflow `audit-review.yml`, 1st + 15th ~9:47 AM IST): 14-day summary
+  per account/page/device + GitHub robot runs + flags (night 11 PM-7 AM IST, new account/device, failed runs) -> Telegram + `aikm_auditReview/<date>`;
+  deletes `aikm_audit` older than 400 days. Firebase: ~1 write per page open (OMS project), ~1-3k reads per review.
