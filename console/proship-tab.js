@@ -574,7 +574,7 @@
       var g = (L.g != null ? L.g : 5) / 100, fee = L.fp != null ? L.fp : 2;
       /* owner 17 Nov 2026: GST is never paid in cash - input credit (purchase, Amazon fees, courier) is bigger than the GST on sales, so the GST on a sale is paid from credit that would otherwise sit idle -> it is NOT a cost per order. Costs are counted incl. their GST. Set back by GST_CASH=on (robot) / window.AIKM_GST_CASH=true (console) if cash GST starts being paid. */
       var gc = window.AIKM_GST_CASH === true, gst = gc && g > 0 ? (price - L.c) * g / (1 + g) * q : 0, shipNet = num(o.shippingCharge) * q / (gc ? 1 + g : 1);
-      return { p: price * q + shipNet - L.c * q - fee * q - gst - 3, est: L.k * (1 + 0.25 * (q - 1)) };
+      return { p: price * q + shipNet - L.c * q - fee * q - gst, /* Rs 3 return buffer removed (owner 17 Nov 2026) */ est: L.k * (1 + 0.25 * (q - 1)) };
     }
     /* Courier cost: the real ProShip freight of this shipment (proshipIndex r, saved at booking); not booked yet = the median
        ProShip freight of this account's recent shipments; no ProShip data yet = the robot's estimate. */

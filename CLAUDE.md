@@ -262,3 +262,5 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   on sales, so per-order profit does NOT deduct GST on the sale and counts every cost incl. its GST (purchase incl. GST, fees x1.18, courier
   as billed). Robot `gstOnMargin()` = 0 and buyer shipping counted 100% unless env `GST_CASH=on`; console (`proship-tab.js`, `loss-tab.js`,
   `order-fees.js`) the same unless `window.AIKM_GST_CASH = true`. Switch both back if the owner starts paying GST in cash.
+- **Return buffer OFF** (owner 17 Nov 2026, 'will add later'): the Rs 3 per order RTO buffer is removed from every profit (robot `RETURN_BUF = 0`,
+  proship-tab / loss-tab / order-fees). Amazon page Orders courier = ProShip charge of the order, else account's ProShip average, else Rs 40/kg.

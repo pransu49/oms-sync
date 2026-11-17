@@ -127,6 +127,19 @@
       var c = inv && inv.taxCode, t = typeof TAXCODE_RATE !== "undefined" && c in TAXCODE_RATE ? TAXCODE_RATE[c] : 5;
       return t / 100;
     }
+    /* Real courier cost (owner 17 Nov 2026 "actual correct profit"): ProShip's charge for this order (aikm_admin/proshipIndex r),
+       else the average ProShip charge of this account (5+ shipments), else the Rs 40/kg estimate. 1 read per page open. */
+    var PIX = null, PIXload = false;
+    function loadPix() { if (PIXload || typeof fbDb === "undefined") return; PIXload = true;
+      fbDb.collection("aikm_admin").doc("proshipIndex").get().then(function (d) { try { PIX = JSON.parse((d.exists && d.data().data) || "{}"); } catch (e) { PIX = {}; }
+        try { spDirty.orders = true; spRender(); } catch (e) {} }).catch(function () { PIX = {}; }); }
+    function proshipFreight(id) {
+      loadPix(); if (!PIX) return null; var v = PIX[id];
+      if (v && v.r > 0 && v.s !== "cancelled") return { v: +v.r, src: "courier (ProShip charge)" };
+      var acct = typeof spapiCurrentAccount !== "undefined" ? String(spapiCurrentAccount) : "", l = [];
+      Object.keys(PIX).forEach(function (k) { var x = PIX[k]; if (x && x.r > 0 && x.s !== "cancelled" && String(x.ac || "").toLowerCase().replace(/[^a-z]/g, "").indexOf(acct.replace(/[^a-z]/g, "").slice(0, 5)) === 0) l.push(+x.r); });
+      return l.length >= 5 ? { v: Math.round(l.reduce(function (a, b) { return a + b; }, 0) / l.length * 100) / 100, src: "courier (ProShip average, " + l.length + " shipments)" } : null;
+    }
     function courier(kg) { var n = Math.max(+kg || .5, .5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
     function net(e, r, x, f, est) {
       fixItems(e);
@@ -143,11 +156,12 @@
       var refund = f && f.refundAmt > 0 ? Math.min(f.refundAmt, total) : 0, keep = total > 0 ? (total - refund) / total : 1;
       var gstOut = (outGst + shipGst) * keep, gstIn = x.v.cost * g / (1 + g), gstPay = window.AIKM_GST_CASH === true ? Math.max(0, gstOut - gstIn) : 0; /* owner 17 Nov 2026: GST is never paid in cash - input credit (purchase, Amazon fees, courier) is bigger than the GST on sales, so the GST on a sale is paid from credit that would otherwise sit idle -> it is NOT a cost per order. Costs are counted incl. their GST. Set back by GST_CASH=on (robot) / window.AIKM_GST_CASH=true (console) if cash GST starts being paid. */
       var ref = f ? f.ref : est.ref, close = f ? f.close : est.close, other = f ? (f.other || 0) : 0;
-      var cour = e.isEasyShip ? (f && f.ship ? f.ship : (est.ship || 55)) : courier(kg), courSrc = e.isEasyShip ? (f && f.ship ? "Amazon Easy Ship fee" : "Easy Ship fee (estimate)") : "courier (estimate ₹40/kg)";
+      var pf = e.isEasyShip ? null : proshipFreight(e.orderId);
+      var cour = e.isEasyShip ? (f && f.ship ? f.ship : (est.ship || 55)) : (pf ? pf.v : courier(kg)), courSrc = e.isEasyShip ? (f && f.ship ? "Amazon Easy Ship fee" : "Easy Ship fee (estimate)") : (pf ? pf.src : "courier (estimate ₹40/kg)");
       /* GST on Amazon's fees (owner 13 Nov 2026: "we don't claim" it back) = a real cost. Amazon's real fee amounts (Finance API)
          already include it (closing fee ₹20 shows as ₹23.60), so 18% is added only to ESTIMATED Amazon fees. */
       var estAmz = (f ? 0 : ref + close) + (e.isEasyShip && !(f && f.ship) ? cour : 0), feeGst = Math.round(estAmz * 0.18 * 100) / 100;
-      var value = total - refund - gstPay - x.v.cost - ref - close - other - (f && !e.isEasyShip ? (f.ship || 0) : 0) - cour - feeGst - 3;
+      var value = total - refund - gstPay - x.v.cost - ref - close - other - (f && !e.isEasyShip ? (f.ship || 0) : 0) - cour - feeGst; /* return buffer (Rs 3 per order for RTO) REMOVED by owner 17 Nov 2026 - 'will add later': set RETURN_BUF back to 3 */
       var L = [["Order total (incl. GST & shipping)", total]];
       if (refund) L.push(["Refunded to buyer", -refund]);
       L.push([window.AIKM_GST_CASH === true ? "GST payable (₹" + gstOut.toFixed(2) + " collected − ₹" + gstIn.toFixed(2) + " paid on purchase)" : "GST ₹" + gstOut.toFixed(2) + " · paid from GST credit, no cash", -gstPay],
@@ -156,7 +170,6 @@
       if (f && !e.isEasyShip && f.ship) L.push(["Amazon shipping fees", -f.ship]);
       L.push([courSrc.charAt(0).toUpperCase() + courSrc.slice(1), -cour]);
       if (feeGst) L.push(["GST 18% on Amazon fees (not claimed)", -feeGst]);
-      L.push(["Return buffer", -3]);
       x.v.ship = cour;   /* Shipping column = the courier cost used here */
       return { value: Math.round(value * 100) / 100, lines: L, real: !!f, refunded: !!(f && f.refunded) };
     }

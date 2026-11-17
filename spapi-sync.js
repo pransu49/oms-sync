@@ -1375,10 +1375,11 @@ function selfShipClosing(p) { return p <= 250 ? 20 : p <= 500 ? 26 : p <= 1000 ?
 // is on the margin only = rate/(1+rate) x (price - cost). The 85% on the shipping charge already leaves out its GST.
 function gstRate(i) { const r = TAX_CODE_RATE[i.taxCode]; return r != null ? r : (Number(i.taxPercent) > 0 ? Number(i.taxPercent) : 5); }
 // owner 17 Nov 2026: GST is never paid in cash - input credit (purchase, Amazon fees, courier) is bigger than the GST on sales, so the GST on a sale is paid from credit that would otherwise sit idle -> it is NOT a cost per order. Costs are counted incl. their GST. Set back by GST_CASH=on (robot) / window.AIKM_GST_CASH=true (console) if cash GST starts being paid.
+const RETURN_BUF = 0; /* return buffer (Rs 3 per order for RTO) REMOVED by owner 17 Nov 2026 - 'will add later': set RETURN_BUF back to 3 */
 const GST_CASH = String(process.env.GST_CASH || '').toLowerCase() === 'on';
 function gstOnMargin(i, cost, price) { if (!GST_CASH) return 0; const r = gstRate(i) / 100; return r > 0 ? (price - cost) * r / (1 + r) : 0; }
 function orderProfit(i, cost, price, ship = myShipCharge(i)) {
-  return Math.round((price + (GST_CASH ? 0.85 : 1) * (ship || 0) - cost - shipCostFor(i) - feeFor(i, price) - gstOnMargin(i, cost, price) - 3) * 100) / 100;
+  return Math.round((price + (GST_CASH ? 0.85 : 1) * (ship || 0) - cost - shipCostFor(i) - feeFor(i, price) - gstOnMargin(i, cost, price) - RETURN_BUF) * 100) / 100;
 }
 async function loadFees() {
   try { const d = await dbMain.collection('aikm_admin').doc(`spapiFees_${ACCOUNT_LABEL}`).get(); FEES = (d.exists && d.data().fees) || {}; }

@@ -46,7 +46,7 @@
     var courier = L.k * (1 + 0.25 * (q - 1));
     /* owner 17 Nov 2026: GST is never paid in cash - input credit (purchase, Amazon fees, courier) is bigger than the GST on sales, so the GST on a sale is paid from credit that would otherwise sit idle -> it is NOT a cost per order. Costs are counted incl. their GST. Set back by GST_CASH=on (robot) / window.AIKM_GST_CASH=true (console) if cash GST starts being paid. */
     var gc = window.AIKM_GST_CASH === true, gst = gc && g > 0 ? (price - L.c) * g / (1 + g) * q : 0;
-    return Math.round(price * q + (gc ? 0.85 : 1) * num(o.shippingCharge) - L.c * q - courier - fee * q - gst - 3);
+    return Math.round(price * q + (gc ? 0.85 : 1) * num(o.shippingCharge) - L.c * q - courier - fee * q - gst); /* return buffer (Rs 3 per order for RTO) REMOVED by owner 17 Nov 2026 - 'will add later': set RETURN_BUF back to 3 */
   }
   function isLoss(o) { return typeof isOmsOrderLoss === "function" ? isOmsOrderLoss(o) : (!/cancel/i.test(o.status || "") && num(o.profit) < 20); }
   function toast(msg, bad) {
