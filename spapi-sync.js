@@ -1361,9 +1361,16 @@ function feeFor(i, price) {
   const f = FEES[i.sku];
   const slab = (x) => (x <= 300 ? 0 : x <= 500 ? 1 : x <= 1000 ? 2 : 3);
   const ref = f && f.r != null ? price * f.r / 100 : (price > 1000 ? price * (REF_FEE[i.amazonProductType] || REF_FEE.DEFAULT) / 100 : 0);
-  const close = f && f.c != null && slab(f.p) === slab(price) ? f.c : closingFee(price);
-  return ref + close;
+  // Fix 17 Nov 2026 (owner, order 408-3117078-5273165: tool said profit, OMS said less): Amazon's fee ESTIMATE returns closing fee 0
+  // for every self-ship SKU up to Rs 300, but the Finance API shows Amazon really charges Rs 20 + 18% GST (Rs 23.60) on them.
+  // So the estimate's closing fee is used only when it is above the real rate card; and GST on Amazon fees is counted
+  // (owner 13 Nov 2026: that GST is NOT claimed back - a real cost).
+  const card = SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? selfShipClosing(price) : closingFee(price);
+  const est = f && f.c != null && slab(f.p) === slab(price) ? f.c : 0;
+  return (ref + Math.max(est, card)) * 1.18;
 }
+// Self-ship (MFN, not Easy Ship) closing fee per unit - matches what Amazon charges in the Finance API (before GST).
+function selfShipClosing(p) { return p <= 250 ? 20 : p <= 500 ? 26 : p <= 1000 ? 51 : 61; }
 // GST (owner, 21 Oct 2026): the selling price includes GST; with input credit on the purchase, the GST we pay
 // is on the margin only = rate/(1+rate) x (price - cost). The 85% on the shipping charge already leaves out its GST.
 function gstRate(i) { const r = TAX_CODE_RATE[i.taxCode]; return r != null ? r : (Number(i.taxPercent) > 0 ? Number(i.taxPercent) : 5); }

@@ -253,3 +253,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   NimbusPost / Zippy pills, panels and the "Upload NimbusPost export" button are hidden by CSS in `console/proship-tab.js` (`aikm-ship-off-css`).
   Their code is still loaded (weight settings are shared) and `nimbus-labels.yml` stays — it is the label robot for ProShip too.
   Owner's choice: orders ProShip can't serve (pincode not served) and non-Amazon orders are shipped by hand outside the console.
+
+- **Amazon fees in profit** (owner 17 Nov 2026, order 408-3117078-5273165): Amazon's Product Fees ESTIMATE returns closing fee 0 for all
+  self-ship SKUs up to Rs 300, but the Finance API shows Rs 20 + 18% GST (Rs 23.60) is really charged. `feeFor()` in `spapi-sync.js`
+  uses the higher of the estimate and the rate card (Sasta Store = `selfShipClosing()`: 20 / 26 / 51 / 61; others `closingFee()`),
+  x 1.18 for GST on Amazon fees (not claimed back). Feeds the price robot, listingIndex `fp` and the Self-Ship profit. Don't go back to the raw estimate.
