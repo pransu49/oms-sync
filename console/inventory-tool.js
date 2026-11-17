@@ -90,6 +90,9 @@
         var c = r[ACC.length]; CTL = (c && c.exists && c.data()) || {}; CTL.own = CTL.own || {}; CTL.live = CTL.live || {};
         Object.keys(CTL.own).forEach(function (k) { if (!KEYS[k]) KEYS[k] = { gn: null, s62: null, own: +CTL.own[k].q || 0, pd: 0 }; else KEYS[k].own = +CTL.own[k].q || 0; });
         loaded = true; drawAcc(); draw();
+        /* the LOTS price list (stock of every LOTS product) loads a few seconds after this screen - draw again once it is in */
+        var tries = 0, wait = setInterval(function () { var n = typeof lotsPriceByCode !== "undefined" ? Object.keys(lotsPriceByCode).length : 0;
+          if (n > 500 || ++tries > 60) { clearInterval(wait); if (n > 500) draw(); } }, 1000);
       });
   }
   function nameOf(k) {
