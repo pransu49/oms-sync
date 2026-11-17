@@ -15,7 +15,7 @@
   var nf = function (v) { return v == null || v === "" ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }); };
   var ago = function (t) { if (!t) return "never"; var m = Math.round((Date.now() - t) / 6e4); return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 2880 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago"; };
   var toast = function (m, bad) { if (typeof spToast === "function") spToast(m, bad); };
-  var PLAN = {}, CTL = { own: {}, live: {} }, KEYS = {}, filt = "all", q = "", page = 0, loaded = false;
+  var PLAN = {}, CTL = { own: {}, live: {} }, KEYS = {}, filt = "all", src = "lots", q = "", page = 0, loaded = false;
 
   /* ---------- layout: hide the Amazon screen, show ours ---------- */
   var st = document.createElement("style"); st.id = "invCss";
@@ -45,6 +45,7 @@
     ".iv-own-in.dirty{border-color:#C9A24B;background:#FFFBEF}" +
     ".iv-ch{display:inline-flex;align-items:center;gap:5px;font-size:11px;border:1px solid var(--line,#E7E1D3);border-radius:7px;padding:3px 7px;margin:2px 4px 2px 0;white-space:nowrap;background:#fff}" +
     ".iv-ch b{font-variant-numeric:tabular-nums}.iv-ch.diff{border-color:#EBC27A;background:#FBF1DF}.iv-ch.fail{border-color:#F3B8B1;background:#FCECEA}" +
+    ".iv-seg{display:inline-flex;background:#EBE6DA;border-radius:10px;padding:3px;gap:2px}.iv-sg{all:unset;cursor:pointer;padding:7px 12px;border-radius:8px;font-size:12px;font-weight:500;color:var(--ink-2,#4A5468);white-space:nowrap}.iv-sg.on{background:#fff;color:var(--ink,#14213D);font-weight:600;box-shadow:0 1px 3px rgba(15,30,53,.1)}" +
     ".iv-sub{font-size:11px;color:var(--muted,#8B909B);margin-top:2px}.iv-empty{padding:50px 20px;text-align:center;color:var(--muted,#8B909B)}" +
     ".iv-more{text-align:center;padding:14px}.iv-scroll{overflow:auto;max-height:calc(100vh - 360px);min-height:240px}" +
     "@media(max-width:1100px){.iv-acc{grid-template-columns:repeat(2,1fr)}.iv-k{grid-template-columns:repeat(3,1fr)}}";
@@ -55,11 +56,12 @@
 
   function shell() {
     var main = $("tab-spapi"); if (!main || $("invApp")) return !!$("invApp");
-    main.insertAdjacentHTML("afterbegin", '<div id="invApp"><div class="iv-hd"><div><h2>Central Inventory</h2><p>One stock for every product: <b>LOTS-GN</b> (+ <b>LOTS-62</b> for Sasta Store) + <b>your own stock</b> − <b>pending orders</b> of all 4 Amazon accounts. Every listing gets the same full stock; under 10 free → out of stock. Updates with every Amazon sync (about 15 min).</p></div><span class="sp"></span><button type="button" class="iv-btn" id="ivReload"><i class="ti ti-refresh"></i>Refresh</button></div>' +
+    main.insertAdjacentHTML("afterbegin", '<div id="invApp"><div class="iv-hd"><div><h2>Central Inventory</h2><div class=\"iv-sub\" style=\"margin-top:2px\">Final stock for every Amazon listing - replaces OMS Guru inventory</div><p>One stock for every product: <b>LOTS-GN</b> (+ <b>LOTS-62</b> for Sasta Store) + <b>your own stock</b> − <b>pending orders</b> of all 4 Amazon accounts. Every listing gets the same full stock; under 10 free → out of stock. Updates with every Amazon sync (about 15 min).</p></div><span class="sp"></span><button type="button" class="iv-btn" id="ivReload"><i class="ti ti-refresh"></i>Refresh</button></div>' +
       '<div class="iv-acc" id="ivAcc"></div><div class="ap-card" id="ivCard"><div class="iv-empty">Loading stock…</div></div></div>');
     $("ivReload").onclick = function () { load(true); };
     $("ivAcc").addEventListener("click", function (e) { var b = e.target.closest("[data-sw]"); if (b) switchAcc(b.dataset.sw, b.dataset.to === "1"); });
     $("ivCard").addEventListener("click", function (e) {
+      var sg = e.target.closest("[data-src]"); if (sg) { src = sg.dataset.src; if (filt === "unl") filt = "all"; page = 0; draw(); return; }
       var tl = e.target.closest("[data-f]"); if (tl) { filt = tl.dataset.f; page = 0; draw(); return; }
       if (e.target.closest("[data-more]")) { page++; draw(); return; }
       var sv = e.target.closest("[data-save]"); if (sv) { saveOwn(); return; }
@@ -143,18 +145,28 @@
   function tile(key, label, col, n, sub) { return '<button type="button" class="iv-t' + (filt === key ? " on" : "") + '" data-f="' + key + '"><div class="l"><span class="d" style="background:' + col + '"></span>' + label + '</div><div class="n">' + nf(n) + '</div><div class="s">' + sub + "</div></button>"; }
   function draw() {
     var card = $("ivCard"); if (!card || !loaded) return;
-    var M = byKey(), keys = Object.keys(KEYS).filter(function (k) { return M[k] || (CTL.own[k] && +CTL.own[k].q > 0); });
+    var M = byKey();
+    /* owner 17 Nov 2026: show the LOTS stock of EVERY product mapped to LOTS (also ones with no live listing on these accounts) */
+    var LP = typeof lotsPriceByCode !== "undefined" ? lotsPriceByCode : {}, AM = typeof STORE !== "undefined" && STORE.asinLotsMap ? STORE.asinLotsMap : {};
+    Object.keys(AM).forEach(function (asin) { var m = AM[asin]; if (!m || (m.vendorName && String(m.vendorName).toUpperCase() !== "LOTS")) return;
+      (Array.isArray(m.parts) && m.parts.length ? m.parts : (m.code ? [{ code: m.code }] : [])).forEach(function (x) { var k = String(x.code || ""); if (!k || /^(BUNDLE|VENDOR):/.test(k)) return;
+        if (!KEYS[k]) KEYS[k] = { gn: null, s62: null, own: CTL.own[k] ? +CTL.own[k].q || 0 : 0, pd: 0, mappedOnly: true }; }); });
+    Object.keys(KEYS).forEach(function (k) { var K = KEYS[k]; if (K.gn == null && !/^A:/.test(k) && LP[k] && LP[k].qty != null && isFinite(parseFloat(LP[k].qty))) K.gn = parseFloat(LP[k].qty); });
+    var keys = Object.keys(KEYS).filter(function (k) { return M[k] || KEYS[k].mappedOnly || (CTL.own[k] && +CTL.own[k].q > 0); });
     var rows = keys.map(function (k) { var K = KEYS[k], L = M[k] || [], free = freeOf(K, true), freeGN = freeOf(K, false);
       return { k: k, K: K, L: L, name: nameOf(k), free: free, freeGN: freeGN, oos: freeGN < (/^A:/.test(k) ? 1 : 10), diff: L.some(function (x) { return x.st === "diff" || x.st === "fail"; }), own: (K.own || 0) > 0, pend: (K.pd || 0) > 0 }; });
     var unl = []; ACC.forEach(function (a) { var P = PLAN[a[0]]; if (P) P.rows.forEach(function (r) { if (r[5] === "unlinked" || r[5] === "nostock") unl.push({ acct: a[1], sku: r[0], asin: r[1], amz: r[4], why: r[5] }); }); });
+    var nL = rows.filter(function (r) { return !/^A:/.test(r.k); }).length, nV = rows.length - nL;
+    rows = rows.filter(function (r) { return src === "all" || (src === "lots") === !/^A:/.test(r.k); });
     var list = filt === "oos" ? rows.filter(function (r) { return r.oos; }) : filt === "in" ? rows.filter(function (r) { return !r.oos; }) : filt === "own" ? rows.filter(function (r) { return r.own; })
       : filt === "pend" ? rows.filter(function (r) { return r.pend; }) : filt === "diff" ? rows.filter(function (r) { return r.diff; }) : rows;
     if (q) list = list.filter(function (r) { return (r.name + " " + r.k + " " + r.L.map(function (x) { return x.sku + " " + x.asin; }).join(" ")).toLowerCase().indexOf(q) >= 0; });
     list.sort(function (a, b) { return (b.pend - a.pend) || (a.free - b.free); });
-    var head = '<div class="iv-k">' + tile("all", "All products", "#14213D", rows.length, "with Amazon listings") + tile("in", "In stock", "#1E7A4B", rows.filter(function (r) { return !r.oos; }).length, "10+ free") +
+    var head = '<div class="iv-k">' + tile("all", src === "vendor" ? "Vendor products" : src === "lots" ? "LOTS products" : "All products", "#14213D", rows.length, src === "lots" ? "mapped to LOTS" : "products") + tile("in", "In stock", "#1E7A4B", rows.filter(function (r) { return !r.oos; }).length, "10+ free") +
       tile("oos", "Out of stock", "#B42318", rows.filter(function (r) { return r.oos; }).length, "under 10 free") + tile("pend", "Pending orders", "#C9A24B", rows.filter(function (r) { return r.pend; }).length, "products blocked") +
       tile("own", "Own stock", "#1F4E8C", rows.filter(function (r) { return r.own; }).length, "products in your godown") + tile("diff", "Amazon differs", "#A86A12", rows.filter(function (r) { return r.diff; }).length, "fixed at next push") + "</div>";
-    var tools = '<div class="iv-tools"><input type="text" id="ivQ" placeholder="Search product, LOTS code, SKU or ASIN…" value="' + esc(q) + '"><button type="button" class="iv-btn pri" id="ivSave" data-save style="display:none"></button>' +
+    var seg = function (v, l, n) { return '<button type="button" class="iv-sg' + (src === v ? " on" : "") + '" data-src="' + v + '">' + l + (n != null ? " · " + nf(n) : "") + "</button>"; };
+    var tools = '<div class="iv-tools"><span class="iv-seg">' + seg("lots", "LOTS products", nL) + seg("vendor", "Vendor products", nV) + seg("all", "All") + '</span><input type="text" id="ivQ" placeholder="Search product, LOTS code, SKU or ASIN…" value="' + esc(q) + '"><button type="button" class="iv-btn pri" id="ivSave" data-save style="display:none"></button>' +
       '<button type="button" class="iv-btn" data-f="unl"><i class="ti ti-link-off"></i>Not linked · ' + nf(unl.length) + '</button><span style="margin-left:auto;font-size:12px;color:var(--muted,#8B909B)">' + nf(filt === "unl" ? unl.length : list.length) + (filt === "unl" ? " listings" : " products") + "</span></div>";
     var body;
     if (filt === "unl") {
@@ -165,7 +177,7 @@
         (unl.length > shownU.length ? '<div class="iv-more"><button type="button" class="iv-btn" data-more>Show 100 more · ' + (unl.length - shownU.length) + " left</button></div>" : "") + "</div>";
     } else {
       var shown = list.slice(0, 100 * (page + 1));
-      body = '<div class="iv-scroll"><table class="iv-tbl"><thead><tr><th>Product</th><th class="r">LOTS-GN</th><th class="r">LOTS-62</th><th class="r">Own stock</th><th class="r">Pending</th><th class="r">Free</th><th>Amazon listings · stock we set (Amazon now)</th></tr></thead><tbody>' +
+      body = '<div class="iv-scroll"><table class="iv-tbl"><thead><tr><th>Product</th><th class="r">LOTS-GN</th><th class="r">LOTS-62</th><th class="r">Own stock</th><th class="r">Pending</th><th class="r" title="What every Amazon listing of this product gets (under 10 = out of stock)">Final stock</th><th>Amazon listings · stock we set (Amazon now)</th></tr></thead><tbody>' +
         shown.map(function (r) { var K = r.K, vend = /^A:/.test(r.k);
           var ch = r.L.map(function (x) { var t = x.target == null ? "—" : nf(x.target); return '<span class="iv-ch ' + (x.st === "diff" ? "diff" : x.st === "fail" ? "fail" : "") + '" title="' + esc(x.sku) + (x.need !== 1 ? " · uses " + x.need + " per listing" : "") + (x.combo ? " · combo" : "") + '">' + esc(x.an) + " <b>" + t + "</b>" + (x.target != null && x.amz !== x.target ? ' <span style="color:#8B909B">(' + nf(x.amz) + ")</span>" : "") + "</span>"; }).join("");
           return '<tr><td><div style="font-weight:500;max-width:340px;line-height:1.35">' + esc(r.name) + '</div><div class="iv-sub">' + (vend ? "Vendor product · ASIN " + esc(r.k.slice(2)) : "LOTS code " + esc(r.k)) + "</div></td>" +
@@ -173,7 +185,7 @@
             '<td class="r"><input class="iv-own-in" type="number" min="0" step="1" data-k="' + esc(r.k) + '" data-v="' + (K.own || 0) + '" value="' + (K.own || 0) + '"></td>' +
             '<td class="r">' + (K.pd ? '<span style="color:#A86A12;font-weight:600">' + nf(K.pd) + "</span>" : "0") + "</td>" +
             '<td class="r"><span class="iv-q ' + (r.oos ? "bad" : "ok") + '">' + nf(Math.max(0, Math.floor(r.freeGN))) + "</span>" + (r.free !== r.freeGN ? '<div class="iv-sub">Sasta ' + nf(Math.max(0, Math.floor(r.free))) + "</div>" : "") + "</td>" +
-            "<td>" + (ch || '<span class="iv-sub">No Amazon listing linked yet</span>') + "</td></tr>"; }).join("") + "</tbody></table>" +
+            "<td>" + (ch || '<span class="iv-sub">' + (K.mappedOnly ? "Mapped to LOTS · no live listing on these accounts" : "No Amazon listing linked yet") + "</span>") + "</td></tr>"; }).join("") + "</tbody></table>" +
         (list.length ? "" : '<div class="iv-empty">Nothing here.</div>') + (list.length > shown.length ? '<div class="iv-more"><button type="button" class="iv-btn" data-more>Show 100 more · ' + (list.length - shown.length) + " left</button></div>" : "") + "</div>";
     }
     var focus = document.activeElement && document.activeElement.id === "ivQ";
