@@ -1,0 +1,32 @@
+name: Test database - refresh practice data
+
+# Copies the live databases into the TEST project aikm-test with every buyer detail replaced by fake values.
+# Run by hand when the test screens look out of date. Live data is only read (~1-4k reads per run).
+on:
+  workflow_dispatch:
+    inputs:
+      max_docs:
+        description: 'max documents copied per collection'
+        default: '300'
+
+concurrency:
+  group: test-seed
+  cancel-in-progress: false
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node test-seed.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          FIREBASE_SERVICE_ACCOUNT_TEST: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_TEST }}
+          MAX_DOCS: ${{ inputs.max_docs }}

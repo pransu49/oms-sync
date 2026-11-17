@@ -7,25 +7,40 @@
         firebase.initializeApp(<same project>, "anyName") return that same app - so one sign-in covers every tab/tool.
      2. It waits for the saved sign-in. Not signed in (or not an allowed account) -> a full-screen "Sign in with Google" card.
      3. Google sign-in per project (one click each, popups must come from a click); the first token is tried on the others first.
-   Allowed accounts: ALLOWED below (must match the Firestore rules). Robots use server keys (firebase-admin) and are not affected.
+   Allowed accounts: only the staff() list in each project's Firestore rules. Robots use server keys (firebase-admin) and are not affected.
    window.aikmIdToken(projectId) -> Promise<ID token> for REST calls (sale-autobill.js). */
 (function () {
   if (window.__aikmAuth) return; window.__aikmAuth = 1;
-  var ALLOWED = ["aikmpharma@gmail.com", "prabhat786kushwah@gmail.com"];
+  /* Who may sign in is decided ONLY by the Firestore rules of each project (staff() list there). After a Google sign-in the page asks
+     the database once (staffOk): "permission denied" = not staff -> signed out again with a message. */
   var CFG = {
     main: { apiKey: "AIzaSyDd_XzDHhHqKO9g9ff8k7O32Fs1GLNxhHU", authDomain: "aikm--order-file.firebaseapp.com", projectId: "aikm--order-file", storageBucket: "aikm--order-file.firebasestorage.app", messagingSenderId: "538377843484", appId: "1:538377843484:web:4cc7fe7b6856d8a3ef40d9" },
     spapi: { apiKey: "AIzaSyDuqBUp2zOAv58YHzdTvNO3RFdmv9yIEVQ", authDomain: "noworry-b7d56.firebaseapp.com", projectId: "noworry-b7d56", storageBucket: "noworry-b7d56.firebasestorage.app", messagingSenderId: "786227697874", appId: "1:786227697874:web:e9f8210d11e132a382750b" },
     oms: { apiKey: "AIzaSyCKvAQr48JeVTJzvwcCg0YBNf7SBdaCVsk", authDomain: "aikm-oms-sync.firebaseapp.com", projectId: "aikm-oms-sync", storageBucket: "aikm-oms-sync.firebasestorage.app", messagingSenderId: "464184383750", appId: "1:464184383750:web:4fb422b90e519a87d76687" }
   };
+  /* TEST MODE (owner 17 Nov 2026, Amazon control "separate test environment"): open any tool page with ?env=test -> every
+     database the page asks for (main / SP-API / OMS) is the practice project aikm-test (fake buyer data only), red bar at the bottom.
+     Stays on for that browser tab until ?env=live. Nothing in the live databases is read or changed in test mode. */
+  var TEST = { apiKey: "AIzaSyBxPXpFOgR71Q9hLCJCBf8HwauZQ87poXQ", authDomain: "aikm-test.firebaseapp.com", projectId: "aikm-test", storageBucket: "aikm-test.firebasestorage.app", messagingSenderId: "906008698306", appId: "1:906008698306:web:53acde73ece98d62168a5b" };
+  var IS_TEST = false;
+  try {
+    var qe = new URLSearchParams(location.search).get("env");
+    if (qe === "test") sessionStorage.setItem("aikmEnv", "test"); else if (qe === "live") sessionStorage.removeItem("aikmEnv");
+    IS_TEST = sessionStorage.getItem("aikmEnv") === "test" || (window.parent !== window && window.parent.AIKM_TEST === true);
+  } catch (e) {}
+  window.AIKM_TEST = IS_TEST;
   var fb = window.firebase;
   if (!fb || !fb.initializeApp || !fb.auth) { console.warn("AIKM sign-in: Firebase SDK (app + auth) not loaded before aikm-auth.js"); return; }
 
   /* ---- 1. one app per project; every later initializeApp for the same project returns it ---- */
   var origInit = fb.initializeApp.bind(fb), origApp = fb.app.bind(fb), canon = {}, alias = {};
   function mk(cfg, name) { try { return name ? origApp(name) : origApp(); } catch (e) { return origInit(cfg, name); } }
-  canon[CFG.main.projectId] = mk(CFG.main);                 // [DEFAULT] = main (pages call firebase.firestore())
-  canon[CFG.spapi.projectId] = mk(CFG.spapi, "aikm_spapi");
-  canon[CFG.oms.projectId] = mk(CFG.oms, "aikm_oms");
+  canon[CFG.main.projectId] = mk(IS_TEST ? TEST : CFG.main);                 // [DEFAULT] = main (pages call firebase.firestore())
+  canon[CFG.spapi.projectId] = mk(IS_TEST ? TEST : CFG.spapi, "aikm_spapi");
+  canon[CFG.oms.projectId] = mk(IS_TEST ? TEST : CFG.oms, "aikm_oms");
+  if (IS_TEST) canon[TEST.projectId] = canon[CFG.main.projectId];
+  /* project id to use in REST URLs (sale-autobill etc.): the test project in test mode */
+  window.aikmProject = function (projectId) { return IS_TEST && canon[projectId] ? TEST.projectId : projectId; };
   fb.initializeApp = function (cfg, name) {
     var c = cfg && canon[cfg.projectId];
     if (c) { if (typeof name === "string" && name) alias[name] = c; return c; }
@@ -40,7 +55,13 @@
     var u = a.auth().currentUser; return u ? u.getIdToken() : firstState(a.auth()).then(function (x) { return x ? x.getIdToken() : null; });
   };
   function firstState(au) { return new Promise(function (ok) { var off = au.onAuthStateChanged(function (u) { off(); ok(u); }); }); }
-  var okUser = function (u) { return !!(u && u.email && u.emailVerified !== false && ALLOWED.indexOf(String(u.email).toLowerCase()) >= 0); };
+  var okUser = function (u) { return !!(u && u.email && u.emailVerified !== false); };
+  /* 403 = the rules do not list this account; 404/200 = staff (the test document does not need to exist) */
+  function staffOk(u, projectId) {
+    return u.getIdToken().then(function (t) {
+      return fetch("https://firestore.googleapis.com/v1/projects/" + projectId + "/databases/(default)/documents/aikm_admin/__staffcheck", { headers: { Authorization: "Bearer " + t } });
+    }).then(function (r) { return r.status !== 403 && r.status !== 401; }).catch(function () { return true; });
+  }
 
   /* ---- 2. check the saved sign-in of all 3 projects ---- */
   var NAMES = ["Main data", "Amazon data", "Order data"];
@@ -65,7 +86,8 @@
     p.setCustomParameters(hint ? { login_hint: hint.email } : { prompt: "select_account" });
     btn.disabled = true; msg.textContent = "Opening Google sign-in…";
     au.signInWithPopup(p).then(async function (res) {
-      if (!okUser(res.user)) { var e0 = res.user && res.user.email; await au.signOut(); throw new Error((e0 || "This account") + " is not allowed to open AIKM tools."); }
+      var allowed = okUser(res.user) && await staffOk(res.user, au.app.options.projectId);
+      if (!allowed) { var e0 = res.user && res.user.email; await au.signOut(); throw new Error((e0 || "This account") + " is not allowed to open AIKM tools."); }
       var tok = res.credential && res.credential.accessToken;
       if (tok) await Promise.all(missing().map(function (i) {
         return auths[i].signInWithCredential(fb.auth.GoogleAuthProvider.credential(null, tok)).catch(function () {});
@@ -84,12 +106,22 @@
       var u = auths[2].currentUser; if (!u) return Promise.resolve();
       return u.getIdToken().then(function (t) {
         var S = function (v) { return { stringValue: String(v || "").slice(0, 160) }; };
-        return fetch("https://firestore.googleapis.com/v1/projects/" + CFG.oms.projectId + "/databases/(default)/documents/aikm_audit", {
+        return fetch("https://firestore.googleapis.com/v1/projects/" + (IS_TEST ? TEST.projectId : CFG.oms.projectId) + "/databases/(default)/documents/aikm_audit", {
           method: "POST", headers: { Authorization: "Bearer " + t, "Content-Type": "application/json" }, keepalive: true,
           body: JSON.stringify({ fields: { e: S(u.email), ev: S(ev), p: S(location.pathname + location.search), t: { timestampValue: new Date().toISOString() }, ua: S(navigator.userAgent) } })
         });
       }).catch(function () {});
     } catch (e) { return Promise.resolve(); }
+  }
+  if (IS_TEST) {
+    var tb = function () {
+      if (document.getElementById("aikmTestBar") || !document.body) return;
+      var d = document.createElement("div"); d.id = "aikmTestBar";
+      d.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:2147483645;background:#B42318;color:#fff;font:600 13px Inter,system-ui,sans-serif;padding:7px 14px;display:flex;gap:12px;align-items:center;justify-content:center;box-shadow:0 -4px 14px rgba(0,0,0,.25)";
+      d.innerHTML = 'TEST MODE - practice database with fake data. Nothing here touches live orders or Amazon. <a href="?env=live" style="color:#fff;background:rgba(255,255,255,.18);padding:3px 10px;border-radius:6px;text-decoration:none">Back to live</a>';
+      document.body.appendChild(d);
+    };
+    if (document.body) tb(); else document.addEventListener("DOMContentLoaded", tb);
   }
   window.aikmSignOut = function () { Promise.resolve(audit("signout")).then(function () { return Promise.all(auths.map(function (a) { return a.signOut(); })); }).then(function () { location.reload(); }); };
 

@@ -279,7 +279,14 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - **Security controls for Amazon restricted role** (owner 17 Nov 2026, first application REJECTED for: no test environment, no 30-day scans +
   yearly pen test, no audit logs with 2-weekly review / 12-month retention). Owner does NOT want OMS Guru -> re-apply once all 3 are real:
   `security-scan.yml` (monthly OWASP ZAP baseline of the tool pages, findings -> GitHub issue; fix critical 7 d / high 30 d) + `codeql.yml` (weekly).
-  DONE: access log + 2-weekly review (see below). Still to build: test Firebase project + staging workflows; yearly in-house pen test report.
+  DONE: access log + 2-weekly review (see below); TEST ENVIRONMENT (17 Nov 2026): Firebase project `aikm-test` (Spark, free, asia-south1,
+  same staff rules, Google sign-in, dalbhaat.in authorised). Any tool page + `?env=test` -> the sign-in script maps ALL 3 live projects to
+  aikm-test (red bar at the bottom, stays per browser tab until `?env=live`; `window.aikmProject(id)` gives the project for REST URLs).
+  Practice data: `test-seed.js` (workflow "Test database - refresh practice data", by hand) copies the live collections (max 300 docs each,
+  skips complaints/labels/audit/attendance/history) with every buyer field replaced by fake values; refuses to run if the TEST key is not aikm-test.
+  Secret `FIREBASE_SERVICE_ACCOUNT_TEST`. `staging-check.yml` = syntax check of every script on every push/PR.
+  The sign-in script no longer lists staff emails: who may sign in = the Firestore rules only (staffOk() asks the database once after sign-in).
+  Still to build: yearly in-house pen test report.
   Until approved, OMS Guru Order Sync must stay ON (only source of buyer addresses).
 - **Sign-in gate** (owner 17 Nov 2026 — all 3 Firestore DBs were `allow read, write: if true`): `console/aikm-auth.js`, loaded on EVERY tool page
   right after the Firebase SDK tags (app + firestore + **auth** compat 10.12.2), before page scripts, pinned by COMMIT SHA (`@1b6fac2…`, tag pushes fail; change the SHA in the

@@ -160,7 +160,7 @@
   }
   /* Signed-in staff token (console/aikm-auth.js, owner 17 Nov 2026): the databases only answer signed-in staff once the rules are locked. */
   const fsHdr = async (db) => { try { const t = window.aikmIdToken ? await window.aikmIdToken(FS[db].p) : null; return t ? { headers: { Authorization: "Bearer " + t } } : {}; } catch (e) { return {}; } };
-  const fsBase = (db, path) => `https://firestore.googleapis.com/v1/projects/${FS[db].p}/databases/(default)/documents/${path}`;
+  const fsBase = (db, path) => `https://firestore.googleapis.com/v1/projects/${(window.aikmProject ? window.aikmProject(FS[db].p) : FS[db].p)}/databases/(default)/documents/${path}`;
   async function fsDoc(db, path) {
     const r = await fetch(fsBase(db, path) + "?key=" + FS[db].k, await fsHdr(db));
     if (r.status === 404) return null;

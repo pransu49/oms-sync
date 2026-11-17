@@ -1,0 +1,30 @@
+name: Staging check (every change)
+
+# Every push / pull request: all robot + console scripts must load without errors before they reach live robots
+# (jsDelivr serves console/* from main). Practice screens: any tool page with ?env=test uses the test database aikm-test.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax check every script
+        shell: bash
+        run: |
+          fail=0
+          for f in *.js console/*.js tools/*.js; do
+            [ -f "$f" ] || continue
+            node --check "$f" || { echo "::error file=$f::syntax error"; fail=1; }
+          done
+          python3 -m py_compile *.py || fail=1
+          exit $fail
