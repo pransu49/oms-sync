@@ -279,7 +279,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - **Security controls for Amazon restricted role** (owner 17 Nov 2026, first application REJECTED for: no test environment, no 30-day scans +
   yearly pen test, no audit logs with 2-weekly review / 12-month retention). Owner does NOT want OMS Guru -> re-apply once all 3 are real:
   `security-scan.yml` (monthly OWASP ZAP baseline of the tool pages, findings -> GitHub issue; fix critical 7 d / high 30 d) + `codeql.yml` (weekly).
-  Still to build: test Firebase project + staging workflows; Cloud audit logs (12-month bucket) + 2-weekly Telegram review; yearly in-house pen test report.
+  DONE: access log + 2-weekly review (see below). Still to build: test Firebase project + staging workflows; yearly in-house pen test report.
   Until approved, OMS Guru Order Sync must stay ON (only source of buyer addresses).
 - **Sign-in gate** (owner 17 Nov 2026 — all 3 Firestore DBs were `allow read, write: if true`): `console/aikm-auth.js`, loaded on EVERY tool page
   right after the Firebase SDK tags (app + firestore + **auth** compat 10.12.2), before page scripts, pinned by COMMIT SHA (`@1b6fac2…`, tag pushes fail; change the SHA in the
