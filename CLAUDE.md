@@ -282,9 +282,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Still to build: test Firebase project + staging workflows; Cloud audit logs (12-month bucket) + 2-weekly Telegram review; yearly in-house pen test report.
   Until approved, OMS Guru Order Sync must stay ON (only source of buyer addresses).
 - **Sign-in gate** (owner 17 Nov 2026 — all 3 Firestore DBs were `allow read, write: if true`): `console/aikm-auth.js`, loaded on EVERY tool page
-  right after the Firebase SDK tags (app + firestore + **auth** compat 10.12.2), before page scripts, from a pinned jsDelivr TAG (`@auth-vN`, bump the
-  tag + the Shopify lines when it changes). Creates one app per project (main = [DEFAULT], `aikm_spapi`, `aikm_oms`); every later
-  `firebase.initializeApp(<same project>, name)` returns that app, so ONE Google sign-in covers all tabs. Allowed: aikmpharma@gmail.com,
+  right after the Firebase SDK tags (app + firestore + **auth** compat 10.12.2), before page scripts, pinned by COMMIT SHA (`@3c9a68f…`, tag pushes fail; change the SHA in the
+  6 Shopify templates when the file changes: aikm, amazon, complaints, label, dalbhaat-admin-console, purchase-bills). Creates one app per project (main = [DEFAULT], `aikm_spapi`, `aikm_oms`); every later
+  `firebase.initializeApp(<same project>, name)` returns that app, so one sign-in covers all tabs (first time per browser: one Google click per project — popups opened together get cancelled;
+  safelisting the main client ID in the other projects failed in the Firebase console). Allowed: aikmpharma@gmail.com,
   prabhat786kushwah@gmail.com (same list in the Firestore rules). REST callers send `Authorization: Bearer` from `window.aikmIdToken(projectId)`
   (sale-autobill.js). Robots use firebase-admin -> not affected. NOT yet covered: the 3 Gmail complaints Apps Scripts write `amazon_complaints` with
   the API key only -> that collection stays open in the rules until they sign in.
