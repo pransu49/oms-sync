@@ -158,9 +158,11 @@
     if ("timestampValue" in v) return v.timestampValue;
     return null;
   }
+  /* Signed-in staff token (console/aikm-auth.js, owner 17 Nov 2026): the databases only answer signed-in staff once the rules are locked. */
+  const fsHdr = async (db) => { try { const t = window.aikmIdToken ? await window.aikmIdToken(FS[db].p) : null; return t ? { headers: { Authorization: "Bearer " + t } } : {}; } catch (e) { return {}; } };
   const fsBase = (db, path) => `https://firestore.googleapis.com/v1/projects/${FS[db].p}/databases/(default)/documents/${path}`;
   async function fsDoc(db, path) {
-    const r = await fetch(fsBase(db, path) + "?key=" + FS[db].k);
+    const r = await fetch(fsBase(db, path) + "?key=" + FS[db].k, await fsHdr(db));
     if (r.status === 404) return null;
     if (!r.ok) throw new Error("Could not read " + path + " (" + r.status + ")");
     const j = await r.json(); const o = {}; for (const k in (j.fields || {})) o[k] = fv(j.fields[k]); return o;
@@ -170,7 +172,7 @@
     for (let i = 0; i < 200; i++) {
       let r;
       for (let t = 0; t < 3; t++) {
-        try { r = await fetch(fsBase(db, path) + `?pageSize=${size}&key=${FS[db].k}` + (tok ? "&pageToken=" + encodeURIComponent(tok) : "")); if (r.ok) break; } catch (e) { r = null; }
+        try { r = await fetch(fsBase(db, path) + `?pageSize=${size}&key=${FS[db].k}` + (tok ? "&pageToken=" + encodeURIComponent(tok) : ""), await fsHdr(db)); if (r.ok) break; } catch (e) { r = null; }
         await new Promise(res => setTimeout(res, 1500 * (t + 1)));
       }
       if (!r) throw new Error("No connection while reading " + path);
