@@ -20,7 +20,8 @@ if (testApp.options.credential && JSON.parse(process.env.FIREBASE_SERVICE_ACCOUN
   console.error('FIREBASE_SERVICE_ACCOUNT_TEST is not the aikm-test project - stopping so live data is never overwritten.'); process.exit(1);
 }
 const MAX_DOCS = Number(process.env.MAX_DOCS || 300);
-const SKIP = /complaint|label|audit|attendance|deleted|history|relistlog/i;
+// also skipped: old per-item Amazon collections nothing reads any more (spapiOrders / spapiInventory / spapiCompetitivePricing)
+const SKIP = /complaint|label|audit|attendance|deleted|history|relistlog|^spapiOrders$|^spapiInventory$|^spapiCompetitivePricing$/i;
 const BUYER_KEYS = /^buyer(Name|Phone|Address1|Address2|Address|Email|Mobile)$|^(shipTo|shippingAddress|customerName|customerPhone)$/i;
 
 let scrubbed = 0;
@@ -48,24 +49,32 @@ function scrub(v, depth = 0) {
   return v;
 }
 
+// Big documents (snapshot chunks up to 1 MB): write 3 at a time with retries (bulkWriter timed out on them).
+async function put(ref, data) {
+  for (let i = 0; ; i++) {
+    try { return await ref.set(data); }
+    catch (e) { if (i >= 3) { console.log('write failed, skipped:', ref.path, e.code || e.message); fails++; return; } await new Promise(r => setTimeout(r, 2000 * (i + 1))); }
+  }
+}
+let fails = 0;
 async function copyCol(src, path, srcName, counts) {
   const snap = await src.collection(path).limit(MAX_DOCS).get();
-  let bw = test.bulkWriter();
-  for (const d of snap.docs) bw.set(test.collection(path).doc(d.id), scrub(d.data()));
-  await bw.close();
+  const docs = snap.docs.slice();
+  await Promise.all([0, 1, 2].map(async () => { for (let d; (d = docs.shift());) await put(test.collection(path).doc(d.id), scrub(d.data())); }));
   counts.push(`${srcName}:${path} ${snap.size}`);
+  console.log(`copied ${srcName}:${path} ${snap.size}`);
   return snap.docs;
 }
 
 (async () => {
-  const counts = [], seen = {};
+  const counts = [], seen = {}, dup = [];
   for (const [name, db] of Object.entries(live)) {           // OMS last: its aikm_admin documents win on the same id
     const cols = await db.listCollections();
     for (const c of cols) {
       if (SKIP.test(c.id)) { counts.push(`${name}:${c.id} skipped`); continue; }
       const docs = await copyCol(db, c.id, name, counts);
       for (const d of docs) {
-        const k = c.id + '/' + d.id; if (seen[k]) console.log('same document in two projects (later one kept):', k, seen[k], '->', name); seen[k] = name;
+        const k = c.id + '/' + d.id; if (seen[k]) dup.push(`${k} (${seen[k]} -> ${name})`); seen[k] = name;
         if (c.id !== 'aikm_admin') continue;
         for (const sub of await d.ref.listCollections()) {
           if (SKIP.test(sub.id)) continue;
@@ -76,5 +85,6 @@ async function copyCol(src, path, srcName, counts) {
   }
   await test.collection('aikm_admin').doc('testInfo').set({ seededAt: admin.firestore.FieldValue.serverTimestamp(), note: 'Practice data - buyer details are fake', maxDocs: MAX_DOCS });
   console.log(counts.join('\n'));
-  console.log(`done - buyer fields replaced with fake values: ${scrubbed}`);
+  if (dup.length) console.log(`same document in two projects (later one kept): ${dup.length}, e.g. ${dup.slice(0, 5).join(', ')}`);
+  console.log(`done - buyer fields replaced with fake values: ${scrubbed}, writes skipped after retries: ${fails}`);
 })().catch(e => { console.error('test-seed failed:', e); process.exit(1); });
