@@ -113,6 +113,42 @@
       }).catch(function () {});
     } catch (e) { return Promise.resolve(); }
   }
+  /* ---- 5. staff sign-in for our other services (security check 18 Nov 2026) ----
+     Supabase (Purchase & Sales database) and the 2 Google Apps Scripts (Robot Control, Purchase Bills photos/AI) used to trust a
+     fixed key written in the public page. Now every call to them also carries the signed-in staff's Google sign-in (main project):
+       - Supabase: Authorization: Bearer <sign-in>, ONLY once the account has the 'authenticated' role (set by tools/staff-claims.js),
+         so nothing changes before Supabase is switched to "staff only".
+       - Apps Script: GET -> &idt=<sign-in>, POST JSON -> body.idt; the scripts ask Firestore whether this sign-in is staff.
+     Test mode: not added (the test sign-in is not valid for these live services). */
+  var claimOk = null;
+  function mainToken() {
+    var u = auths[0].currentUser; if (!u || IS_TEST) return Promise.resolve({ t: null });
+    if (claimOk === true) return u.getIdToken().then(function (t) { return { t: t, role: true }; });
+    return u.getIdTokenResult(claimOk === null).then(function (r) {   // first call per page: fresh token, so a new role shows at once
+      claimOk = r.claims && r.claims.role === "authenticated";
+      return { t: r.token, role: claimOk };
+    });
+  }
+  var oFetch = window.fetch && window.fetch.bind(window);
+  if (oFetch) window.fetch = function (input, init) {
+    var url = typeof input === "string" ? input : "";
+    var sb = /^https:\/\/[a-z0-9]+\.supabase\.co\/(rest|storage)\/v1\//.test(url);
+    var gas = /^https:\/\/script\.google\.com\/macros\/s\//.test(url);
+    if (!sb && !gas) return oFetch(input, init);
+    return mainToken().catch(function () { return { t: null }; }).then(function (k) {
+      if (!k.t) return oFetch(input, init);
+      var o = {}; for (var x in (init || {})) o[x] = init[x];
+      if (sb) {
+        if (!k.role) return oFetch(input, init);
+        var h = new Headers(o.headers || {}); h.set("Authorization", "Bearer " + k.t); o.headers = h;
+        return oFetch(input, o);
+      }
+      if (!o.method || /^get$/i.test(o.method)) return oFetch(url + (url.indexOf("?") >= 0 ? "&" : "?") + "idt=" + encodeURIComponent(k.t), o);
+      if (typeof o.body === "string") { try { var b = JSON.parse(o.body); if (b && typeof b === "object" && !Array.isArray(b)) { b.idt = k.t; o.body = JSON.stringify(b); } } catch (e) {} }
+      return oFetch(input, o);
+    });
+  };
+
   if (IS_TEST) {
     var tb = function () {
       if (document.getElementById("aikmTestBar") || !document.body) return;

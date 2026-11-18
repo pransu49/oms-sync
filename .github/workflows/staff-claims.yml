@@ -1,0 +1,25 @@
+name: Staff access - Purchase & Sales database
+
+# Gives the staff Google accounts access to the Supabase Purchase & Sales database (role claim in the main Firebase project).
+# Run by hand; type the staff Google accounts separated by commas. Accounts not typed lose access.
+on:
+  workflow_dispatch:
+    inputs:
+      emails:
+        description: 'Staff Google accounts, separated by commas'
+        required: true
+
+jobs:
+  claims:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: node tools/staff-claims.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          STAFF_EMAILS: ${{ inputs.emails }}
