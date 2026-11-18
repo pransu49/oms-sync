@@ -591,8 +591,13 @@
     }
     function freightAvg() { freightMedian(""); return frAll; }
     function isSelfShipPending(o) {
-      return /amazon/i.test(o.channel || "") && phone10(o.buyerPhone).length >= 10 && !String(o.awb || "").trim() &&
-        /^(new|ready to ship|pending|confirmed)$/i.test(String(o.status || "").trim());
+      if (!/amazon/i.test(o.channel || "") || phone10(o.buyerPhone).length < 10 || String(o.awb || "").trim()) return false;
+      var st = String(o.status || "").trim();
+      if (/^(new|ready to ship|pending|confirmed)$/i.test(st)) return true;
+      /* owner 18 Nov 2026 ("these orders are not reflecting"): OMS shows "Shipped" but there is NO tracking number in OMS and
+         no ProShip shipment - nobody really shipped them. Show them (SLA up to 7 days back), not ticked, with a warning. */
+      if (/^shipped$/i.test(st) && !liveShip(nid(o.channelOrderId))) { var d = ymd(o.slaDate); return !!d && d >= ymd(new Date(Date.now() - 7 * 864e5)); }
+      return false;
     }
     function makeRow(id, live) {
       var o = live[0], items = {}, order = [];
@@ -632,6 +637,7 @@
       if (!o.buyerCity) missing.push("city");
       if (!o.buyerState) missing.push("state");
       if (missing.length) { r.state = "bad"; r.note = "Missing " + missing.join(", "); }
+      if (/^shipped$/i.test(String(o.status || "").trim())) { r.omsShipped = true; r.state = "check"; r.note = "OMS says Shipped, but no AWB \u2014 check, then tick to ship"; }
       return r;
     }
     function buildPool() {
@@ -714,7 +720,7 @@
       lastRows.forEach(function (r) {
         r.ship = liveShip(r.id);
         if (!r.touched) r.sel = r.state === "ok" && !inFile[r.id] && (!r.loss || profitOk(r));
-        if (r.state !== "ok" || r.ship) r.sel = false;
+        if ((r.state !== "ok" && !(r.omsShipped && r.touched)) || r.ship) r.sel = false;
       });
       render();
     }
@@ -794,7 +800,7 @@
           '<button type="button" class="ps-x" data-awb="' + esc(sh.a) + '" data-id="' + esc(r.id) + '">Cancel shipment</button></div>'
           : err ? '<div class="nb-muted nb-small" style="margin-top:5px;max-width:220px;white-space:normal;">' + esc(err) + "</div>" : "";
         return '<tr class="' + (r.sel || sh ? "" : "nb-row-out") + (r.loss && !sh ? " nb-row-loss" : "") + '">' +
-          '<td><input type="checkbox" class="ps-sel" data-i="' + i + '"' + (r.sel ? " checked" : "") + (ok && !sh ? "" : " disabled") + "></td>" +
+          '<td><input type="checkbox" class="ps-sel" data-i="' + i + '"' + (r.sel ? " checked" : "") + ((ok || r.omsShipped) && !sh ? "" : " disabled") + "></td>" +
           '<td><div class="ps-sla' + (r.sla && r.sla < todayYmd() ? " over" : "") + '">' + (r.sla ? esc(niceDay(r.sla)) : '<span class="nb-muted">\u2014</span>') + "</div>" +
             (r.sla && r.sla < todayYmd() ? '<div class="nb-small" style="color:var(--x-red);">Overdue</div>' : "") + "</td>" +
           '<td><div class="cx-awb">' + esc(r.id) + '</div><div class="nb-muted nb-small">' + esc(account(o.channel)) + "</div>" +
@@ -890,7 +896,7 @@
       if (!d) { alert("Still connecting \u2014 try again in a few seconds."); return; }
       var miss = pickupReady();
       if (miss.length) { $("hubSettings").style.display = ""; alert("Fill the pickup address first:\n\u2022 " + miss.join("\n\u2022 ")); $("psName").focus(); return; }
-      var rows = lastRows.filter(function (r) { return r.sel && r.state === "ok" && !r.ship; });
+      var rows = lastRows.filter(function (r) { return r.sel && (r.state === "ok" || r.omsShipped) && !r.ship; });
       if (!rows.length) return;
       if (rows.length > 2000) { alert("Please ship at most 2,000 orders at a time (" + rows.length + " ticked)."); return; }
       var L = rows.filter(function (r) { return r.loss; });
