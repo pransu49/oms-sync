@@ -292,9 +292,24 @@ async function pushToFirestore(orders, docName = 'omsOrders') {
   let chunkIndex = 0;
   let written = 0, unchanged = 0;
 
-  for (let i = 0; i < orders.length; i += CHUNK_SIZE) {
-    const chunk = orders.slice(i, i + CHUNK_SIZE);
-    const id = `chunk_${chunkIndex}`;
+  // Download saver #2 (18 Nov 2026): chunks by ORDER DAY instead of by position. A new order used to shift every order after it into the
+  // next chunk, so one new order rewrote ~all 22 chunks and every open Console tab / robot downloaded them all (~0.7 GB/day).
+  // Now an order always lives in its own day's chunk(s) (`d_<YYYYMMDD>_<part>`, 250 orders per part, sorted by order id), so a new order or a
+  // status change rewrites only that day's 1-3 small docs. Consumers just flatten all chunk docs, so naming/order does not matter to them.
+  const chunkList = [];
+  if (docName === 'omsOrders') {
+    const byDay = {};
+    for (const o of orders) { const d = (toIso(o.orderDate) || '0000-00-00').replace(/-/g, ''); (byDay[d] = byDay[d] || []).push(o); }
+    const key = (o) => `${o.channelOrderId || ''}|${o.channelSubOrderId || ''}|${o.sku || ''}|${o.invoiceNumber || ''}`;
+    for (const d of Object.keys(byDay).sort()) {
+      const list = byDay[d].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+      for (let i = 0, p = 0; i < list.length; i += 250, p++) chunkList.push({ id: `d_${d}_${p}`, chunk: list.slice(i, i + 250) });
+    }
+  } else {
+    for (let i = 0; i < orders.length; i += CHUNK_SIZE) chunkList.push({ id: `chunk_${chunkList.length}`, chunk: orders.slice(i, i + CHUNK_SIZE) });
+  }
+
+  for (const { id, chunk } of chunkList) {
     usedIds.add(id);
     const hash = hashChunk(chunk);
     if (existingHashes[id] !== hash) {
