@@ -132,6 +132,12 @@ async function realBill(apps) {
       const sum = (k) => N(rows.reduce((a, r) => a + (Number(r[k]) || 0), 0));
       const items = rows.map((r) => ({ svc: r.svc, sku: r.sku, proj: r.proj, month: N(r.month), today: N(r.today) }))
         .filter((r) => r.month > 0.009 || r.today > 0.009).sort((a, b) => b.month - a.month).slice(0, 12);
+      try { // daily breakdown printed to the run log only (diagnosis, 18 Nov 2026)
+        const dsql = `SELECT FORMAT_DATE('%m-%d', DATE(usage_start_time, 'Asia/Kolkata')) AS day, IFNULL(project.id, '-') AS proj, sku.description AS sku, SUM(${net}) AS inr, SUM(usage.amount_in_pricing_units) AS qty, ANY_VALUE(usage.pricing_unit) AS unit
+          FROM \`${found.table}\` WHERE DATE(usage_start_time, 'Asia/Kolkata') >= DATE_SUB(CURRENT_DATE('Asia/Kolkata'), INTERVAL 9 DAY) GROUP BY day, proj, sku HAVING ABS(inr) > 0.005 ORDER BY day, inr DESC`;
+        const dj = await bq(token, `projects/${projectId}/queries`, { query: dsql, useLegacySql: false, timeoutMs: 60000, location: found.location });
+        (dj.rows || []).forEach((r) => console.log('BILLDAY', r.f.map((c) => c.v).join(' | ')));
+      } catch (e) { console.log('BILLDAY failed', e.message); }
       const last = rows.reduce((a, r) => Math.max(a, r.last ? Number(r.last) * 1000 : 0), 0);
       const cur = (rows.find((r) => r.cur) || {}).cur || 'INR';
       console.log(`Real bill (${found.table}): month ${cur} ${sum('month')}, today ${sum('today')}, last month ${sum('lastMonth')}`);
