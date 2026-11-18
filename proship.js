@@ -293,7 +293,10 @@ async function modeShip() {
       return saving;
     };
     async function one(id) {
-      const lines = by[id] || [];
+      let lines = by[id] || [];
+      // phone typed in the console for orders OMS no longer has a phone for (fake-shipped earlier, owner 18 Nov 2026)
+      const ph = String((job.phones || {})[id] || '').replace(/\D/g, '').slice(-10);
+      if (ph.length === 10) lines = lines.map((l) => Object.assign({}, l, { buyerPhone: ph }));
       let res;
       if (!lines.length) res = { e: 'Not found in OMS Guru data' };
       else if (!/amazon/i.test(lines[0].channel || '')) res = { e: 'Not an Amazon order' };

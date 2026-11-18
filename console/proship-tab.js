@@ -591,9 +591,9 @@
     }
     function freightAvg() { freightMedian(""); return frAll; }
     function isSelfShipPending(o) {
-      if (!/amazon/i.test(o.channel || "") || phone10(o.buyerPhone).length < 10 || String(o.awb || "").trim()) return false;
+      if (!/amazon/i.test(o.channel || "") || String(o.awb || "").trim()) return false;
       var st = String(o.status || "").trim();
-      if (/^(new|ready to ship|pending|confirmed)$/i.test(st)) return true;
+      if (/^(new|ready to ship|pending|confirmed)$/i.test(st)) return phone10(o.buyerPhone).length >= 10;
       /* owner 18 Nov 2026 ("these orders are not reflecting"): OMS shows "Shipped" but there is NO tracking number in OMS and
          no ProShip shipment - nobody really shipped them. Show them (SLA up to 7 days back), not ticked, with a warning. */
       if (/^shipped$/i.test(st) && !liveShip(nid(o.channelOrderId))) { var d = ymd(o.slaDate); return !!d && d >= ymd(new Date(Date.now() - 7 * 864e5)); }
@@ -637,7 +637,10 @@
       if (!o.buyerCity) missing.push("city");
       if (!o.buyerState) missing.push("state");
       if (missing.length) { r.state = "bad"; r.note = "Missing " + missing.join(", "); }
-      if (/^shipped$/i.test(String(o.status || "").trim())) { r.omsShipped = true; r.state = "check"; r.note = "OMS says Shipped, but no AWB \u2014 check, then tick to ship"; }
+      if (/^shipped$/i.test(String(o.status || "").trim())) {
+        r.omsShipped = true; r.noPhone = phone10(o.buyerPhone).length < 10;
+        if (r.state === "ok") { r.state = "check"; r.note = "OMS says Shipped, but no AWB \u2014 check, then tick to ship" + (r.noPhone ? ". No buyer phone in OMS: type it below (empty = our pickup number)" : ""); }
+      }
       return r;
     }
     function buildPool() {
@@ -647,7 +650,7 @@
       var keep = {}; pool.forEach(function (r) { keep[r.id] = r; });
       pool = Object.keys(by).map(function (id) {
         var r = makeRow(id, by[id]), old = keep[id];
-        if (old) { if (old.wTouched) { r.weight = old.weight; r.wTouched = true; } if (old.touched) { r.sel = old.sel; r.touched = true; } }
+        if (old) { if (old.phone) r.phone = old.phone; if (old.wTouched) { r.weight = old.weight; r.wTouched = true; } if (old.touched) { r.sel = old.sel; r.touched = true; } }
         return r;
       });
       var accts = {}; pool.forEach(function (r) { accts[account(r.o.channel)] = 1; });
@@ -817,7 +820,8 @@
             '<div class="hub-oms" title="OMS Guru profit - decides loss / On hold">' + (r.loss ? '<span class="nb-loss">LOSS \u00b7 ' + rs(r.lossVal) + "</span>" : "OMS " + rs(r.lossVal)) + "</div>" +
             (r.src === "tool" ? '<div class="hub-oms" title="Courier cost used: ' + esc(r.freightSrc) + '">ship ' + rs(r.freight) + " \u00b7 " + (r.freightSrc === "ProShip charge" ? "ProShip" : r.freightSrc === "ProShip average" ? "ProShip avg" : "est.") + "</div>" : "") + "</td>" +
           '<td class="r"><input type="number" step="0.01" min="0.01" class="nb-w" data-i="' + i + '" value="' + r.weight + '"' + (sh ? " disabled" : "") + "></td>" +
-          '<td><span class="nb-tag ' + tag + '">' + esc(note) + "</span>" + under + "</td></tr>";
+          '<td><span class="nb-tag ' + tag + '">' + esc(note) + "</span>" + under +
+            (r.noPhone && !sh ? '<div style="margin-top:6px"><input type="tel" class="nb-ph" data-i="' + i + '" maxlength="14" placeholder="Buyer phone (Seller Central)" value="' + esc(r.phone || "") + '" style="width:170px;height:30px;border:1px solid var(--x-line);border-radius:8px;padding:0 8px;font-size:12px"></div>' : "") + "</td></tr>";
       }).join("") : '<tr><td colspan="8" class="nb-muted" style="text-align:center;padding:22px !important;">' + (pool.length ? "No orders here." : "No self-ship orders waiting right now.") + "</td></tr>";
       body.querySelectorAll(".nb-w").forEach(function (inp) {
         inp.addEventListener("change", function () {
@@ -829,6 +833,9 @@
       });
       body.querySelectorAll(".ps-sel").forEach(function (cb) {
         cb.addEventListener("change", function () { var r = lastRows[+cb.dataset.i]; r.sel = cb.checked; r.touched = true; render(); });
+      });
+      body.querySelectorAll(".nb-ph").forEach(function (inp) {
+        inp.addEventListener("change", function () { var r = lastRows[+inp.dataset.i]; r.phone = inp.value.trim(); if (r.phone) { r.sel = true; r.touched = true; render(); } });
       });
       body.querySelectorAll(".ps-x").forEach(function (b) { b.addEventListener("click", function () { cancelShip(b.dataset.id, b.dataset.awb); }); });
       lastRows.forEach(function (r) { if (r.ship) lblInfo[r.id] = { acct: acctOf(r), items: (r.items || []).map(function (x) { return [x.name, x.qty]; }) }; });
@@ -904,7 +911,7 @@
       var again = rows.filter(function (r) { return inFile[r.id]; });
       if (again.length && !confirm(again.length + " selected order(s) were already put in a NimbusPost or Zippy file. If that file was uploaded, they will ship TWICE.\n\nShip them through ProShip anyway?")) return;
       if (!confirm("Create " + rows.length + " shipment" + (rows.length > 1 ? "s" : "") + " in ProShip now?\n\nShipping charges are taken from the ProShip wallet. Pickup from: " + settings.name + ", " + settings.city + " " + settings.pin)) return;
-      var ids = {}; rows.forEach(function (r) { ids[r.id] = r.weight; });
+      var ids = {}, phones = {}; rows.forEach(function (r) { ids[r.id] = r.weight; if (r.noPhone) phones[r.id] = phone10(r.phone || "").length === 10 ? phone10(r.phone) : phone10(settings.phone); });
       busy = true; jobRes = {}; render();
       show("psStatus", "<b>" + rows.length + " orders</b> \u2014 starting on the server\u2026", "run");
       var ref = d.collection("proshipJobs").doc();
@@ -912,7 +919,7 @@
       // button stays on "Shipping\u2026" (owner 13 Nov 2026). Wake the connection after 15 s, give up after 60 s.
       var saved = false, nudge = setTimeout(function () { if (!saved) { show("psStatus", "<b>" + rows.length + " orders</b> \u2014 reconnecting to the server\u2026", "run"); try { d.enableNetwork(); } catch (e) {} } }, 15000);
       var giveUp = new Promise(function (_, rej) { setTimeout(function () { if (!saved) rej(new Error("No connection to the server. Press Ctrl + Shift + R to reload the page, then click Ship again \u2014 nothing was shipped.")); }, 60000); });
-      Promise.race([ref.set({ status: "queued", step: "Waiting for the server\u2026", ids: ids, count: rows.length, sla: selDate,
+      Promise.race([ref.set({ status: "queued", step: "Waiting for the server\u2026", ids: ids, phones: phones, count: rows.length, sla: selDate,
         box: { l: num(settings.l) || DEF.l, b: num(settings.b) || DEF.b, h: num(settings.h) || DEF.h },
         pickup: { name: settings.name, phone: phone10(settings.phone), email: settings.email, address: settings.address, city: settings.city, state: settings.state, pin: String(settings.pin).trim(), gstin: settings.gstin || "" },
         createdAt: firebase.firestore.FieldValue.serverTimestamp() }), giveUp])
