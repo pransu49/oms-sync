@@ -286,7 +286,16 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   skips complaints/labels/audit/attendance/history) with every buyer field replaced by fake values; refuses to run if the TEST key is not aikm-test.
   Secret `FIREBASE_SERVICE_ACCOUNT_TEST`. `staging-check.yml` = syntax check of every script on every push/PR.
   The sign-in script no longer lists staff emails: who may sign in = the Firestore rules only (staffOk() asks the database once after sign-in).
-  Still to build: yearly in-house pen test report.
+  SECURITY TEST 18 Nov 2026 (report: Claude Doc "AIKM Security Test Report — Nov 2026", next test due 18 Nov 2027; fix critical 7 d,
+  high 30 d, moderate 90 d). Fixed + re-tested: (1) Supabase Purchase & Sales was open to the public key -> RLS "staff only" for
+  role authenticated with iss securetoken.google.com/aikm--order-file (Supabase third-party auth = Firebase main project); staff get the
+  role claim from workflow "Staff access - Purchase & Sales database" (tools/staff-claims.js, emails typed as input; re-run after a new
+  staff account first signs in); Apps Script backup uses Script Property SB_SECRET (sb_secret key, apikey header only).
+  (2) Robot Control + (3) Purchase Bills Apps Scripts accept only a staff sign-in: the sign-in script adds `idt` (GET param / POST body)
+  and the scripts' staff_() asks Firestore (aikm_admin/__staffcheck: 404/200 = staff, 403 = not). The old keys in the pages are dead.
+  On page.purchase-bills the Firebase + sign-in script tags MUST stay at the very top of the template (page loads data at once).
+  Console: Robot pill may show "offline" for up to 30 s after opening (inline snippet runs before the deferred sign-in script).
+  Open: (4) npm audit 1 high (adm-zip) + 9 moderate -> Dependabot PRs, due 16 Feb 2027.
   Until approved, OMS Guru Order Sync must stay ON (only source of buyer addresses).
 - **Sign-in gate** (owner 17 Nov 2026 — all 3 Firestore DBs were `allow read, write: if true`): `console/aikm-auth.js`, loaded on EVERY tool page
   right after the Firebase SDK tags (app + firestore + **auth** compat 10.12.2), before page scripts, pinned by COMMIT SHA (`@0001fa0…`, tag pushes fail; change the SHA in the
