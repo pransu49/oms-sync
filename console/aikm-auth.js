@@ -122,11 +122,16 @@
      Test mode: not added (the test sign-in is not valid for these live services). */
   var claimOk = null;
   function mainToken() {
-    var u = auths[0].currentUser; if (!u || IS_TEST) return Promise.resolve({ t: null });
-    if (claimOk === true) return u.getIdToken().then(function (t) { return { t: t, role: true }; });
-    return u.getIdTokenResult(claimOk === null).then(function (r) {   // first call per page: fresh token, so a new role shows at once
-      claimOk = r.claims && r.claims.role === "authenticated";
-      return { t: r.token, role: claimOk };
+    if (IS_TEST) return Promise.resolve({ t: null });
+    // pages ask for their data straight away: wait until the saved sign-in is back (else the first call goes out without it)
+    var au = auths[0];
+    return (au.currentUser ? Promise.resolve(au.currentUser) : firstState(au)).then(function (u) {
+      if (!u) return { t: null };
+      if (claimOk === true) return u.getIdToken().then(function (t) { return { t: t, role: true }; });
+      return u.getIdTokenResult(claimOk === null).then(function (r) {   // first call per page: fresh token, so a new role shows at once
+        claimOk = r.claims && r.claims.role === "authenticated";
+        return { t: r.token, role: claimOk };
+      });
     });
   }
   var oFetch = window.fetch && window.fetch.bind(window);
