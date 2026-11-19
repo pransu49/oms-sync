@@ -1,0 +1,22 @@
+name: Check OMS-shipped orders without AWB (read-only)
+on:
+  workflow_dispatch:
+    inputs:
+      write: { description: 'on = save verdicts for the console', required: false, default: 'off' }
+      days: { description: 'SLA days back', required: false, default: '10' }
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm install --no-save firebase-admin@12
+      - run: node tools/overdue-check.js
+        env:
+          WRITE: ${{ inputs.write }}
+          DAYS: ${{ inputs.days }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
+          FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
