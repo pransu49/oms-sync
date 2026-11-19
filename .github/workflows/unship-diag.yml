@@ -1,0 +1,18 @@
+name: Why not shipped - Amazon unshipped report check (read-only)
+on:
+  workflow_dispatch:
+    inputs:
+      ids: { description: 'Amazon order ids (from the Unshipped Orders report)', required: true }
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm install --no-save firebase-admin@12
+      - run: node tools/unship-diag.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
