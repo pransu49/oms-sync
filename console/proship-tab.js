@@ -134,7 +134,8 @@
       "html#aikm body #aikmShipHub td.r .nb-w{margin-left:auto;display:block;text-align:right;}" +
       "html#aikm body #aikmShipHub .hub-pf{font-weight:700;font-size:13.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}" +
       "html#aikm body #aikmShipHub .hub-pf.ok{color:var(--x-green);}html#aikm body #aikmShipHub .hub-pf.low{color:var(--x-amber);}html#aikm body #aikmShipHub .hub-pf.neg{color:var(--x-red);}" +
-      "html#aikm body #aikmShipHub .hub-pf .nb-loss{font-size:11px;}" +
+      "html#aikm body #aikmShipHub .nb-loss{display:inline-block !important;background:#B42318 !important;color:#fff !important;font:700 11.5px Inter,system-ui,sans-serif !important;letter-spacing:.02em;padding:3px 9px !important;border-radius:6px !important;border:0 !important;line-height:1.3 !important;white-space:nowrap;box-shadow:0 1px 2px rgba(180,35,24,.25);}" +
+      "html#aikm body #aikmShipHub .hub-oms{margin-top:3px;}" +
       "html#aikm body #aikmShipHub .hub-sub{font-size:9.5px;font-weight:600;letter-spacing:.04em;text-transform:none;color:var(--x-muted);margin-top:2px;}" +
       "html#aikm body #aikmShipHub .hub-oms{font-size:11.5px;color:var(--x-text-2);margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums;}" +
       "html#aikm body #aikmShipHub #psTable tr.nb-row-loss td{background:color-mix(in srgb,var(--x-red-soft) 55%,transparent) !important;}" +
@@ -630,7 +631,9 @@
       /* owner 14 Nov 2026 (later): "calculate profit on OMS - loss below 40" -> the hold / loss decision uses OMS Guru's profit;
          our tool's profit stays on screen (big) for comparison */
       r.lossVal = Math.round(r.omsProfit || 0);
-      r.loss = omsLoss || r.lossVal < cut;
+      /* owner 19 Nov 2026 ("why is it showing in loss" - OMS profit Rs 45 / 73 / 112 were tagged LOSS because OMS's own
+         low-margin flag was also used): with an amount on the loss bar ONLY "OMS profit below that amount" counts */
+      r.loss = lim === "" ? (omsLoss || r.lossVal < cut) : r.lossVal < cut;
       var missing = [];
       if (!String(o.buyerAddress1 || "").trim() && !String(o.buyerAddress2 || "").trim()) missing.push("address");
       if (!/^\d{6}$/.test(String(o.buyerPincode || "").trim())) missing.push("pincode");
