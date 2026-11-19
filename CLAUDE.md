@@ -221,7 +221,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   In transit = INTRANSIT/PICKED_UP/..., Out for delivery, Pickup failed / issue. (Before, everything not "pickup pending" counted as in transit.)
   OMS "Shipped" WITHOUT AWB (owner 18 Nov 2026, 11 Praso orders SLA 17 Nov were invisible): if no live ProShip AWB and SLA within 7 days they show
   in On hold, state "check", note "OMS says Shipped, but no AWB", NOT pre-ticked but tickable + shippable. OMS drops the buyer phone once
-  Shipped -> phone box on the row; job `phones` {id: phone} (typed, else pickup phone) -> proship.js uses it as buyerPhone. `order-lookup.yml` (manual, read-only)
+  Shipped -> phone box on the row; job `phones` {id: phone} (typed, else pickup phone) -> proship.js uses it as buyerPhone. `ship-ids.yml` (manual) = ship a pasted id list; input `phones` "id:phone,..." (masked in logs) -> job.phones. `order-lookup.yml` (manual, read-only)
   prints any order ids across OMS / proshipIndex / last jobs / amazonConfirm / omsTrackingPush.
   Sort: loss/low-profit rows on top, lowest profit first; Profit header click = sort all by profit (asc/desc/off).
   "Rejected · N" in the Self-Ship top bar = console's tracking-push alert (OMS 'stuck' Shipped-without-AWB + Amazon confirm errors), click = reasons.
