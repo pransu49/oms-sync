@@ -640,7 +640,8 @@
          low-margin flag was also used): with an amount on the loss bar ONLY "OMS profit below that amount" counts */
       r.loss = lim === "" ? (omsLoss || r.lossVal < cut) : r.lossVal < cut;
       var missing = [];
-      if (!String(o.buyerAddress1 || "").trim() && !String(o.buyerAddress2 || "").trim()) missing.push("address");
+      var a12 = (String(o.buyerAddress1 || "").trim() + " " + String(o.buyerAddress2 || "").trim()).trim();
+      if (!a12 || /^unknown(\s+unknown)?$/i.test(a12)) missing.push("address (OMS shows Unknown)");
       if (!/^\d{6}$/.test(String(o.buyerPincode || "").trim())) missing.push("pincode");
       if (!o.buyerCity) missing.push("city");
       if (!o.buyerState) missing.push("state");
@@ -653,10 +654,25 @@
       }
       return r;
     }
+    /* buyer details saved from the owner's OMS file (aikm_admin/proshipPhones, owner 19 Nov 2026): OMS shows "Unknown" once an
+       order is marked Shipped. 1 read per console load; shown on the row so the owner sees the real address before shipping. */
+    var savedBuyers = null;
+    function loadSavedBuyers() {
+      var d = db(); if (!d || savedBuyers) return; savedBuyers = {};
+      d.collection("aikm_admin").doc("proshipPhones").get().then(function (x) { savedBuyers = (x.exists && x.get("p")) || {}; buildPool(); }).catch(function () {});
+    }
+    function withSaved(o) {
+      var sb = savedBuyers && savedBuyers[nid(o.channelOrderId)], b = sb && sb.b;
+      var unk = /^unknown$/i.test(String(o.buyerAddress1 || "").trim()) || !String(o.buyerAddress1 || "").trim();
+      var x = o;
+      if (b && unk) x = Object.assign({}, o, { buyerName: b.n || o.buyerName, buyerAddress1: b.a1 || "", buyerAddress2: b.a2 || "", buyerCity: b.c || o.buyerCity, buyerState: b.s || o.buyerState, buyerPincode: String(b.z || o.buyerPincode || ""), _savedAddr: 1 });
+      if (sb && sb.p && phone10(x.buyerPhone).length < 10) { if (x === o) x = Object.assign({}, o); x.buyerPhone = sb.p; x._savedPh = 1; }
+      return x;
+    }
     function buildPool() {
-      hookLix();
+      hookLix(); loadSavedBuyers();
       var data = window.omsOrdersRaw || [], by = {};
-      data.forEach(function (o) { if (!isSelfShipPending(o)) return; var k = nid(o.channelOrderId); if (k) (by[k] = by[k] || []).push(o); });
+      data.forEach(function (o) { if (!isSelfShipPending(o)) return; var k = nid(o.channelOrderId); if (k) (by[k] = by[k] || []).push(withSaved(o)); });
       var keep = {}; pool.forEach(function (r) { keep[r.id] = r; });
       pool = Object.keys(by).map(function (id) {
         var r = makeRow(id, by[id]), old = keep[id];
@@ -813,7 +829,7 @@
           '<button type="button" class="ps-x" data-awb="' + esc(sh.a) + '" data-id="' + esc(r.id) + '">Cancel shipment</button></div>'
           : err ? '<div class="nb-muted nb-small" style="margin-top:5px;max-width:220px;white-space:normal;">' + esc(err) + "</div>" : "";
         return '<tr class="' + (r.sel || sh ? "" : "nb-row-out") + (r.loss && !sh ? " nb-row-loss" : "") + '">' +
-          '<td><input type="checkbox" class="ps-sel" data-i="' + i + '"' + (r.sel ? " checked" : "") + ((ok || r.omsShipped) && !sh ? "" : " disabled") + "></td>" +
+          '<td><input type="checkbox" class="ps-sel" data-i="' + i + '"' + (r.sel ? " checked" : "") + ((ok || (r.omsShipped && r.state !== "bad")) && !sh ? "" : " disabled") + "></td>" +
           '<td><div class="ps-sla' + (r.sla && r.sla < todayYmd() ? " over" : "") + '">' + (r.sla ? esc(niceDay(r.sla)) : '<span class="nb-muted">\u2014</span>') + "</div>" +
             (r.sla && r.sla < todayYmd() ? '<div class="nb-small" style="color:var(--x-red);">Overdue</div>' : "") + "</td>" +
           '<td><div class="cx-awb">' + esc(r.id) + '</div><div class="nb-muted nb-small">' + esc(account(o.channel)) + "</div>" +
@@ -913,7 +929,7 @@
       if (!d) { alert("Still connecting \u2014 try again in a few seconds."); return; }
       var miss = pickupReady();
       if (miss.length) { $("hubSettings").style.display = ""; alert("Fill the pickup address first:\n\u2022 " + miss.join("\n\u2022 ")); $("psName").focus(); return; }
-      var rows = lastRows.filter(function (r) { return r.sel && (r.state === "ok" || r.omsShipped) && !r.ship; });
+      var rows = lastRows.filter(function (r) { return r.sel && (r.state === "ok" || (r.omsShipped && r.state !== "bad")) && !r.ship; });
       if (!rows.length) return;
       if (rows.length > 2000) { alert("Please ship at most 2,000 orders at a time (" + rows.length + " ticked)."); return; }
       var L = rows.filter(function (r) { return r.loss; });

@@ -6,6 +6,13 @@ const nid = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').replace(
 // PHONES = "orderId:phone,..." (owner file, 19 Nov 2026) -> job.phones; never printed (buyer PII).
 const phones = {};
 String(process.env.PHONES || '').split(/[\s,]+/).forEach((t) => { const [k, v] = t.split(':'); const d = String(v || '').replace(/\D/g, '').slice(-10); if (k && d.length === 10) phones[nid(k)] = d; });
+// BUYERS = JSON {orderId:{n,a1,a2,c,s,z}} from the owner's OMS file (OMS shows "Unknown" once an order is marked Shipped)
+// read from the run's event file, NOT from env: env values are printed in the run log, this file is not (buyer PII rule)
+let buyers = {};
+try {
+  const ev = JSON.parse(require('fs').readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
+  const b = (ev.inputs || {}).buyers; if (b) buyers = JSON.parse(b);
+} catch (e) { console.log('could not read buyer addresses:', e.message); }
 const ids = [...new Set(String(process.env.IDS || '').split(/[\s,]+/).map(nid).filter(Boolean))];
 (async () => {
   const s = (await db.collection('aikm_admin').doc('proshipSettings').get()).data() || {};
@@ -17,10 +24,12 @@ const ids = [...new Set(String(process.env.IDS || '').split(/[\s,]+/).map(nid).f
     phones: Object.fromEntries(ids.filter((k) => phones[k]).map((k) => [k, phones[k]])),
     createdAt: admin.firestore.FieldValue.serverTimestamp(), by: 'owner-request' };
   // save the phones for later ship jobs (kept 30 days, buyer PII rule = max 90)
-  if (Object.keys(phones).length) {
+  if (Object.keys(phones).length || Object.keys(buyers).length) {
     const pr = db.collection('aikm_admin').doc('proshipPhones'); const cur = ((await pr.get()).data() || {}).p || {};
     const now = Date.now(), keep = {}; Object.keys(cur).forEach((k) => { if (now - (cur[k].t || 0) < 30 * 864e5) keep[k] = cur[k]; });
-    Object.keys(phones).forEach((k) => { keep[k] = { p: phones[k], t: now }; });
+    Object.keys(phones).forEach((k) => { keep[k] = Object.assign({}, keep[k], { p: phones[k], t: now }); });
+    Object.keys(buyers).forEach((k) => { keep[nid(k)] = Object.assign({}, keep[nid(k)], { b: buyers[k], t: now }); });
+    console.log('buyer addresses saved for later:', Object.keys(buyers).length);
     await pr.set({ p: keep, at: now });
     console.log('phones saved for later:', Object.keys(phones).length);
   }

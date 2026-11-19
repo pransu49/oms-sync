@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       ids: { description: 'Amazon order ids', required: true }
+      buyers: { description: 'Buyer addresses JSON {orderId:{n,a1,a2,c,s,z}} (optional; read from the event file, never printed)', required: false, default: '' }
       save_only: { description: 'true = only save the phones, do not ship', required: false, default: 'false' }
       phones: { description: 'Buyer phones orderId:phone,... (optional; masked in logs)', required: false, default: '' }
 jobs:

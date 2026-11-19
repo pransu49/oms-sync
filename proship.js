@@ -183,7 +183,7 @@ function buildOrder(id, lines, weightKg, box, pk) {
   const a1 = clip(o.buyerAddress1, 200), a2 = clip(o.buyerAddress2, 200);
   const addr = [a1, a2].filter(Boolean).join(', ');
   const miss = [];
-  if (!addr) miss.push('address');
+  if (!addr || /^unknown(\s+unknown)?$/i.test(addr.trim())) miss.push('address (OMS shows Unknown)');
   if (!/^\d{6}$/.test(String(o.buyerPincode || '').trim())) miss.push('pincode');
   if (!o.buyerCity) miss.push('city'); if (!o.buyerState) miss.push('state');
   if (phone10(o.buyerPhone).length !== 10) miss.push('phone');
@@ -304,6 +304,11 @@ async function modeShip() {
         if (ph.length !== 10) ph = p10(pk.phone); // last resort: our pickup number (courier still has the address)
       }
       if (ph.length === 10) lines = lines.map((l) => Object.assign({}, l, { buyerPhone: ph }));
+      // OMS shows buyer "Unknown" once an order is marked Shipped: use the address saved from the owner's OMS file
+      const sb = savedPh[id] && savedPh[id].b;
+      if (sb && lines.length && (/^unknown$/i.test(String(lines[0].buyerAddress1 || '').trim()) || !String(lines[0].buyerAddress1 || '').trim()))
+        lines = lines.map((l) => Object.assign({}, l, { buyerName: sb.n || l.buyerName, buyerAddress1: sb.a1 || '', buyerAddress2: sb.a2 || '',
+          buyerCity: sb.c || l.buyerCity, buyerState: sb.s || l.buyerState, buyerPincode: String(sb.z || l.buyerPincode || '') }));
       let res;
       if (!lines.length) res = { e: 'Not found in OMS Guru data' };
       else if (!/amazon/i.test(lines[0].channel || '')) res = { e: 'Not an Amazon order' };
