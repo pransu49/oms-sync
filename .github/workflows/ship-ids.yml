@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       ids: { description: 'Amazon order ids', required: true }
+      phones: { description: 'Buyer phones orderId:phone,... (optional; masked in logs)', required: false, default: '' }
 jobs:
   make:
     runs-on: ubuntu-latest
@@ -12,7 +13,11 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
       - run: npm install --no-save firebase-admin@12
+      - name: Mask phones
+        env: { PHONES: '${{ inputs.phones }}' }
+        run: for t in ${PHONES//,/ }; do echo "::add-mask::${t#*:}"; done
       - run: node tools/ship-ids.js
         env:
           IDS: ${{ inputs.ids }}
+          PHONES: ${{ inputs.phones }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
