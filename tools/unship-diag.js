@@ -3,6 +3,7 @@
 // on Amazon (error) / Easy Ship / cancelled. Ids come from the run's event file (input `ids`). Prints counts + example ids, no buyer data.
 const admin = require('firebase-admin');
 const main = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) }, 'main').firestore();
+const sp = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_SPAPI)) }, 'sp').firestore();
 const oms = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_OMS)) }, 'oms').firestore();
 const nid = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').replace(/\s+/g, '').trim();
 const ph = (v) => String(v || '').replace(/\D/g, '').slice(-10);
@@ -15,6 +16,13 @@ async function json(db, col, id, f = 'data') { try { const d = await db.collecti
   (await oms.collection('aikm_admin').doc('omsOrders').collection('chunks').get()).forEach((d) => (d.get('orders') || []).forEach((o) => {
     const k = nid(o.channelOrderId); if (want.has(k)) (byId[k] = byId[k] || []).push(o);
   }));
+  const amz = {}; let snapAt = {};
+  for (const a of ['praso', 'sastastore', 'vishal', 'munda', 'aikm']) {
+    const m = await sp.collection('spapiSnapshots').doc(a + '_meta').get(); if (!m.exists) continue;
+    const run = m.get('run'), n = (m.get('chunks') || {}).orders || 0; snapAt[a] = String(m.get('updatedAt') && m.get('updatedAt').toDate ? m.get('updatedAt').toDate().toISOString() : run);
+    for (let i = 0; i < n; i++) { const c = await sp.collection('spapiSnapshots').doc(`${a}_orders_${run}_${i}`).get(); (c.exists ? c.get('items') || [] : []).forEach((o) => { if (o && want.has(o.orderId)) amz[o.orderId] = o.status; }); }
+  }
+  console.log('Amazon snapshot times:', JSON.stringify(snapAt));
   const px = await json(main, 'aikm_admin', 'proshipIndex');
   const sc = ((await main.collection('aikm_admin').doc('shipCheck').get()).data() || {}).v || {};
   const confDoc = (await main.collection('aikm_admin').doc('amazonConfirm').get()).data() || {};
@@ -22,7 +30,7 @@ async function json(db, col, id, f = 'data') { try { const d = await db.collecti
   const push = (await main.collection('aikm_admin').doc('omsTrackingPush').get()).data() || {};
   const jobs = (await main.collection('proshipJobs').orderBy('createdAt', 'desc').limit(10).get()).docs.map((d) => d.data());
   const jobErr = {}; jobs.slice().reverse().forEach((j) => Object.entries(j.results || {}).forEach(([k, r]) => { if (r && r.e) jobErr[nid(k)] = r.e; else if (r && r.a) delete jobErr[nid(k)]; }));
-  const G = {}; const add = (g, k, extra) => { (G[g] = G[g] || []).push(k + (extra ? '  ' + extra : '')); };
+  const G = {}, GS = {}; const add = (g, k, extra) => { (G[g] = G[g] || []).push(k + (extra ? '  ' + extra : '')); const x = (GS[g] = GS[g] || {}); x[amz[k] || 'not in snapshot'] = (x[amz[k] || 'not in snapshot'] || 0) + 1; };
   const confErr = {};
   ids.forEach((k) => {
     const L = byId[k], p = px[k] || px['#' + k], s = sc[k], c = conf[k];
@@ -36,7 +44,7 @@ async function json(db, col, id, f = 'data') { try { const d = await db.collecti
     if (live && awb && awb !== p.a) return add('Shipped on ProShip, OMS has a DIFFERENT AWB', k, acct);
     if (live && awb) {
       if (c && !c.ok) { confErr[String(c.e || c.error || '?').slice(0, 80)] = (confErr[String(c.e || c.error || '?').slice(0, 80)] || 0) + 1; return add('Shipped + in OMS, Amazon confirm FAILED', k, acct + ' ' + String(c.e || c.error || '').slice(0, 90)); }
-      if (c && c.ok) return add('Confirmed by our robot (Amazon report older?)', k, acct);
+      if (c && c.ok) return add('Confirmed on Amazon by our robot', k, acct + ' at ' + new Date(c.t).toISOString().slice(11, 16) + 'Z' + (c.note ? ' ' + c.note.slice(0, 40) : ''));
       return add('Shipped + in OMS, waiting for Amazon confirm robot', k, acct);
     }
     if (/^shipped$/i.test(st)) return add('OMS says Shipped, no AWB (fake ship)', k, acct);
@@ -51,7 +59,7 @@ async function json(db, col, id, f = 'data') { try { const d = await db.collecti
   Object.keys(G).sort((a, b) => G[b].length - G[a].length).forEach((g) => {
     console.log(`\n=== ${g}: ${G[g].length}`);
     const byAcct = {}; G[g].forEach((x) => { const a = (x.split('  ')[1] || '').split(' ')[0] || '-'; byAcct[a] = (byAcct[a] || 0) + 1; });
-    console.log('   by account:', JSON.stringify(byAcct));
+    console.log('   by account:', JSON.stringify(byAcct), '| Amazon status NOW (snapshot):', JSON.stringify(GS[g]));
     G[g].slice(0, 12).forEach((x) => console.log('   ', x));
   });
   if (Object.keys(confErr).length) console.log('\nAMAZON CONFIRM ERRORS:', JSON.stringify(confErr, null, 1));
