@@ -134,7 +134,7 @@
       "html#aikm body #aikmShipHub td.r .nb-w{margin-left:auto;display:block;text-align:right;}" +
       "html#aikm body #aikmShipHub .hub-pf{font-weight:700;font-size:13.5px;font-variant-numeric:tabular-nums;white-space:nowrap;}" +
       "html#aikm body #aikmShipHub .hub-pf.ok{color:var(--x-green);}html#aikm body #aikmShipHub .hub-pf.low{color:var(--x-amber);}html#aikm body #aikmShipHub .hub-pf.neg{color:var(--x-red);}" +
-      "html#aikm body #aikmShipHub .nb-loss{display:inline-block !important;background:#B42318 !important;color:#fff !important;font:700 11.5px Inter,system-ui,sans-serif !important;letter-spacing:.02em;padding:3px 9px !important;border-radius:6px !important;border:0 !important;line-height:1.3 !important;white-space:nowrap;box-shadow:0 1px 2px rgba(180,35,24,.25);}" +
+      "html#aikm body #aikmShipHub .nb-loss{display:inline-block !important;background:#FEE4E2 !important;color:#B42318 !important;font:700 11.5px Inter,system-ui,sans-serif !important;letter-spacing:.02em;padding:3px 9px !important;border-radius:6px !important;border:1px solid #FECDCA !important;line-height:1.3 !important;white-space:nowrap;box-shadow:none;}" +
       "html#aikm body #aikmShipHub .hub-oms{margin-top:3px;}" +
       "html#aikm body #aikmShipHub .hub-sub{font-size:9.5px;font-weight:600;letter-spacing:.04em;text-transform:none;color:var(--x-muted);margin-top:2px;}" +
       "html#aikm body #aikmShipHub .hub-oms{font-size:11.5px;color:var(--x-text-2);margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums;}" +
