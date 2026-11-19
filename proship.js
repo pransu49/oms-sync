@@ -281,6 +281,8 @@ async function modeShip() {
     chunks.forEach((d) => (d.get('orders') || []).forEach((o) => { const k = nid(o.channelOrderId); if (wanted.has(k)) (by[k] = by[k] || []).push(o); }));
     const [idx, nimbus, zippy] = await Promise.all([readIndex(), readJsonDoc('nimbusIndex', 'byOrder'), readJsonDoc('aikm_admin', 'zippyIndex')]);
     const live = (m, id) => { const v = m[id] || m['#' + id]; return v && v.a && v.s !== 'cancelled' ? v : null; };
+    // buyer phones saved from the owner's OMS file (aikm_admin/proshipPhones, owner 19 Nov 2026) — used when OMS has none
+    let savedPh = {}; try { const sp = await db.collection('aikm_admin').doc('proshipPhones').get(); savedPh = (sp.exists && sp.get('p')) || {}; } catch (e) {}
 
     const results = {}; let made = 0, failed = 0, skipped = 0, n = 0, unsaved = 0, saving = Promise.resolve();
     // save new AWBs every 50 so a stopped run never loses them (a re-run then skips them instead of shipping twice)
@@ -295,7 +297,12 @@ async function modeShip() {
     async function one(id) {
       let lines = by[id] || [];
       // phone typed in the console for orders OMS no longer has a phone for (fake-shipped earlier, owner 18 Nov 2026)
-      const ph = String((job.phones || {})[id] || '').replace(/\D/g, '').slice(-10);
+      const p10 = (v) => String(v || '').replace(/\D/g, '').slice(-10);
+      let ph = p10((job.phones || {})[id]);
+      if (lines.length && p10(lines[0].buyerPhone).length !== 10) {
+        if (ph.length !== 10) ph = p10(savedPh[id] && savedPh[id].p);
+        if (ph.length !== 10) ph = p10(pk.phone); // last resort: our pickup number (courier still has the address)
+      }
       if (ph.length === 10) lines = lines.map((l) => Object.assign({}, l, { buyerPhone: ph }));
       let res;
       if (!lines.length) res = { e: 'Not found in OMS Guru data' };

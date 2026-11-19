@@ -14,8 +14,17 @@ const ids = [...new Set(String(process.env.IDS || '').split(/[\s,]+/).map(nid).f
   const job = { status: 'queued', step: 'Waiting for the server…', ids: Object.fromEntries(ids.map((k) => [k, w])), count: ids.length, sla: 'owner-list',
     box: { l: num(s.l) || 20, b: num(s.b) || 15, h: num(s.h) || 10 },
     pickup: { name: s.name, phone: ph, email: s.email, address: s.address, city: s.city, state: s.state, pin: String(s.pin || '').trim(), gstin: s.gstin || '' },
-    phones: Object.fromEntries(ids.map((k) => [k, phones[k] || ph])),
+    phones: Object.fromEntries(ids.filter((k) => phones[k]).map((k) => [k, phones[k]])),
     createdAt: admin.firestore.FieldValue.serverTimestamp(), by: 'owner-request' };
+  // save the phones for later ship jobs (kept 30 days, buyer PII rule = max 90)
+  if (Object.keys(phones).length) {
+    const pr = db.collection('aikm_admin').doc('proshipPhones'); const cur = ((await pr.get()).data() || {}).p || {};
+    const now = Date.now(), keep = {}; Object.keys(cur).forEach((k) => { if (now - (cur[k].t || 0) < 30 * 864e5) keep[k] = cur[k]; });
+    Object.keys(phones).forEach((k) => { keep[k] = { p: phones[k], t: now }; });
+    await pr.set({ p: keep, at: now });
+    console.log('phones saved for later:', Object.keys(phones).length);
+  }
+  if (process.env.SAVE_ONLY === 'true') { console.log('SAVE ONLY - no ship job made'); process.exit(0); }
   const ref = db.collection('proshipJobs').doc();
   await ref.set(job);
   console.log('JOB_ID=' + ref.id, 'orders', ids.length, 'weight', w, 'pickup pin', job.pickup.pin, 'buyer phones from file', ids.filter((k) => phones[k]).length);

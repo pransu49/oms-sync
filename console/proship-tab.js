@@ -136,6 +136,8 @@
       "html#aikm body #aikmShipHub .hub-pf.ok{color:var(--x-green);}html#aikm body #aikmShipHub .hub-pf.low{color:var(--x-amber);}html#aikm body #aikmShipHub .hub-pf.neg{color:var(--x-red);}" +
       "html#aikm body #aikmShipHub .nb-loss{display:inline-block !important;background:#FEE4E2 !important;color:#B42318 !important;font:700 11.5px Inter,system-ui,sans-serif !important;letter-spacing:.02em;padding:3px 9px !important;border-radius:6px !important;border:1px solid #FECDCA !important;line-height:1.3 !important;white-space:nowrap;box-shadow:none;}" +
       "html#aikm body #aikmShipHub .hub-oms{margin-top:3px;}" +
+      "html#aikm body #aikmShipHub .hub-find #psFetch{height:36px;padding:0 14px !important;display:inline-flex;align-items:center;gap:6px;border-radius:10px !important;background:#0B1F3A !important;color:#fff !important;border:0 !important;font-weight:600;font-size:13px;white-space:nowrap;cursor:pointer;}" +
+      "html#aikm body #aikmShipHub .hub-find #psFetch:disabled{opacity:.75;cursor:default;}" +
       "html#aikm body #aikmShipHub .hub-sub{font-size:9.5px;font-weight:600;letter-spacing:.04em;text-transform:none;color:var(--x-muted);margin-top:2px;}" +
       "html#aikm body #aikmShipHub .hub-oms{font-size:11.5px;color:var(--x-text-2);margin-top:3px;white-space:nowrap;font-variant-numeric:tabular-nums;}" +
       "html#aikm body #aikmShipHub #psTable tr.nb-row-loss td{background:color-mix(in srgb,var(--x-red-soft) 55%,transparent) !important;}" +
@@ -375,6 +377,7 @@
         '<div class="nb-filter hub-chiprow"><span class="hub-lbl" id="hubDateLbl">SLA</span><div class="nb-chips" id="psDates"></div><span class="nb-muted hub-note" id="psPoolNote" style="display:none !important"></span>' +
           '<div class="hub-find"><span class="hub-search"><i class="ti ti-search"></i><input type="text" id="psQ" autocomplete="off" placeholder="Search order, buyer, product, PIN"></span>' +
           '<select id="psAcct"><option value="">All accounts</option></select>' +
+          '<button type="button" id="psFetch" class="hub-fetch" title="Fewer orders than expected? Fetch the latest orders from OMS Guru now (2-3 min)"><i class="ti ti-cloud-download"></i> Fetch orders</button>' +
           '<button type="button" id="psRefresh" title="Refresh"><i class="ti ti-refresh"></i></button></div></div>' +
         '<div id="psResult" style="display:none;">' +
           '<div class="nb-kpis" id="psKpis"></div>' +
@@ -594,7 +597,9 @@
     function isSelfShipPending(o) {
       if (!/amazon/i.test(o.channel || "") || String(o.awb || "").trim()) return false;
       var st = String(o.status || "").trim();
-      if (/^(new|ready to ship|pending|confirmed)$/i.test(st)) return phone10(o.buyerPhone).length >= 10;
+      /* owner 19 Nov 2026: "New" orders WITHOUT a buyer phone are shown too (phone box on the row; the robot uses a phone
+         saved from the owner's file, else our pickup number) - before they were hidden */
+      if (/^(new|ready to ship|pending|confirmed)$/i.test(st)) return true;
       /* owner 18 Nov 2026 ("these orders are not reflecting"): OMS shows "Shipped" but there is NO tracking number in OMS and
          no ProShip shipment - nobody really shipped them. Show them (SLA up to 7 days back), not ticked, with a warning. */
       if (/^shipped$/i.test(st) && !liveShip(nid(o.channelOrderId))) { var d = ymd(o.slaDate); return !!d && d >= ymd(new Date(Date.now() - 7 * 864e5)); }
@@ -640,8 +645,10 @@
       if (!o.buyerCity) missing.push("city");
       if (!o.buyerState) missing.push("state");
       if (missing.length) { r.state = "bad"; r.note = "Missing " + missing.join(", "); }
+      r.noPhone = phone10(o.buyerPhone).length < 10;
+      if (r.noPhone && r.state === "ok" && !/^shipped$/i.test(String(o.status || "").trim())) { r.state = "check"; r.omsShipped = true; r.note = "No buyer phone in OMS \u2014 type it below (empty = saved phone, else our pickup number), then tick to ship"; }
       if (/^shipped$/i.test(String(o.status || "").trim())) {
-        r.omsShipped = true; r.noPhone = phone10(o.buyerPhone).length < 10;
+        r.omsShipped = true;
         if (r.state === "ok") { r.state = "check"; r.note = "OMS says Shipped, but no AWB \u2014 check, then tick to ship" + (r.noPhone ? ". No buyer phone in OMS: type it below (empty = our pickup number)" : ""); }
       }
       return r;
@@ -914,7 +921,7 @@
       var again = rows.filter(function (r) { return inFile[r.id]; });
       if (again.length && !confirm(again.length + " selected order(s) were already put in a NimbusPost or Zippy file. If that file was uploaded, they will ship TWICE.\n\nShip them through ProShip anyway?")) return;
       if (!confirm("Create " + rows.length + " shipment" + (rows.length > 1 ? "s" : "") + " in ProShip now?\n\nShipping charges are taken from the ProShip wallet. Pickup from: " + settings.name + ", " + settings.city + " " + settings.pin)) return;
-      var ids = {}, phones = {}; rows.forEach(function (r) { ids[r.id] = r.weight; if (r.noPhone) phones[r.id] = phone10(r.phone || "").length === 10 ? phone10(r.phone) : phone10(settings.phone); });
+      var ids = {}, phones = {}; rows.forEach(function (r) { ids[r.id] = r.weight; if (r.noPhone && phone10(r.phone || "").length === 10) phones[r.id] = phone10(r.phone); });
       busy = true; jobRes = {}; render();
       show("psStatus", "<b>" + rows.length + " orders</b> \u2014 starting on the server\u2026", "run");
       var ref = d.collection("proshipJobs").doc();
@@ -1134,6 +1141,16 @@
     });
     $("psLabels").addEventListener("click", labels);
     $("psRefresh").addEventListener("click", function () { loadInFile(); build(); });
+    /* owner 19 Nov 2026: "button to fetch orders manually when fewer orders were fetched" */
+    $("psFetch").addEventListener("click", function () {
+      var b = $("psFetch");
+      if (typeof window.aikmGhDispatch !== "function") { alert("Please reload the console (Ctrl + Shift + R) and try again."); return; }
+      b.disabled = true; b.innerHTML = '<i class="ti ti-loader-2 ps-spin"></i> Fetching\u2026';
+      Promise.all([window.aikmGhDispatch("sync-workflow.yml", {}), window.aikmGhDispatch("proship.yml", { mode: "sync" })])
+        .then(function () { b.innerHTML = '<i class="ti ti-check"></i> Started \u2014 new orders in 2\u20133 min'; })
+        .catch(function (e) { alert(e.message || e); b.disabled = false; b.innerHTML = '<i class="ti ti-cloud-download"></i> Fetch orders'; })
+        .then(function () { setTimeout(function () { b.disabled = false; b.innerHTML = '<i class="ti ti-cloud-download"></i> Fetch orders'; }, 120000); });
+    });
     $("psAcct").addEventListener("change", function (e) { selAcct = e.target.value; renderDates(); });
     var qT; $("psQ").addEventListener("input", function () { clearTimeout(qT); qT = setTimeout(function () { selQ = $("psQ").value; pickRows(); }, 150); });
     $("psAll").addEventListener("change", function (e) {

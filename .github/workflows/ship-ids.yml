@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       ids: { description: 'Amazon order ids', required: true }
+      save_only: { description: 'true = only save the phones, do not ship', required: false, default: 'false' }
       phones: { description: 'Buyer phones orderId:phone,... (optional; masked in logs)', required: false, default: '' }
 jobs:
   make:
@@ -20,4 +21,5 @@ jobs:
         env:
           IDS: ${{ inputs.ids }}
           PHONES: ${{ inputs.phones }}
+          SAVE_ONLY: ${{ inputs.save_only }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
