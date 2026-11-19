@@ -216,7 +216,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   LAYOUT (owner 14 Nov 2026 "too messy"): no kicker/title/subtitle. Row 1 = status tabs | ProShip pill (Test) · gear Settings · tools icon
   Old tools. Row 2 = SLA chips | search · account · refresh. Console sub-bar: Push/Confirm status texts hidden -> button tooltips (+ red dot on error).
   SHIPPED LEAVE "To ship" at once (liveShip -> Shipped tab). Tab "Failed" (shown only when >0) = orders the LAST ship job could not ship,
-  reason in Status, can be re-shipped from there. #hubJobBar = "Last ship job · time · Sent N · Shipped N · Failed N" (+ progress while running).
+  reason in Status, can be re-shipped from there. Follows the NEWEST proshipJobs doc of the last 12 h on every computer (1 read per load, owner 19 Nov 2026), else this browser's own last job. #hubJobBar = "Last ship job · time · Sent N · Shipped N · Failed N" (+ progress while running).
   Shipped KPIs by ProShip status bucket (bucketOf, owner 15 Nov 2026): Pickup pending = ORDER_PLACED/PICKUP_PENDING/OUT_FOR_PICKUP/AWB_REGISTERED/...,
   In transit = INTRANSIT/PICKED_UP/..., Out for delivery, Pickup failed / issue. (Before, everything not "pickup pending" counted as in transit.)
   OMS "Shipped" WITHOUT AWB (owner 18 Nov 2026, 11 Praso orders SLA 17 Nov were invisible): if no live ProShip AWB and SLA within 7 days they show

@@ -1157,7 +1157,18 @@
       lastRows.forEach(function (r) { if (r.state === "ok" && !r.ship && (view === "hold" || !r.loss || profitOk(r) || !e.target.checked)) { r.sel = e.target.checked; r.touched = true; } }); render();
     });
     setInterval(function () { if (isOpen() && !busy && document.activeElement && !document.activeElement.classList.contains("nb-w") && document.activeElement.id !== "psQ") buildPool(); }, 60000);
-    try { var last = localStorage.getItem(LAST); if (last) { var lt = setInterval(function () { if (db()) { clearInterval(lt); watch(last); } }, 3000); } } catch (e) {}
+    /* owner 19 Nov 2026 ("I can't see here"): the Failed tab follows the NEWEST ship job of the last 12 h on every computer
+       (also jobs started from another browser or by the owner-list robot), not only one started in this browser. 1 read per load. */
+    (function () {
+      var mine = null; try { mine = localStorage.getItem(LAST); } catch (e) {}
+      var lt = setInterval(function () {
+        var d = db(); if (!d) return; clearInterval(lt);
+        d.collection("proshipJobs").orderBy("createdAt", "desc").limit(1).get().then(function (q) {
+          var doc = q.docs[0], ts = doc && doc.get("createdAt"), fresh = ts && ts.toDate && Date.now() - ts.toDate().getTime() < 12 * 3600e3;
+          var id = fresh ? doc.id : mine; if (id) { try { localStorage.setItem(LAST, id); } catch (e) {} watch(id); }
+        }).catch(function () { if (mine) watch(mine); });
+      }, 1500);
+    })();
     window.__proshipBuild = build; window.__proshipRows = function () { return lastRows; };
   }
 })();
