@@ -833,7 +833,7 @@
    written by each account's sync robot). 1 read per page open. Add future accounts to EXTRA below. ===== */
 (function () { try {
   if (window.__aikmMoreAccts) return; window.__aikmMoreAccts = true;
-  var EXTRA = [{ label: "vishal", name: "Vishal E-Commerce" }, { label: "munda", name: "Ecommerce Munda" }];
+  var EXTRA = [{ label: "vishal", name: "Vishal E-Commerce" }, { label: "munda", name: "Ecommerce Munda" }, { label: "aikm", name: "AIKM Pharma" }];
   /* 4 account buttons: keep the title readable (it was overlapped) */
   var st = document.createElement("style");
   st.textContent = ".ap-brand{flex:none}.ap-top-in{gap:14px}@media(max-width:1180px){#spapiAccountSwitcherWrap button{padding:6px 9px;font-size:11.5px}}";

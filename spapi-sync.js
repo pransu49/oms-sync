@@ -84,7 +84,7 @@ let SYNC_MODE = String(process.env.SYNC_MODE || 'full').toLowerCase() === 'fast'
 // Firestore record names cannot contain "/" (owner 12 Nov 2026: Munda SKU "MRP-120 Wala/Old-108" crashed the sync).
 // "/" -> "%2F" in record names only; SKUs without "/" keep exactly the same record names as before.
 const sidSafe = (x) => String(x == null ? '' : x).replace(/\//g, '%2F');
-const FULL_DUE_MS = { praso: 55 * 60e3, sastastore: 55 * 60e3, vishal: 55 * 60e3, munda: 55 * 60e3 };   // owner 21 Oct: robot every hour on both accounts
+const FULL_DUE_MS = { praso: 55 * 60e3, sastastore: 55 * 60e3, vishal: 55 * 60e3, munda: 55 * 60e3, aikm: 55 * 60e3 };   // owner 21 Oct: robot every hour on both accounts
 const RUN_STARTED = Date.now();
 let ordersSyncedOk = false;
 let deliveryBackfillRun = false;
@@ -2611,7 +2611,7 @@ async function setAmazonQuantity(sellerId, sku, qty) {
 // aikm_admin/invCentral {own:{<LOTS code | A:<ASIN>>:{q,n}}, live:{<acct>:true}} and writes the plan spapiSnapshots/<acct>_invPlan
 // (rows shown on the Inventory screen). It CHANGES Amazon stock only for accounts switched to "AIKM tool" (live) on that screen;
 // then the old out-of-stock rule + restock steps are skipped for that account (no fights). Firebase per run: ~6 reads, 2-3 writes.
-const INV_ACCOUNTS = ['praso', 'sastastore', 'vishal', 'munda'];
+const INV_ACCOUNTS = ['praso', 'sastastore', 'vishal', 'munda', 'aikm'];   // aikm = 5th account (owner 19 Nov 2026)
 const INV_CAP = 500, INV_MAX_PUSH = 300;
 let CENTRAL_LIVE = false;
 async function runCentralInventory(sellerId) {

@@ -9,7 +9,7 @@
 (function () {
   if (!/[?&]app=inventory(&|$)/.test(location.search)) return;
   if (window.__aikmInvTool) return; window.__aikmInvTool = 1;
-  var ACC = [["praso", "Praso"], ["sastastore", "Sasta Store"], ["vishal", "Vishal E-Com"], ["munda", "Ecommerce Munda"]];
+  var ACC = [["praso", "Praso"], ["sastastore", "Sasta Store"], ["vishal", "Vishal E-Com"], ["munda", "Ecommerce Munda"], ["aikm", "AIKM Pharma"]];
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
   var nf = function (v) { return v == null || v === "" ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }); };

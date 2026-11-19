@@ -74,6 +74,11 @@
   Record names built from SKUs go through `sidSafe()` ("/" -> "%2F"; Munda has SKUs like "MRP-120 Wala/Old-108") — use it for any new `${ACCOUNT_LABEL}_${sku}` id.
   Each account's workflow reports health under its own key (`spapi_vishal`, `spapi_munda`) — don't copy Sasta's.
 
+- **AIKM Pharma** (5th Amazon account, owner 19 Nov 2026): workflow `spapi-sync-aikm.yml`, label `aikm`, secrets `SPAPI_REFRESH_TOKEN_AIKM` +
+  `SPAPI_SELLER_ID_AIKM` (the run skips quietly until both exist). Full :32 every 2 h, quick :02/:17/:47. Added to FULL_DUE_MS, INV_ACCOUNTS
+  (central inventory), the Amazon page `EXTRA` list, the inventory screen ACC list and the dashboard ACCTS line in page.aikm.liquid (owner pastes).
+  Firebase: SP-API project ~+1,500 writes/day, ~+700 deletes/day (was ~11k reads / 6k writes / 3.4k deletes a day on 18 Nov 2026).
+
 - **Duplicate ASIN bulk delete + listing dates** (`console/dup-asin.js`, owner 12 Nov 2026), loader block `aikmDupAsinJs` at the end of
   `amazon-name-search.js` (keep it). "Duplicate ASINs" tile shows listings grouped by ASIN with one KEEP (most sold 30d, then stock, then oldest);
   ticked SKUs are queued in main `spapiListingDeletions` (`<acct>_<sku with / as %2F>`); `applyPendingListingDeletions` deletes max 200 per run.
