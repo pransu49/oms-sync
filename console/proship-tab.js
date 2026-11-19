@@ -487,17 +487,17 @@
     /* ---------- pending self-ship pool (same rules as the NimbusPost / Zippy files) ---------- */
     var pool = [], lastRows = [], selDate = "all", selAcct = "", selQ = "", busy = false, jobRes = {};
     var view = "toship", shipRows = [], pSort = 0; // pSort: 0 = default, 1 = profit low->high, -1 = high->low
-    var VIEWS = [["toship", "To ship"], ["hold", "On hold"], ["failed", "Failed"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["rto", "RTO / Cancelled"]];
+    var VIEWS = [["toship", "To ship"], ["hold", "On hold"], ["failed", "Failed"], ["fake", "Fake ship"], ["shipped", "Shipped"], ["delivered", "Delivered"], ["rto", "RTO / Cancelled"]];
     /* loss rule (same amount as the red Loss bar): flagged orders ship only when profit is above it */
     window.addEventListener("aikm-loss-limit", function () { if (typeof buildPool === "function") setTimeout(buildPool, 0); });
     function lossLimit() { try { var v = localStorage.getItem("aikm_loss_above"); return v === null ? "40" : v; } catch (e) { return "40"; } }
     function profitOk(r) { var l = lossLimit(); return l !== "" && (r.lossVal != null ? r.lossVal : r.profit) > +l; }
     function isHold(r) { return r.state !== "ok" || (r.loss && !profitOk(r)); }
-    function poolView() { return view === "toship" || view === "hold" || view === "failed"; }
+    function poolView() { return view === "toship" || view === "hold" || view === "failed" || view === "fake"; }
     /* owner 14 Nov 2026: shipped orders leave To ship at once (they are in Shipped); orders the last ship job could NOT ship
        are in their own "Failed" tab with ProShip's reason, so "200 to ship -> 180 shipped, 20 failed" is clear. */
     function failedOf(r) { return !liveShip(r.id) && jobRes[r.id] && jobRes[r.id].e ? jobRes[r.id].e : ""; }
-    function poolKind(r) { if (liveShip(r.id)) return ""; if (failedOf(r)) return "failed"; return isHold(r) ? "hold" : "toship"; }
+    function poolKind(r) { if (liveShip(r.id)) return ""; if (failedOf(r)) return "failed"; if (r.fake) return "fake"; return isHold(r) ? "hold" : "toship"; }
     /* shipped side: every ProShip AWB of the last days (one small doc), buyer + items from OMS */
     function stageOf(v) {
       var st = String(v.st || "").toUpperCase();
@@ -597,6 +597,9 @@
     function isSelfShipPending(o) {
       if (!/amazon/i.test(o.channel || "") || String(o.awb || "").trim()) return false;
       var st = String(o.status || "").trim();
+      /* owner 19 Nov 2026 ("this is an Easy Ship order, why in Self-Ship"): OMS has no Easy Ship flag - Amazon's own order data
+         (shipCheck, from the SP-API snapshot) decides: Easy Ship / cancelled on Amazon / real AWB elsewhere -> not Self-Ship */
+      var scv0 = (shipCheck || {})[nid(o.channelOrderId)]; if (scv0 && (scv0.v === "cancelled" || scv0.v === "easyship" || scv0.v === "shipped_real")) return false;
       /* owner 19 Nov 2026: "New" orders WITHOUT a buyer phone are shown too (phone box on the row; the robot uses a phone
          saved from the owner's file, else our pickup number) - before they were hidden */
       if (/^(new|ready to ship|pending|confirmed)$/i.test(st)) return true;
@@ -651,7 +654,7 @@
       if (r.noPhone && r.state === "ok" && !/^shipped$/i.test(String(o.status || "").trim())) { r.state = "check"; r.omsShipped = true; r.note = "No buyer phone in OMS \u2014 type it below (empty = saved phone, else our pickup number), then tick to ship"; }
       if (/^shipped$/i.test(String(o.status || "").trim())) {
         r.omsShipped = true;
-        var sc = (shipCheck || {})[id];
+        var sc = (shipCheck || {})[id]; r.fake = !!(sc && sc.v === "amazon_shipped_no_awb");
         var why = sc && sc.v === "amazon_shipped_no_awb" ? "Fake-shipped: Amazon shows Shipped, but no AWB in ProShip / NimbusPost / Zippy \u2014 ship it now"
           : sc && sc.v === "unshipped" ? "Amazon still Unshipped (OMS is wrong) \u2014 ship it now" : "OMS says Shipped, but no AWB \u2014 check, then tick to ship";
         if (r.state === "ok") { r.state = "check"; r.note = why + (r.noPhone ? ". No buyer phone in OMS: type it below (empty = our pickup number)" : ""); }
@@ -707,11 +710,11 @@
     function acctOf(r) { return r.acct || account(r.o.channel); }
     function renderTabs() {
       buildShipRows();
-      var n = { toship: 0, hold: 0, failed: 0, shipped: 0, delivered: 0, rto: 0 };
+      var n = { toship: 0, hold: 0, failed: 0, fake: 0, shipped: 0, delivered: 0, rto: 0 };
       pool.forEach(function (r) { if (selAcct && acctOf(r) !== selAcct) return; var k = poolKind(r); if (k) n[k]++; });
       shipRows.forEach(function (r) { if (selAcct && acctOf(r) !== selAcct) return; n[r.stage]++; });
       $("hubTabs").innerHTML = VIEWS.map(function (v) {
-        return '<button type="button" data-v="' + v[0] + '" class="' + (v[0] === view ? "on " : "") + (v[0] === "hold" || v[0] === "failed" ? "hold" : "") + '"' + (v[0] === "failed" && !n.failed ? ' style="display:none"' : "") + '>' + v[1] + " <span>" + n[v[0]] + "</span></button>";
+        return '<button type="button" data-v="' + v[0] + '" class="' + (v[0] === view ? "on " : "") + (v[0] === "hold" || v[0] === "failed" || v[0] === "fake" ? "hold" : "") + '"' + ((v[0] === "failed" || v[0] === "fake") && !n[v[0]] ? ' style="display:none"' : "") + '>' + v[1] + " <span>" + n[v[0]] + "</span></button>";
       }).join("");
       document.querySelectorAll("#hubTabs button").forEach(function (b) { b.addEventListener("click", function () { if (view !== b.dataset.v) { view = b.dataset.v; selDate = "all"; renderDates(); } }); });
     }
@@ -820,7 +823,7 @@
       var sel = 0, bad = 0, done = 0, loss = 0, minus = 0;
       var selP = 0; lastRows.forEach(function (r) { if (r.sel) { sel++; selP += r.profit || 0; } if (r.state !== "ok") bad++; if (r.ship) done++; if (r.loss) loss++; if (r.lossVal < 0) minus++; });
       $("psKpis").innerHTML =
-        kpi(view === "hold" ? "On hold" : "Orders to ship", lastRows.length, "") + kpi("Selected to ship", sel, "nb-ok") + kpi("Expected profit (selected)", rs(Math.round(selP)), selP < 0 ? "nb-bad" : "nb-ok") +
+        kpi(view === "hold" ? "On hold" : view === "fake" ? "Fake-shipped (Amazon Shipped, no AWB)" : "Orders to ship", lastRows.length, "") + kpi("Selected to ship", sel, "nb-ok") + kpi("Expected profit (selected)", rs(Math.round(selP)), selP < 0 ? "nb-bad" : "nb-ok") +
         kpi(lossLimit() === "" ? "Loss / low profit" : "OMS profit below \u20b9" + lossLimit(), loss, loss ? "nb-bad" : "", minus + " of them are a real loss in OMS (profit in minus)") + kpi("Need a fix", bad, bad ? "nb-bad" : "") + avgShipKpi();
       var body = $("psBody");
       body.innerHTML = lastRows.length ? lastRows.map(function (r, i) {
@@ -874,7 +877,7 @@
       body.querySelectorAll(".hub-lbl").forEach(function (b) { b.addEventListener("click", function () { labelsFor([b.dataset.id], b); }); });
       lblBtnText();
       body.querySelectorAll(".hub-map").forEach(function (b) { b.addEventListener("click", function () { var r = lastRows[+b.dataset.i]; if (r) openMap(r, r.items[+b.dataset.k]); }); });
-      var okRows = lastRows.filter(function (r) { return (r.state === "ok" || (r.omsShipped && r.state !== "bad")) && !r.ship && (view === "hold" || !r.loss || profitOk(r)); });
+      var okRows = lastRows.filter(function (r) { return (r.state === "ok" || (r.omsShipped && r.state !== "bad")) && !r.ship && (view === "hold" || view === "fake" || !r.loss || profitOk(r)); });
       $("psAll").checked = okRows.length > 0 && okRows.every(function (r) { return r.sel; });
       $("psResult").style.display = "block";
       $("psShip").disabled = !sel || busy;
@@ -1177,7 +1180,7 @@
     var qT; $("psQ").addEventListener("input", function () { clearTimeout(qT); qT = setTimeout(function () { selQ = $("psQ").value; pickRows(); }, 150); });
     $("psAll").addEventListener("change", function (e) {
       /* owner 19 Nov 2026 ("unable to tick in bulk"): the header box also ticks the shippable "check" rows (OMS says Shipped, no AWB) */
-      lastRows.forEach(function (r) { var can = r.state === "ok" || (r.omsShipped && r.state !== "bad"); if (can && !r.ship && (view === "hold" || !r.loss || profitOk(r) || !e.target.checked)) { r.sel = e.target.checked; r.touched = true; } }); render();
+      lastRows.forEach(function (r) { var can = r.state === "ok" || (r.omsShipped && r.state !== "bad"); if (can && !r.ship && (view === "hold" || view === "fake" || !r.loss || profitOk(r) || !e.target.checked)) { r.sel = e.target.checked; r.touched = true; } }); render();
     });
     setInterval(function () { if (isOpen() && !busy && document.activeElement && !document.activeElement.classList.contains("nb-w") && document.activeElement.id !== "psQ") buildPool(); }, 60000);
     /* owner 19 Nov 2026 ("I can't see here"): the Failed tab follows the NEWEST ship job of the last 12 h on every computer

@@ -16,12 +16,14 @@ async function json(db, col, id) {
   const days = +(process.env.DAYS || 10), from = new Date(Date.now() - days * 864e5).toISOString().slice(0, 10);
   const want = {};
   (await oms.collection('aikm_admin').doc('omsOrders').collection('chunks').get()).forEach((d) => (d.get('orders') || []).forEach((o) => {
-    if (!/amazon/i.test(o.channel || '') || String(o.awb || '').trim() || !/^shipped$/i.test(String(o.status || '').trim())) return;
-    const s = ymd(o.slaDate); if (!s || s < from) return;
-    const k = nid(o.channelOrderId); if (k && !want[k]) want[k] = { ch: o.channel, sla: s, item: String(o.productName || '').slice(0, 40), unk: /^unknown$/i.test(String(o.buyerAddress1 || '').trim()) };
+    if (!/amazon/i.test(o.channel || '') || String(o.awb || '').trim()) return;
+    const st = String(o.status || '').trim(), isNew = /^(new|ready to ship|pending|confirmed)$/i.test(st);
+    if (!isNew && !/^shipped$/i.test(st)) return;
+    const s = ymd(o.slaDate); if (!isNew && (!s || s < from)) return;
+    const k = nid(o.channelOrderId); if (k && !want[k]) want[k] = { ch: o.channel, sla: s, isNew, item: String(o.productName || '').slice(0, 40), unk: /^unknown$/i.test(String(o.buyerAddress1 || '').trim()) };
   }));
   const ids = Object.keys(want);
-  console.log('OMS Shipped without AWB, SLA since', from, ':', ids.length);
+  console.log('OMS Amazon orders checked (Shipped without AWB since', from, '+ all New):', ids.length, '· New:', ids.filter((k) => want[k].isNew).length);
   // Amazon snapshot orders of every account
   const amz = {};
   for (const a of ACCTS) {
@@ -45,6 +47,8 @@ async function json(db, col, id) {
     else if (a && /unshipped|pending/i.test(a.st || '')) v = 'unshipped';
     else if (a && /shipped|delivered/i.test(a.st || '')) v = 'amazon_shipped_no_awb';
     else v = 'unknown_on_amazon';
+    // OMS "New" orders: only the ones Self-Ship must NOT show are kept (Easy Ship / cancelled / real AWB) - keeps the doc small
+    if (want[k].isNew && !['easyship', 'cancelled', 'shipped_real'].includes(v)) return;
     out[k] = { v, acct: a ? a.acct : '', amz: a ? a.st : '', sla: want[k].sla, conf: conf[k] ? 1 : 0, unk: want[k].unk ? 1 : 0 };
     (groups[v] = groups[v] || []).push(k);
   });

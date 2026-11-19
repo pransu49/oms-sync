@@ -1,7 +1,7 @@
 name: Check OMS-shipped orders without AWB (read-only)
 on:
   schedule:
-    - cron: '23 */2 * * *'   # every 2 h: Amazon status for OMS-"Shipped"-without-AWB orders -> aikm_admin/shipCheck (console)
+    - cron: '23 * * * *'   # every hour (owner 19 Nov 2026: Easy Ship orders must leave Self-Ship quickly): Amazon status for OMS-"Shipped"-without-AWB orders -> aikm_admin/shipCheck (console)
   workflow_dispatch:
     inputs:
       write: { description: 'on = save verdicts for the console', required: false, default: 'off' }
