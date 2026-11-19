@@ -54,7 +54,10 @@ async function json(db, col, id, f = 'data') { try { const d = await db.collecti
     if (ph(o.buyerPhone).length < 10) why.push('no phone in OMS');
     if (!String(o.buyerAddress1 || '').trim() || /^unknown$/i.test(String(o.buyerAddress1 || '').trim())) why.push('no address in OMS');
     if (!/^\d{6}$/.test(String(o.buyerPincode || '').trim())) why.push('no pincode');
-    add('NOT shipped yet (waiting in Self-Ship)' + (why.length ? ' - ' + why[0].split(':')[0] : ' - never sent to ProShip'), k, acct + ' ' + st + ' ' + why.join(' | '));
+    const prof = L.reduce((t, x) => t + (parseFloat(x.profit) || 0), 0), sla = String(o.slaDate || '').slice(0, 12);
+    if (!why.length) { if (prof < 0) why.push('real LOSS (OMS profit < 0)'); else if (prof < 38) why.push('low profit (OMS < 38) - On hold'); else why.push('profit OK - was not ticked / not in the last job'); }
+    why.push('OMS profit ' + Math.round(prof) + ' sla ' + sla);
+    add('NOT shipped yet (waiting in Self-Ship)' + ' - ' + why[0].split(':')[0].split(' (')[0], k, acct + ' ' + st + ' ' + why.join(' | '));
   });
   Object.keys(G).sort((a, b) => G[b].length - G[a].length).forEach((g) => {
     console.log(`\n=== ${g}: ${G[g].length}`);
