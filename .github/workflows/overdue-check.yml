@@ -1,5 +1,7 @@
 name: Check OMS-shipped orders without AWB (read-only)
 on:
+  schedule:
+    - cron: '23 */2 * * *'   # every 2 h: Amazon status for OMS-"Shipped"-without-AWB orders -> aikm_admin/shipCheck (console)
   workflow_dispatch:
     inputs:
       write: { description: 'on = save verdicts for the console', required: false, default: 'off' }
@@ -15,8 +17,8 @@ jobs:
       - run: npm install --no-save firebase-admin@12
       - run: node tools/overdue-check.js
         env:
-          WRITE: ${{ inputs.write }}
-          DAYS: ${{ inputs.days }}
+          WRITE: ${{ github.event_name == 'schedule' && 'on' || inputs.write }}
+          DAYS: ${{ inputs.days || '10' }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}

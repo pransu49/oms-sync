@@ -602,6 +602,7 @@
       if (/^(new|ready to ship|pending|confirmed)$/i.test(st)) return true;
       /* owner 18 Nov 2026 ("these orders are not reflecting"): OMS shows "Shipped" but there is NO tracking number in OMS and
          no ProShip shipment - nobody really shipped them. Show them (SLA up to 7 days back), not ticked, with a warning. */
+      var scv = (shipCheck || {})[nid(o.channelOrderId)]; if (scv && (scv.v === "cancelled" || scv.v === "easyship" || scv.v === "shipped_real")) return false;
       if (/^shipped$/i.test(st) && !liveShip(nid(o.channelOrderId))) { var d = ymd(o.slaDate); return !!d && d >= ymd(new Date(Date.now() - 7 * 864e5)); }
       return false;
     }
@@ -650,16 +651,21 @@
       if (r.noPhone && r.state === "ok" && !/^shipped$/i.test(String(o.status || "").trim())) { r.state = "check"; r.omsShipped = true; r.note = "No buyer phone in OMS \u2014 type it below (empty = saved phone, else our pickup number), then tick to ship"; }
       if (/^shipped$/i.test(String(o.status || "").trim())) {
         r.omsShipped = true;
-        if (r.state === "ok") { r.state = "check"; r.note = "OMS says Shipped, but no AWB \u2014 check, then tick to ship" + (r.noPhone ? ". No buyer phone in OMS: type it below (empty = our pickup number)" : ""); }
+        var sc = (shipCheck || {})[id];
+        var why = sc && sc.v === "amazon_shipped_no_awb" ? "Fake-shipped: Amazon shows Shipped, but no AWB in ProShip / NimbusPost / Zippy \u2014 ship it now"
+          : sc && sc.v === "unshipped" ? "Amazon still Unshipped (OMS is wrong) \u2014 ship it now" : "OMS says Shipped, but no AWB \u2014 check, then tick to ship";
+        if (r.state === "ok") { r.state = "check"; r.note = why + (r.noPhone ? ". No buyer phone in OMS: type it below (empty = our pickup number)" : ""); }
       }
       return r;
     }
     /* buyer details saved from the owner's OMS file (aikm_admin/proshipPhones, owner 19 Nov 2026): OMS shows "Unknown" once an
        order is marked Shipped. 1 read per console load; shown on the row so the owner sees the real address before shipping. */
-    var savedBuyers = null;
+    var savedBuyers = null, shipCheck = {};
     function loadSavedBuyers() {
       var d = db(); if (!d || savedBuyers) return; savedBuyers = {};
       d.collection("aikm_admin").doc("proshipPhones").get().then(function (x) { savedBuyers = (x.exists && x.get("p")) || {}; buildPool(); }).catch(function () {});
+      /* Amazon's own status for OMS-"Shipped"-without-AWB orders (robot overdue-check.js, every 2 h): aikm_admin/shipCheck. 1 read per load. */
+      d.collection("aikm_admin").doc("shipCheck").get().then(function (x) { shipCheck = (x.exists && x.get("v")) || {}; buildPool(); }).catch(function () {});
     }
     function withSaved(o) {
       var sb = savedBuyers && savedBuyers[nid(o.channelOrderId)], b = sb && sb.b;
@@ -868,7 +874,7 @@
       body.querySelectorAll(".hub-lbl").forEach(function (b) { b.addEventListener("click", function () { labelsFor([b.dataset.id], b); }); });
       lblBtnText();
       body.querySelectorAll(".hub-map").forEach(function (b) { b.addEventListener("click", function () { var r = lastRows[+b.dataset.i]; if (r) openMap(r, r.items[+b.dataset.k]); }); });
-      var okRows = lastRows.filter(function (r) { return r.state === "ok" && !r.ship && (view === "hold" || !r.loss || profitOk(r)); });
+      var okRows = lastRows.filter(function (r) { return (r.state === "ok" || (r.omsShipped && r.state !== "bad")) && !r.ship && (view === "hold" || !r.loss || profitOk(r)); });
       $("psAll").checked = okRows.length > 0 && okRows.every(function (r) { return r.sel; });
       $("psResult").style.display = "block";
       $("psShip").disabled = !sel || busy;
@@ -1170,7 +1176,8 @@
     $("psAcct").addEventListener("change", function (e) { selAcct = e.target.value; renderDates(); });
     var qT; $("psQ").addEventListener("input", function () { clearTimeout(qT); qT = setTimeout(function () { selQ = $("psQ").value; pickRows(); }, 150); });
     $("psAll").addEventListener("change", function (e) {
-      lastRows.forEach(function (r) { if (r.state === "ok" && !r.ship && (view === "hold" || !r.loss || profitOk(r) || !e.target.checked)) { r.sel = e.target.checked; r.touched = true; } }); render();
+      /* owner 19 Nov 2026 ("unable to tick in bulk"): the header box also ticks the shippable "check" rows (OMS says Shipped, no AWB) */
+      lastRows.forEach(function (r) { var can = r.state === "ok" || (r.omsShipped && r.state !== "bad"); if (can && !r.ship && (view === "hold" || !r.loss || profitOk(r) || !e.target.checked)) { r.sel = e.target.checked; r.touched = true; } }); render();
     });
     setInterval(function () { if (isOpen() && !busy && document.activeElement && !document.activeElement.classList.contains("nb-w") && document.activeElement.id !== "psQ") buildPool(); }, 60000);
     /* owner 19 Nov 2026 ("I can't see here"): the Failed tab follows the NEWEST ship job of the last 12 h on every computer
