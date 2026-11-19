@@ -63,7 +63,7 @@ async function json(db, col, id, f = 'data') { try { const d = await db.collecti
     console.log(`\n=== ${g}: ${G[g].length}`);
     const byAcct = {}; G[g].forEach((x) => { const a = (x.split('  ')[1] || '').split(' ')[0] || '-'; byAcct[a] = (byAcct[a] || 0) + 1; });
     console.log('   by account:', JSON.stringify(byAcct), '| Amazon status NOW (snapshot):', JSON.stringify(GS[g]));
-    G[g].slice(0, 12).forEach((x) => console.log('   ', x));
+    G[g].slice(0, process.env.ALL ? 9999 : 12).forEach((x) => console.log('   ', x));
   });
   if (Object.keys(confErr).length) console.log('\nAMAZON CONFIRM ERRORS:', JSON.stringify(confErr, null, 1));
   console.log('\nlast ship jobs:', jobs.slice(0, 5).map((j) => `${j.status} sent=${Object.keys(j.ids || {}).length} res=${Object.keys(j.results || {}).length} at=${j.createdAt && j.createdAt.toDate && j.createdAt.toDate().toISOString()}`).join('\n  '));

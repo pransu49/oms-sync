@@ -14,6 +14,7 @@ jobs:
       - run: npm install --no-save firebase-admin@12
       - run: node tools/unship-diag.js
         env:
+          ALL: "1"
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}
