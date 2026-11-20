@@ -119,7 +119,7 @@
   function byKey() {
     var M = {};
     ACC.forEach(function (a) { var P = PLAN[a[0]]; if (!P) return;
-      P.rows.forEach(function (r) { if (!r[2]) return; r[2].split("+").forEach(function (part) { var k = part.split("*")[0]; (M[k] = M[k] || []).push({ acct: a[0], an: a[1], sku: r[0], asin: r[1], need: +part.split("*")[1] || 1, target: r[3], amz: r[4], st: r[5], combo: r[2].indexOf("+") > 0 }); }); });
+      P.rows.forEach(function (r) { if (!r[2]) return; r[2].split("+").forEach(function (part) { var k = part.split("*")[0]; (M[k] = M[k] || []).push({ acct: a[0], an: a[1], sku: r[0], asin: r[1], need: +part.split("*")[1] || 1, target: r[3], amz: r[4], st: r[5], oosAt: +r[8] || 0, combo: r[2].indexOf("+") > 0 }); }); });
     });
     return M;
   }
@@ -182,7 +182,7 @@
       '<td class="r"><input class="iv-own-in" type="number" min="0" step="1" data-k="' + esc(r.k) + '" data-v="' + (K.own || 0) + '" value="' + (K.own || 0) + '"></td>' +
       '<td class="r">' + (K.pd ? '<span style="color:#A86A12;font-weight:600">' + nf(K.pd) + "</span>" : "0") + "</td>" +
       '<td class="r"><span class="iv-q ' + (r.oos ? "bad" : "ok") + '">' + nf(Math.max(0, Math.floor(r.freeGN))) + "</span>" + (r.free !== r.freeGN ? '<div class="iv-sub">Sasta ' + nf(Math.max(0, Math.floor(r.free))) + "</div>" : "") + "</td>" +
-      '<td><span class="iv-st ' + (r.oos ? "bad" : "ok") + '">' + (r.oos ? "Out of stock" : "In stock") + "</span></td>" +
+      '<td><span class="iv-st ' + (r.oos ? "bad" : "ok") + '">' + (r.oos ? "Out of stock" : "In stock") + "</span>" + (r.oosAt ? '<div class="iv-sub" title="When the robot set it to 0 on Amazon">OOS on Amazon · ' + ago(r.oosAt) + "</div>" : "") + "</td>" +
       "<td>" + (ch || '<span class="iv-sub">' + (K.mappedOnly ? "Mapped to LOTS · no live listing on these accounts" : "No Amazon listing linked yet") + "</span>") + "</td></tr>"; }
   function pic(u) { if (!u.img) return '<span class="iv-pic empty"><i class="ti ti-photo"></i></span>';
     return '<a class="iv-pic" href="https://www.amazon.in/dp/' + esc(u.asin) + '" target="_blank" rel="noopener"><img loading="lazy" alt="" src="' + esc(String(u.img).replace(/\.([a-z]+)$/i, "._SL120_.$1")) + '" onerror="this.parentNode.classList.add(\'empty\');this.remove()"></a>'; }
@@ -209,7 +209,8 @@
     var keys = Object.keys(KEYS).filter(function (k) { return M[k] || KEYS[k].mappedOnly || (CTL.own[k] && +CTL.own[k].q > 0); });
     var rows = keys.map(function (k) { var K = KEYS[k], L = M[k] || [], free = freeOf(K, true), freeGN = freeOf(K, false), vend = /^A:/.test(k), oos = freeGN < (vend ? 1 : 10);
       var diff = L.some(function (x) { return x.st === "diff" || x.st === "fail"; });
-      return { k: k, K: K, L: L, name: nameOf(k), free: free, freeGN: freeGN, oos: oos, diff: diff, own: (K.own || 0) > 0, pend: (K.pd || 0) > 0,
+      var oosAt = L.reduce(function (m, x) { return x.target === 0 && x.oosAt > m ? x.oosAt : m; }, 0);
+      return { k: k, K: K, L: L, oosAt: oosAt, name: nameOf(k), free: free, freeGN: freeGN, oos: oos, diff: diff, own: (K.own || 0) > 0, pend: (K.pd || 0) > 0,
         v: { name: nameOf(k), gn: vend ? null : K.gn, s62: vend ? null : K.s62, own: K.own || 0, pd: K.pd || 0, fin: Math.max(0, Math.floor(freeGN)), st: oos ? "Out of stock" : "In stock",
           amz: !L.length ? "No Amazon listing" : diff ? "Amazon differs - fixed at next push" : "Matches Amazon" } }; });
     var unl = []; ACC.forEach(function (a) { var P = PLAN[a[0]]; if (P) P.rows.forEach(function (r) { if (r[5] === "unlinked" || r[5] === "nostock") unl.push({ ac: a[0], acct: a[1], sku: r[0], asin: r[1], amz: r[4], why: r[5], name: r[6] || "", img: r[7] || "" }); }); });
@@ -223,7 +224,8 @@
       : filt === "pend" ? rows.filter(function (r) { return r.pend; }) : filt === "diff" ? rows.filter(function (r) { return r.diff; }) : rows;
     if (q) { list = list.filter(function (r) { return (r.name + " " + r.k + " " + r.L.map(function (x) { return x.sku + " " + x.asin; }).join(" ")).toLowerCase().indexOf(q) >= 0; });
       unl = unl.filter(function (u) { return (u.acct + " " + u.sku + " " + u.asin + " " + u.name).toLowerCase().indexOf(q) >= 0; }); }
-    list.sort(function (a, b) { return (b.pend - a.pend) || (a.free - b.free); });
+    var newOos = filt === "all" || filt === "oos" || !filt; // owner 20 Nov 2026: latest marked OOS on Amazon on top
+    list.sort(function (a, b) { return (newOos ? (b.oosAt || 0) - (a.oosAt || 0) : 0) || (b.pend - a.pend) || (a.free - b.free); });
     var base = list.length;
     if (hasCM()) { CM.rows[T] = list; list = cmApply(T, list, COLS); }
     CUR = list; CUR_UNL = unl; shownN = 0;
