@@ -279,7 +279,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Each account writes `spapiSnapshots/<acct>_pending` {u:{asin:units}} and `<acct>_invPlan` {rows JSON [sku, asin, "code*need+..", target, amz, st], keys JSON {k:[gn,62,own,pending]}, stats}.
   Own stock + switches: main `aikm_admin/invCentral` {own:{k:{q,n,at}}, live:{acct:true}}. It PUSHES to Amazon only for accounts switched to
   "AIKM tool" (max 300 per run, zeros first; stops if 60%+ in-stock would go 0); for those `runStockGuard` (OOS rule + restocks) is skipped.
-  Owner must also switch OFF OMS Guru's inventory sync for that channel. Screen: `console/inventory-tool.js`, opened as `/pages/amazon?app=inventory`
+  Owner must also switch OFF OMS Guru's inventory sync for that channel. Screen: `console/inventory-tool.js` — since 20 Nov 2026 a TAB "Central inventory" on the Amazon page (owner: no separate tool); data loads only when the tab is opened. `/pages/amazon?app=inventory` opens the page on that tab
   (loader block `aikmInventoryJs` at the end of `amazon-name-search.js` — keep it). Firebase: ~4 reads + 2 writes per sync run (~1,500 reads, ~770 writes/day all accounts); screen 5 reads per open.
 - **Amazon PII (restricted role "Direct-to-Consumer Shipping", applied 17 Nov 2026, retention declared 31-90 days)**: buyer name / address / phone
   may be kept at most 90 days after shipment. Today: OMS live orders 15 days (replaced each sync), proshipIndex 15 days, rtoIndex rebuilt from

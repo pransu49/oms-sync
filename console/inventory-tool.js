@@ -1,32 +1,34 @@
 /* ===== AIKM CENTRAL INVENTORY (owner 17 Nov 2026) =====
    "Make a combined inventory like OMS, from where stock gets distributed - after some time I will stop OMS for orders."
-   Opens as  /pages/amazon?app=inventory  (own tool on the AIKM dashboard, Amazon tabs hidden).
+   Owner 20 Nov 2026: "deploy central inventory tab in this sp-api, as I don't want a different tool for this" ->
+   it is now a TAB on the Amazon page (/pages/amazon), next to Orders / Inventory / Competitor Pricing / OMS inventory.
+   The old link /pages/amazon?app=inventory still works: it opens the Amazon page with this tab selected.
    Stock per product = LOTS-GN (+ LOTS-62 for Sasta Store, higher of the two) + OWN stock typed here - units in pending orders of
-   all 4 Amazon accounts. Every listing of the product gets that full stock; under 10 free -> 0.
+   all Amazon accounts. Every listing of the product gets that full stock; under 10 free -> 0.
    The numbers are worked out by each account's sync robot (spapi-sync.js runCentralInventory -> spapiSnapshots/<acct>_invPlan).
-   This screen: reads the 4 plans (SP-API Firebase) + aikm_admin/invCentral (main) = 5 reads per open; writes only when you save
-   own stock or switch an account. An account switched to "AIKM tool" gets its Amazon stock from here (OMS Guru no longer). */
+   This tab: reads the 5 plans (SP-API Firebase) + aikm_admin/invCentral (main) = 6 reads, ONLY when the tab is opened (not on page load);
+   writes only when you save own stock or switch an account. An account switched to "AIKM tool" gets its Amazon stock from here. */
 (function () {
-  if (!/[?&]app=inventory(&|$)/.test(location.search)) return;
   if (window.__aikmInvTool) return; window.__aikmInvTool = 1;
+  var TAB = "centralinv", OPEN_NOW = /[?&]app=inventory(&|$)/.test(location.search);
   var ACC = [["praso", "Praso"], ["sastastore", "Sasta Store"], ["vishal", "Vishal E-Com"], ["munda", "Ecommerce Munda"], ["aikm", "AIKM Pharma"]];
   var $ = function (id) { return document.getElementById(id); };
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); };
   var nf = function (v) { return v == null || v === "" ? "—" : Number(v).toLocaleString("en-IN", { maximumFractionDigits: 2 }); };
   var ago = function (t) { if (!t) return "never"; var m = Math.round((Date.now() - t) / 6e4); return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 2880 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago"; };
   var toast = function (m, bad) { if (typeof spToast === "function") spToast(m, bad); };
-  var PLAN = {}, CTL = { own: {}, live: {} }, KEYS = {}, filt = "all", src = "lots", q = "", page = 0, loaded = false;
+  var PLAN = {}, CTL = { own: {}, live: {} }, KEYS = {}, filt = "all", src = "lots", q = "", page = 0, loaded = false, loading = false;
 
-  /* ---------- layout: hide the Amazon screen, show ours ---------- */
+  /* ---------- layout: a tab on the Amazon page ---------- */
   var st = document.createElement("style"); st.id = "invCss";
   st.textContent =
-    "#tab-spapi>:not(#invApp){display:none!important}#spapiAccountSwitcherWrap,.ap-act,#rlOpen,#aaOpen,#psOpen,#atOpen{display:none!important}" +
+    "#invApp{padding:2px 0 0}" +
     "#invApp{font-family:Inter,system-ui,sans-serif;color:var(--ink,#14213D)}" +
     ".iv-hd{display:flex;align-items:flex-end;gap:16px;margin:0 0 16px}.iv-hd h2{font:600 22px Lexend,sans-serif;margin:0}.iv-hd p{margin:4px 0 0;color:var(--muted,#8B909B);font-size:12.5px;max-width:760px;line-height:1.5}" +
     ".iv-hd .sp{flex:1}.iv-btn{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:9px;font-size:12.5px;font-weight:600;border:1px solid var(--line,#E7E1D3);background:#fff;color:var(--navy,#0F1E35);white-space:nowrap}" +
     ".iv-btn:hover{border-color:var(--gold,#C9A24B);background:var(--gold-soft,#F6EEDB)}.iv-btn.pri{background:var(--navy,#0F1E35);color:#fff;border-color:var(--navy,#0F1E35)}.iv-btn.pri:hover{background:#243A5E}" +
     ".iv-btn.gold{background:linear-gradient(135deg,#E3C47A,#C9A24B);border-color:#C9A24B;color:#0F1E35}" +
-    ".iv-acc{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}" +
+    ".iv-acc{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}" +
     ".iv-ac{background:#fff;border:1px solid var(--line,#E7E1D3);border-radius:14px;padding:14px;box-shadow:0 1px 2px rgba(15,30,53,.04),0 6px 24px rgba(15,30,53,.05);position:relative;overflow:hidden}" +
     ".iv-ac.live{border-color:#1E7A4B;box-shadow:0 0 0 3px rgba(30,122,75,.12)}.iv-ac.live:before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:#1E7A4B}" +
     ".iv-ac h4{margin:0;font:600 14px Lexend,sans-serif;display:flex;align-items:center;gap:8px}.iv-own{font-size:11px;font-weight:600;border-radius:20px;padding:2px 9px}" +
@@ -50,14 +52,18 @@
     ".iv-more{text-align:center;padding:14px}.iv-scroll{overflow:auto;max-height:calc(100vh - 360px);min-height:240px}" +
     "@media(max-width:1100px){.iv-acc{grid-template-columns:repeat(2,1fr)}.iv-k{grid-template-columns:repeat(3,1fr)}}";
   document.head.appendChild(st);
-  document.title = "Central Inventory — AIKM";
-  var t = document.querySelector(".ap-title"); if (t) t.textContent = "Central Inventory";
-  var mk = document.querySelector(".ap-mark"); if (mk) mk.textContent = "I";
 
   function shell() {
-    var main = $("tab-spapi"); if (!main || $("invApp")) return !!$("invApp");
-    main.insertAdjacentHTML("afterbegin", '<div id="invApp"><div class="iv-hd"><div><h2>Central Inventory</h2><div class=\"iv-sub\" style=\"margin-top:2px\">Final stock for every Amazon listing - replaces OMS Guru inventory</div><p>One stock for every product: <b>LOTS-GN</b> (+ <b>LOTS-62</b> for Sasta Store) + <b>your own stock</b> − <b>pending orders</b> of all 4 Amazon accounts. Every listing gets the same full stock; under 10 free → out of stock. Updates with every Amazon sync (about 15 min).</p></div><span class="sp"></span><button type="button" class="iv-btn" id="ivReload"><i class="ti ti-refresh"></i>Refresh</button></div>' +
-      '<div class="iv-acc" id="ivAcc"></div><div class="ap-card" id="ivCard"><div class="iv-empty">Loading stock…</div></div></div>');
+    if ($("invApp")) return true;
+    var bar = $("spapiRtabbar"), after = $("spapiRpanel-pricing");
+    if (!bar || !after || typeof window.switchSpapiSubtabKpi !== "function") return false;
+    bar.insertAdjacentHTML("beforeend", '<button class="rtabbtn" id="invTab" data-spapi-r="' + TAB + '"><i class="ti ti-stack-2"></i>Central inventory <span class="rtab-count" id="invCount" title="Products out of stock (under 10 free)">·</span></button>');
+    var last = after; while (last.nextElementSibling && last.nextElementSibling.classList.contains("rpanel")) last = last.nextElementSibling;
+    last.insertAdjacentHTML("afterend", '<div class="rpanel" id="spapiRpanel-' + TAB + '"><div id="invApp"><div class="iv-hd"><div><h2>Central Inventory</h2><div class=\"iv-sub\" style=\"margin-top:2px\">Final stock for every Amazon listing - replaces OMS Guru inventory</div><p>One stock for every product: <b>LOTS-GN</b> (+ <b>LOTS-62</b> for Sasta Store) + <b>your own stock</b> − <b>pending orders</b> of all Amazon accounts. Every listing gets the same full stock; under 10 free → out of stock. Updates with every Amazon sync (about 15 min).</p></div><span class="sp"></span><button type="button" class="iv-btn" id="ivReload"><i class="ti ti-refresh"></i>Refresh</button></div>' +
+      '<div class="iv-acc" id="ivAcc"></div><div class="ap-card" id="ivCard"><div class="iv-empty">Loading stock…</div></div></div></div>');
+    /* load the stock only the first time the tab is opened (saves Firebase reads) */
+    var sw = window.switchSpapiSubtabKpi;
+    window.switchSpapiSubtabKpi = function (n) { sw.apply(this, arguments); if (n === TAB && !loaded && !loading) load(); };
     $("ivReload").onclick = function () { load(true); };
     $("ivAcc").addEventListener("click", function (e) { var b = e.target.closest("[data-sw]"); if (b) switchAcc(b.dataset.sw, b.dataset.to === "1"); });
     $("ivCard").addEventListener("click", function (e) {
@@ -75,8 +81,8 @@
 
   /* ---------- data ---------- */
   function load(force) {
-    if (typeof fbDbSpapi === "undefined" || typeof fbDb === "undefined") return setTimeout(function () { load(force); }, 600);
-    var P = fbDbSpapi.collection("spapiSnapshots");
+    if (typeof fbDbSpapi === "undefined" || typeof fbDb === "undefined") { loading = true; return setTimeout(function () { loading = false; load(force); }, 600); }
+    var P = fbDbSpapi.collection("spapiSnapshots"); loading = true;
     return Promise.all(ACC.map(function (a) { return P.doc(a[0] + "_invPlan").get().catch(function () { return null; }); }).concat([fbDb.collection("aikm_admin").doc("invCentral").get().catch(function () { return null; })]))
       .then(function (r) {
         PLAN = {}; KEYS = {};
@@ -89,11 +95,11 @@
         });
         var c = r[ACC.length]; CTL = (c && c.exists && c.data()) || {}; CTL.own = CTL.own || {}; CTL.live = CTL.live || {};
         Object.keys(CTL.own).forEach(function (k) { if (!KEYS[k]) KEYS[k] = { gn: null, s62: null, own: +CTL.own[k].q || 0, pd: 0 }; else KEYS[k].own = +CTL.own[k].q || 0; });
-        loaded = true; drawAcc(); draw();
+        loaded = true; loading = false; drawAcc(); draw();
         /* the LOTS price list (stock of every LOTS product) loads a few seconds after this screen - draw again once it is in */
         var tries = 0, wait = setInterval(function () { var n = typeof lotsPriceByCode !== "undefined" ? Object.keys(lotsPriceByCode).length : 0;
           if (n > 500 || ++tries > 60) { clearInterval(wait); if (n > 500) draw(); } }, 1000);
-      });
+      }).catch(function (e) { loading = false; var c = $("ivCard"); if (c) c.innerHTML = '<div class="iv-empty">Could not load stock - check internet and press Refresh.</div>'; console.warn("central inventory", e); });
   }
   function nameOf(k) {
     if (/^A:/.test(k)) { var m = typeof STORE !== "undefined" && STORE.asinLotsMap ? STORE.asinLotsMap[k.slice(2)] : null; return (m && (m.name || (m.vendor && m.vendor.item))) || k.slice(2); }
@@ -196,8 +202,11 @@
     var qi = $("ivQ"); qi.oninput = function (e) { q = e.target.value.toLowerCase(); page = 0; draw(); var x = $("ivQ"); x.focus(); x.setSelectionRange(x.value.length, x.value.length); };
     if (focus) qi.focus();
     countDirty();
+    var cnt = $("invCount"); if (cnt) cnt.textContent = nf(rows.filter(function (r) { return r.oos; }).length);
   }
 
-  function start() { if (!shell()) return setTimeout(start, 300); load(); }
+  var tries = 0;
+  function start() { if (!shell()) return ++tries < 100 ? setTimeout(start, 300) : null;
+    if (OPEN_NOW) { window.switchSpapiSubtabKpi(TAB); try { history.replaceState(null, "", location.pathname + location.hash); } catch (e) {} } }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start); else start();
 })();
