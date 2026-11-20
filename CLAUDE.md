@@ -320,3 +320,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   from browsers), `aikm_auditReview` = read-only. `audit-review.js` (workflow `audit-review.yml`, 1st + 15th ~9:47 AM IST): 14-day summary
   per account/page/device + GitHub robot runs + flags (night 11 PM-7 AM IST, new account/device, failed runs) -> Telegram + `aikm_auditReview/<date>`;
   deletes `aikm_audit` older than 400 days. Firebase: ~1 write per page open (OMS project), ~1-3k reads per review.
+- **Auto "Show more" on scroll** (owner 20 Nov 2026, "scrolling instead of 100 more, everywhere"): `console/auto-more.js` clicks any visible
+  button whose text starts "Show/Load N more" or "Show more (" once it is within 350 px of the visible end, and puts the scroll position back
+  (lists redraw their table). Loaded by `aikmAutoMoreJs` blocks at the end of `amazon-name-search.js` and `refund-tab.js` — keep them.
+  New lists: keep the "Show N more" wording and it works automatically. 0 Firebase.
