@@ -52,7 +52,11 @@
     ".iv-end{text-align:center;padding:12px;font-size:11.5px;color:var(--muted,#8B909B)}.iv-tbl th.t-r{text-align:right}.iv-tbl th.cm-th{cursor:pointer}" +
     ".iv-st{display:inline-block;font-size:11px;font-weight:600;border-radius:20px;padding:2px 9px;white-space:nowrap}.iv-st.ok{background:#E6F3EC;color:#1E7A4B}.iv-st.bad{background:#FCECEA;color:#B42318}" +
     ".iv-sel{height:36px;border:1px solid var(--line,#E7E1D3);border-radius:9px;padding:0 10px;font:600 12.5px Inter,sans-serif;color:var(--navy,#0F1E35);background:#fff;outline:none;cursor:pointer}.iv-sel:focus{border-color:var(--gold,#C9A24B)}" +
-    ".iv-tools .ap-search{flex:0 1 320px}.iv-more{text-align:center;padding:14px}.iv-scroll{overflow:auto;max-height:calc(100vh - 360px);min-height:240px}" +
+    ".iv-tools .ap-search{flex:0 1 320px}.iv-accs .iv-sg{padding:7px 10px}" +
+    ".iv-pc{display:flex;align-items:center;gap:12px}.iv-pic{flex:none;width:56px;height:56px;border:1px solid var(--line,#E7E1D3);border-radius:9px;background:#fff;display:inline-flex;align-items:center;justify-content:center;overflow:hidden}" +
+    ".iv-pic img{width:100%;height:100%;object-fit:contain;padding:3px;box-sizing:border-box}.iv-pic.empty{background:var(--cream,#FBF9F4);color:#c4bfb2;font-size:18px}" +
+    ".iv-nm{font-weight:500;line-height:1.35;max-width:620px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}" +
+    ".iv-acct{font-weight:600;color:var(--navy,#0F1E35)}.iv-more{text-align:center;padding:14px}.iv-scroll{overflow:auto;max-height:calc(100vh - 360px);min-height:240px}" +
     "@media(max-width:1100px){.iv-acc{grid-template-columns:repeat(2,1fr)}.iv-k{grid-template-columns:repeat(3,1fr)}}";
   document.head.appendChild(st);
 
@@ -71,9 +75,13 @@
     $("ivAcc").addEventListener("click", function (e) { var b = e.target.closest("[data-sw]"); if (b) switchAcc(b.dataset.sw, b.dataset.to === "1"); });
     $("ivCard").addEventListener("click", function (e) {
       var sg = e.target.closest("[data-src]"); if (sg) { src = sg.dataset.src; if (filt === "unl") filt = "all"; page = 0; draw(); return; }
+      var ab = e.target.closest("[data-acc]"); if (ab) { acc = ab.dataset.acc; draw(); return; }
       var tl = e.target.closest("[data-f]"); if (tl) { filt = tl.dataset.f; page = 0; draw(); return; }
             var sv = e.target.closest("[data-save]"); if (sv) { saveOwn(); return; }
-      var mp = e.target.closest("[data-map]"); if (mp && typeof openSpapiMatchModal === "function") { openSpapiMatchModal(mp.dataset.map); toast("Map it to the LOTS product and Save — the next sync picks it up"); }
+      var mp = e.target.closest("[data-map]"); if (mp && typeof openSpapiMatchModal === "function") { openSpapiMatchModal(mp.dataset.map);
+        var nm = mp.dataset.name || ""; if (nm) setTimeout(function () { var t = $("spapiMatchModalTitle"); if (t && /^ASIN:/.test(t.textContent)) t.textContent = nm;
+          var i = $("spapiMatchModalInput"); if (i && !i.value) { i.value = nm.split(/[|,(]/)[0].trim().slice(0, 60); i.dispatchEvent(new Event("input", { bubbles: true })); } }, 150);
+        toast("Map it to the LOTS product and Save — the next sync picks it up"); }
     });
     $("ivCard").addEventListener("input", function (e) { var i = e.target.closest(".iv-own-in"); if (i) { i.classList.toggle("dirty", String(i.value) !== String(i.dataset.v)); countDirty(); } });
     $("ivCard").addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.closest(".iv-own-in")) { e.preventDefault(); saveOwn(); } });
@@ -176,8 +184,11 @@
       '<td class="r"><span class="iv-q ' + (r.oos ? "bad" : "ok") + '">' + nf(Math.max(0, Math.floor(r.freeGN))) + "</span>" + (r.free !== r.freeGN ? '<div class="iv-sub">Sasta ' + nf(Math.max(0, Math.floor(r.free))) + "</div>" : "") + "</td>" +
       '<td><span class="iv-st ' + (r.oos ? "bad" : "ok") + '">' + (r.oos ? "Out of stock" : "In stock") + "</span></td>" +
       "<td>" + (ch || '<span class="iv-sub">' + (K.mappedOnly ? "Mapped to LOTS · no live listing on these accounts" : "No Amazon listing linked yet") + "</span>") + "</td></tr>"; }
-  function unlHtml(u) { return "<tr><td>" + esc(u.acct) + '</td><td style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px">' + esc(u.sku) + '</td><td><a href="https://www.amazon.in/dp/' + esc(u.asin) + '" target="_blank" rel="noopener">' + esc(u.asin) + '</a></td><td class="r">' + nf(u.amz) +
-      "</td><td>" + (u.why === "unlinked" ? "Not mapped to LOTS / a vendor - stock not managed" : "Not in LOTS - type its own stock in the table to manage it") + "</td><td>" + (u.asin ? '<button type="button" class="iv-btn" data-map="' + esc(u.asin) + '"><i class="ti ti-link"></i>Map</button>' : "") + "</td></tr>"; }
+  function pic(u) { if (!u.img) return '<span class="iv-pic empty"><i class="ti ti-photo"></i></span>';
+    return '<a class="iv-pic" href="https://www.amazon.in/dp/' + esc(u.asin) + '" target="_blank" rel="noopener"><img loading="lazy" alt="" src="' + esc(String(u.img).replace(/\.([a-z]+)$/i, "._SL120_.$1")) + '" onerror="this.parentNode.classList.add(\'empty\');this.remove()"></a>'; }
+  function unlHtml(u) { return '<tr><td><div class="iv-pc">' + pic(u) + '<div><div class="iv-nm">' + (u.name ? esc(u.name) : '<span class="iv-sub">Title loads with the next sync (about 15 min)</span>') + '</div>' +
+      '<div class="iv-sub"><span class="iv-acct">' + esc(u.acct) + '</span> · SKU <span style="font-family:ui-monospace,Menlo,monospace">' + esc(u.sku) + '</span> · ASIN <a href="https://www.amazon.in/dp/' + esc(u.asin) + '" target="_blank" rel="noopener">' + esc(u.asin) + "</a></div></div></div></td>" +
+      '<td class="r">' + nf(u.amz) + "</td><td>" + (u.why === "unlinked" ? "Not mapped to LOTS / a vendor - stock not managed" : "Not in LOTS - type its own stock in the table to manage it") + "</td><td>" + (u.asin ? '<button type="button" class="iv-btn gold" data-map="' + esc(u.asin) + '" data-name="' + esc(u.name || "") + '"><i class="ti ti-link"></i>Map</button>' : "") + "</td></tr>"; }
   /* next 100 rows are added at the bottom while scrolling - no "Show more" button */
   function more() {
     var tb = $("ivBody"); if (!tb) return;
@@ -201,14 +212,17 @@
       return { k: k, K: K, L: L, name: nameOf(k), free: free, freeGN: freeGN, oos: oos, diff: diff, own: (K.own || 0) > 0, pend: (K.pd || 0) > 0,
         v: { name: nameOf(k), gn: vend ? null : K.gn, s62: vend ? null : K.s62, own: K.own || 0, pd: K.pd || 0, fin: Math.max(0, Math.floor(freeGN)), st: oos ? "Out of stock" : "In stock",
           amz: !L.length ? "No Amazon listing" : diff ? "Amazon differs - fixed at next push" : "Matches Amazon" } }; });
-    var unl = []; ACC.forEach(function (a) { if (acc && acc !== a[0]) return; var P = PLAN[a[0]]; if (P) P.rows.forEach(function (r) { if (r[5] === "unlinked" || r[5] === "nostock") unl.push({ acct: a[1], sku: r[0], asin: r[1], amz: r[4], why: r[5] }); }); });
-    if (acc) rows = rows.filter(function (r) { return r.L.some(function (x) { return x.acct === acc; }); });
+    var unl = []; ACC.forEach(function (a) { var P = PLAN[a[0]]; if (P) P.rows.forEach(function (r) { if (r[5] === "unlinked" || r[5] === "nostock") unl.push({ ac: a[0], acct: a[1], sku: r[0], asin: r[1], amz: r[4], why: r[5], name: r[6] || "", img: r[7] || "" }); }); });
+    unl.forEach(function (u) { if (!u.name || !u.img) { var f = (typeof spapiInventoryRaw !== "undefined" ? spapiInventoryRaw || [] : []).find(function (i) { return i.asin === u.asin && (i.name || i.img); }); if (f) { u.name = u.name || f.name || ""; u.img = u.img || f.img || ""; } } });
+    var unlAll = unl.slice();
+    var rowsAll = rows;
+    if (acc) { rows = rows.filter(function (r) { return r.L.some(function (x) { return x.acct === acc; }); }); unl = unl.filter(function (u) { return u.ac === acc; }); }
     var nL = rows.filter(function (r) { return !/^A:/.test(r.k); }).length, nV = rows.length - nL;
     rows = rows.filter(function (r) { return src === "all" || (src === "lots") === !/^A:/.test(r.k); });
     var list = filt === "oos" ? rows.filter(function (r) { return r.oos; }) : filt === "in" ? rows.filter(function (r) { return !r.oos; }) : filt === "own" ? rows.filter(function (r) { return r.own; })
       : filt === "pend" ? rows.filter(function (r) { return r.pend; }) : filt === "diff" ? rows.filter(function (r) { return r.diff; }) : rows;
     if (q) { list = list.filter(function (r) { return (r.name + " " + r.k + " " + r.L.map(function (x) { return x.sku + " " + x.asin; }).join(" ")).toLowerCase().indexOf(q) >= 0; });
-      unl = unl.filter(function (u) { return (u.acct + " " + u.sku + " " + u.asin).toLowerCase().indexOf(q) >= 0; }); }
+      unl = unl.filter(function (u) { return (u.acct + " " + u.sku + " " + u.asin + " " + u.name).toLowerCase().indexOf(q) >= 0; }); }
     list.sort(function (a, b) { return (b.pend - a.pend) || (a.free - b.free); });
     var base = list.length;
     if (hasCM()) { CM.rows[T] = list; list = cmApply(T, list, COLS); }
@@ -217,12 +231,13 @@
       tile("oos", "Out of stock", "#B42318", rows.filter(function (r) { return r.oos; }).length, "under 10 free") + tile("pend", "Pending orders", "#C9A24B", rows.filter(function (r) { return r.pend; }).length, "products blocked") +
       tile("own", "Own stock", "#1F4E8C", rows.filter(function (r) { return r.own; }).length, "products in your godown") + tile("diff", "Amazon differs", "#A86A12", rows.filter(function (r) { return r.diff; }).length, "fixed at next push") + "</div>";
     var seg = function (v, l, n) { return '<button type="button" class="iv-sg' + (src === v ? " on" : "") + '" data-src="' + v + '">' + l + (n != null ? " · " + nf(n) : "") + "</button>"; };
-    var accSel = '<select class="iv-sel" id="ivAccSel" title="Show one Amazon account"><option value="">All accounts</option>' + ACC.map(function (a) { return '<option value="' + a[0] + '"' + (acc === a[0] ? " selected" : "") + ">" + esc(a[1]) + "</option>"; }).join("") + "</select>";
+    var accN = function (a) { return filt === "unl" ? unlAll.filter(function (u) { return !a || u.ac === a; }).length : rowsAll.filter(function (r) { return !a || r.L.some(function (x) { return x.acct === a; }); }).length; };
+    var accSel = '<span class="iv-seg iv-accs" title="Show one Amazon account">' + [["", "All accounts"]].concat(ACC).map(function (a) { return '<button type="button" class="iv-sg' + (acc === a[0] ? " on" : "") + '" data-acc="' + a[0] + '">' + esc(a[1]) + " · " + nf(accN(a[0])) + "</button>"; }).join("") + "</span>";
     var tools = '<div class="iv-tools ap-tools"><div class="ap-search"><i class="ti ti-search"></i><input type="text" id="ivQ" placeholder="Search product, LOTS code, SKU or ASIN…" value="' + esc(q) + '"></div><span class="iv-seg">' + seg("lots", "LOTS products", nL) + seg("vendor", "Vendor products", nV) + seg("all", "All") + "</span>" + accSel +
       '<button type="button" class="iv-btn' + (filt === "unl" ? " gold" : "") + '" data-f="' + (filt === "unl" ? "all" : "unl") + '"><i class="ti ti-link-off"></i>Not linked · ' + nf(unl.length) + '</button><button type="button" class="iv-btn pri" id="ivSave" data-save style="display:none"></button>' +
       '<span class="ap-count">' + nf(filt === "unl" ? unl.length : list.length) + (filt === "unl" ? " listings" : " products") + "</span></div>";
     var bar = filt !== "unl" && hasCM() && typeof cmBar === "function" ? cmBar(T, list.length, base, "products") : "";
-    var thead = filt === "unl" ? '<thead><tr><th>Account</th><th>SKU</th><th>ASIN</th><th class="r">Amazon stock</th><th>Why</th><th></th></tr></thead>'
+    var thead = filt === "unl" ? '<thead><tr><th>Amazon product</th><th class="r">Amazon stock</th><th>Why</th><th></th></tr></thead>'
       : hasCM() ? cmHead(T, COLS) : '<thead><tr>' + COLS.map(function (c) { return '<th' + (c.right ? ' class="r"' : "") + ">" + c.label + "</th>"; }).join("") + "</tr></thead>";
     var n = filt === "unl" ? unl.length : list.length;
     var focus = document.activeElement && document.activeElement.id === "ivQ";
@@ -233,7 +248,6 @@
     if (sc.scrollHeight <= sc.clientHeight + 10) more();
     var qi = $("ivQ"); qi.oninput = function (e) { var had = document.activeElement === e.target; q = e.target.value.toLowerCase(); draw(); if (had) { var x = $("ivQ"); x.focus(); x.setSelectionRange(x.value.length, x.value.length); } };
     if (focus) qi.focus();
-    $("ivAccSel").onchange = function (e) { acc = e.target.value; draw(); };
     countDirty();
     var cnt = $("invCount"); if (cnt) cnt.textContent = nf(rows.filter(function (r) { return r.oos; }).length);
   }

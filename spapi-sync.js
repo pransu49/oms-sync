@@ -2652,10 +2652,12 @@ async function runCentralInventory(sellerId) {
     if (!it || it.account !== ACCOUNT_LABEL || !it.sku || !reportSkus.has(it.sku) || (it.fulfillmentChannel || 'DEFAULT') !== 'DEFAULT') continue;
     const amz = parseInt(it.quantity, 10) || 0, ps = it.asin ? partsOf(it.asin) : null;
     if (amz > 0) inStock++;
-    if (!ps) { rows.push([it.sku, it.asin || '', '', null, amz, 'unlinked']); continue; }
+    // not-linked rows also carry the Amazon title + photo [6, 7] so the Central inventory tab can show them for mapping (owner 20 Nov 2026)
+    const nmImg = () => [String(it.name || '').slice(0, 140), it.img || ''];
+    if (!ps) { rows.push([it.sku, it.asin || '', '', null, amz, 'unlinked', ...nmImg()]); continue; }
     let units = Infinity, low = Infinity, ok = true, ownOnly = ps.every((x) => x.own);
     for (const x of ps) { const I = info(x.k, x.own); if (!I.known) { ok = false; break; } units = Math.min(units, Math.floor(Math.max(0, I.free) / x.need)); low = Math.min(low, I.free); }
-    if (!ok) { rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), null, amz, 'nostock']); continue; }
+    if (!ok) { rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), null, amz, 'nostock', ...nmImg()]); continue; }
     const min = ownOnly ? 1 : OOS_LOTS_BELOW, target = low < min || units < 1 ? 0 : Math.min(units, INV_CAP);
     if (target === 0 && amz > 0) toZero++;
     // small moves are left to the next real change (Amazon already takes its own orders off) - fewer API calls
