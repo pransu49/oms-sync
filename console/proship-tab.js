@@ -1259,6 +1259,8 @@
     var e = document.querySelector("#ndBody td.nb-muted"); if (e && /NimbusPost/.test(e.textContent)) e.textContent = window.__psIdx ? "No shipments match these filters." : "Loading ProShip shipments…";
     /* "Sync NimbusPost now" -> "Sync ProShip now" */
     var sb = document.getElementById("subtab-nimbusdash"); if (!sb) return;
+    /* the console re-adds its NimbusPost button if it is missing, so hide it (don't remove) and put ours in front */
+    sb.querySelectorAll('[data-sync-now="nimbus"]').forEach(function (o) { if (o.style.display !== "none") o.style.setProperty("display", "none", "important"); });
     var old = sb.querySelector('[data-sync-now="nimbus"]');
     if (old && !sb.querySelector("[data-ps-sync]")) {
       var n = document.createElement("button"); n.type = "button"; n.className = old.className; n.dataset.psSync = "1";
@@ -1272,10 +1274,116 @@
           .catch(function (er) { alert(er.message || er); })
           .then(function () { setTimeout(function () { n.disabled = false; n.innerHTML = lab; }, 90000); });
       });
-      old.parentNode.replaceChild(n, old);
+      old.parentNode.insertBefore(n, old);
     }
   }
   texts(); setInterval(texts, 2000);
+
+  /* ---------- Picklist of PENDING PICKUP shipments, per booked date (owner 20 Nov 2026) ---------- */
+  function esc(v) { return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function nid(v) { return String(v || "").replace(/^`+/, "").replace(/^#/, "").replace(/\s+/g, "").trim(); }
+  function dayKey(d) { return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); }
+  function pending(d) {
+    var rs = typeof window.__ndRows === "function" ? window.__ndRows() : [];
+    return rs.filter(function (x) {
+      if (x.r.b !== "pickup" || x.picked) return false;
+      if (!d) return true;
+      var c = x.r.cr ? new Date(x.r.cr) : null; return c && dayKey(c) === d;
+    });
+  }
+  function openPicklist(d) {
+    var list = pending(d);
+    if (!list.length) { alert("No pending-pickup shipments for this date."); return; }
+    var lines = {}; (window.omsOrdersRaw || []).forEach(function (o) { var k = nid(o.channelOrderId); if (k) (lines[k] = lines[k] || []).push(o); });
+    var prods = {}, noItems = [], accts = {};
+    list.forEach(function (x) {
+      var L = lines[nid(x.r.o)] || [];
+      if (!L.length) { noItems.push(x.r.o); return; }
+      L.forEach(function (o) {
+        if (/cancel/i.test(o.status || "")) return;
+        var name = String(o.productName || o.sku || "?").trim(), q = parseInt(o.qty, 10) || 1;
+        var p = prods[name] || (prods[name] = { n: name, sku: o.sku || "", q: 0, o: {} });
+        p.q += q; p.o[x.r.o] = 1;
+        var ac = String(o.channel || "").replace(/\s*-\s*(Amazon|Meesho|Flipkart|Snapdeal|Shopify).*$/i, "").trim(); if (ac) accts[ac] = (accts[ac] || 0) + 1;
+      });
+    });
+    var arr = Object.keys(prods).map(function (k) { return prods[k]; }).sort(function (a, b) { return a.n.localeCompare(b.n, "en", { sensitivity: "base" }); });
+    var units = arr.reduce(function (s, p) { return s + p.q; }, 0);
+    var label = d ? new Date(d + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "All dates";
+    var html = '<!doctype html><html><head><meta charset="utf-8"><title>Picklist · Pickup pending · ' + esc(label) + '</title>' +
+      '<style>@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font:12px/1.4 Inter,Arial,sans-serif;color:#0B1220;margin:0;padding:18px}' +
+      '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #0B1220;padding-bottom:8px;margin-bottom:10px}' +
+      '.k{font-size:10px;letter-spacing:.14em;font-weight:700;color:#B8912B}.t{font-size:20px;font-weight:700;margin-top:2px}.s{color:#555;font-size:11.5px}' +
+      '.sum{display:flex;gap:18px;font-size:12px}.sum b{font-size:16px;display:block}' +
+      'table{width:100%;border-collapse:collapse}th{background:#0B1220;color:#E9CC6E;text-align:left;font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:6px 8px}' +
+      'td{padding:5px 8px;border-bottom:1px solid #e3e3e3;vertical-align:top}tr:nth-child(even) td{background:#faf8f2}td.q{font-weight:700;font-size:14px;text-align:center;width:60px}' +
+      'td.c{width:26px;text-align:center}td.c span{display:inline-block;width:14px;height:14px;border:1.5px solid #0B1220;border-radius:3px}td.n{width:34px;color:#888}' +
+      '.sku{color:#777;font-size:10.5px}.note{margin-top:10px;font-size:11px;color:#a33}.bar{margin:0 0 12px;display:flex;gap:8px}' +
+      '.bar button{font:600 12px Inter,Arial;padding:7px 14px;border-radius:8px;border:1px solid #0B1220;background:#0B1220;color:#E9CC6E;cursor:pointer}' +
+      '@media print{.bar{display:none}body{padding:0}}</style></head><body>' +
+      '<div class="bar"><button onclick="print()">Print / Save PDF</button></div>' +
+      '<div class="hd"><div><div class="k">AIKM · PICKLIST · PICKUP PENDING</div><div class="t">' + esc(label) + '</div>' +
+      '<div class="s">ProShip shipments booked' + (d ? " this day" : "") + ' and still waiting for pickup · printed ' + new Date().toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) +
+      (Object.keys(accts).length ? " · " + esc(Object.keys(accts).join(", ")) : "") + '</div></div>' +
+      '<div class="sum"><div><b>' + list.length + '</b>shipments</div><div><b>' + arr.length + '</b>products</div><div><b>' + units + '</b>units</div></div></div>' +
+      '<table><thead><tr><th>#</th><th>Product</th><th>Qty</th><th>Orders</th><th>✓</th></tr></thead><tbody>' +
+      arr.map(function (p, i) { return '<tr><td class="n">' + (i + 1) + '</td><td>' + esc(p.n) + (p.sku ? '<div class="sku">' + esc(p.sku) + "</div>" : "") + '</td><td class="q">' + p.q + '</td><td class="n" style="width:60px;text-align:center;color:#333">' + Object.keys(p.o).length + '</td><td class="c"><span></span></td></tr>'; }).join("") +
+      "</tbody></table>" +
+      (noItems.length ? '<div class="note">' + noItems.length + " shipment(s) have no product details in OMS: " + esc(noItems.slice(0, 20).join(", ")) + (noItems.length > 20 ? " …" : "") + "</div>" : "") +
+      "</body></html>";
+    var w = window.open("", "_blank");
+    if (!w) { alert("Please allow pop-ups for dalbhaat.in to open the picklist."); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  }
+  window.aikmPendingPicklist = openPicklist;
+  /* a "Picklist" link next to every "Pickup pending" number in the date-wise table + one for all dates in its header */
+  function addPickBtns() {
+    var body = document.getElementById("ndDays"); if (!body) return;
+    body.querySelectorAll('.nd-dn[data-k="crw"]').forEach(function (b) {
+      if (b.parentNode.querySelector(".pl-btn")) return;
+      var x = document.createElement("button"); x.type = "button"; x.className = "pl-btn"; x.dataset.d = b.dataset.d;
+      x.innerHTML = '<i class="ti ti-list-check"></i> Picklist'; x.title = "Picklist of the shipments booked this day that are still waiting for pickup";
+      x.addEventListener("click", function (e) { e.stopPropagation(); openPicklist(x.dataset.d); });
+      b.insertAdjacentElement("afterend", x);
+    });
+    var head = document.querySelector("#ndDaysPanel .nd-days-head");
+    if (head && !head.querySelector(".pl-all")) {
+      head.style.display = "flex"; head.style.alignItems = "flex-start"; head.style.justifyContent = "space-between";
+      var a = document.createElement("button"); a.type = "button"; a.className = "pl-btn pl-all";
+      a.innerHTML = '<i class="ti ti-list-check"></i> Picklist · all pending pickups';
+      a.addEventListener("click", function () { openPicklist(null); });
+      head.appendChild(a);
+    }
+  }
+  var mo = new MutationObserver(function () { addPickBtns(); });
+  var moT = setInterval(function () { var b = document.getElementById("ndDays"); if (!b) return; clearInterval(moT); mo.observe(b, { childList: true }); addPickBtns(); }, 1500);
+
+  /* ---------- compact tables (owner 20 Nov 2026) ---------- */
+  var cs = document.createElement("style"); cs.id = "aikm-track-compact";
+  cs.textContent = "@media screen{" +
+    "html#aikm body #tab-nimbusdash .nd-kpis{gap:8px !important;margin-bottom:12px !important;}" +
+    "html#aikm body #tab-nimbusdash .nd-kpi{padding:9px 12px !important;min-height:0 !important;border-radius:10px !important;}" +
+    "html#aikm body #tab-nimbusdash .nd-kpi{display:grid !important;grid-template-columns:auto 1fr;column-gap:8px;align-items:center;}" +
+    "html#aikm body #tab-nimbusdash .nd-kpi .ti{font-size:15px !important;}" +
+    "html#aikm body #tab-nimbusdash .nd-kpi-n{font-size:18px !important;margin-top:0 !important;line-height:1.2 !important;}" +
+    "html#aikm body #tab-nimbusdash .nd-kpi-l{grid-column:1 / -1;font-size:11px !important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}" +
+    "html#aikm body #tab-nimbusdash .nd-kpi .nb-small{grid-column:1 / -1;}" +
+    "html#aikm body #tab-nimbusdash .nd-days-panel{padding:12px 16px !important;margin-bottom:12px !important;}" +
+    "html#aikm body #tab-nimbusdash .nd-days-title{font-size:14px !important;margin:2px 0 0 !important;}" +
+    "html#aikm body #tab-nimbusdash table.data th{padding:7px 10px !important;font-size:10px !important;}" +
+    "html#aikm body #tab-nimbusdash table.data td{padding:5px 10px !important;font-size:12px !important;line-height:1.35 !important;vertical-align:middle !important;}" +
+    "html#aikm body #tab-nimbusdash table.nd-days td{padding:4px 10px !important;}" +
+    "html#aikm body #tab-nimbusdash table.nd-days button.nd-dn{padding:1px 8px !important;font-size:12px !important;}" +
+    "html#aikm body #tab-nimbusdash .nb-small,html#aikm body #tab-nimbusdash .nd-flag{font-size:10.5px !important;margin-top:1px !important;}" +
+    "html#aikm body #tab-nimbusdash .nd-pl + .nd-pl{margin-top:2px !important;padding-top:2px !important;}" +
+    "html#aikm body #tab-nimbusdash td.nd-prod{font-size:11.5px !important;}" +
+    "html#aikm body #tab-nimbusdash .cx-awb{font-size:11.5px !important;}" +
+    "html#aikm body #tab-nimbusdash .nd-filters input,html#aikm body #tab-nimbusdash .ms-btn{min-height:34px !important;}" +
+    "html#aikm body .pl-btn{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:4px;margin-left:8px;padding:2px 9px;border-radius:7px;font-size:11px;font-weight:600;color:var(--x-gold);background:var(--x-gold-soft);border:1px solid var(--x-gold-line);white-space:nowrap;}" +
+    "html#aikm body .pl-btn:hover{background:var(--x-gold);color:#1A1405;}" +
+    "html#aikm body .pl-btn.pl-all{padding:6px 12px;font-size:12px;}" +
+    "}";
+  document.head.appendChild(cs);
 })();
 
 /* ===== DO NOT REMOVE - loads the bulk "tick loss orders" bar (console/loss-bulk.js) for the confirmation, ProShip,

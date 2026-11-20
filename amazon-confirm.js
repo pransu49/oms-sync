@@ -182,14 +182,19 @@ async function main() {
   Object.keys(done).forEach((k) => { if (now - done[k].t > 30 * 864e5) delete done[k]; });
   // Nothing confirmed, nothing failed, and the last note (under 30 min old) already says so -> skip the
   // write, so the open console tabs don't all re-read this document after every run.
-  const quiet = ACCOUNTS.every((a) => {
+  // console "Rejected" list = failures of the last 3 days only (owner 20 Nov 2026: 109 stale InvalidCarrier errors from 31 Oct
+  // stayed on screen for 20 days - those orders had left the to-confirm list long ago). Older ones stay in idsJson.
+  const FAIL_SHOW_MS = 3 * 864e5;
+  const failedOnly = {}; Object.keys(done).forEach((k) => { if (!done[k].ok && now - (done[k].t || 0) < FAIL_SHOW_MS) failedOnly[k] = done[k]; });
+  const oldShown = (logDoc.exists && logDoc.get('ids')) || {};
+  const shownChanged = Object.keys(oldShown).length !== Object.keys(failedOnly).length || Object.keys(failedOnly).some((k) => !oldShown[k]);
+  const quiet = !shownChanged && ACCOUNTS.every((a) => {
     const u = update['last_' + a.key], p = logDoc.exists && logDoc.get('last_' + a.key);
     const at = p && p.at && p.at.toMillis ? p.at.toMillis() : 0;
     return u && !u.count && !u.failed && p && p.message === u.message && now - at < 30 * 60e3;
   });
   if (quiet) { console.log('Nothing new - status note not re-saved.'); return; }
   if (!DRY) {
-    const failedOnly = {}; Object.keys(done).forEach((k) => { if (!done[k].ok) failedOnly[k] = done[k]; });
     update.idsJson = JSON.stringify(done);
     if (logDoc.exists) await logRef.update({ ids: failedOnly });   // replace (not merge) the old big list with just the failed ones
     else update.ids = failedOnly;

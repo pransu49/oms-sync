@@ -271,6 +271,11 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Shopify console JS) is shown again as "Shipment Tracking" and fed with ProShip shipments by the block "Shipment Tracking = ProShip" at the end
   of `console/proship-tab.js` (window.__ndInject with rows from proshipIndex; proship-tab's own listener shares the index as window.__psIdx +
   event `aikm-proship-idx` -> 0 extra reads). "Sync NimbusPost now" there = proship.yml mode sync. Keep that block.
+  Same block (owner 20 Nov 2026): "Picklist" button next to every "Pickup pending" number of the date-wise table + "Picklist · all pending
+  pickups" (printable A4 page from OMS lines: product, qty, orders, tick box; 0 Firebase) and compact table/KPI CSS (`aikm-track-compact`).
+  The console's own "Sync NimbusPost now" button is HIDDEN, not removed (the console re-adds it when missing).
+  "Rejected · N" = OMS push failures + Amazon confirm failures; amazon-confirm.js keeps only failures of the last 3 days in `amazonConfirm.ids`
+  (owner 20 Nov 2026: 109 InvalidCarrier errors from 31 Oct stayed on screen 20 days). Older failures stay in idsJson.
 
 - **Amazon fees in profit** (owner 17 Nov 2026, order 408-3117078-5273165): Amazon's Product Fees ESTIMATE returns closing fee 0 for all
   self-ship SKUs up to Rs 300, but the Finance API shows Rs 20 + 18% GST (Rs 23.60) is really charged. `feeFor()` in `spapi-sync.js`
