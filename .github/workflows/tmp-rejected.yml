@@ -9,7 +9,7 @@ jobs:
         env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
-          const admin = require('firebase-admin');
+          const admin = require(process.cwd() + '/node_modules/firebase-admin');
           admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) });
           (async () => {
             const db = admin.firestore();
