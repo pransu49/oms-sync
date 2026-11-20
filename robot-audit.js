@@ -55,6 +55,8 @@ async function loadLots() {
   Object.entries((m2 && m2.exists && m2.data().map) || {}).forEach(([a, r]) => { if (!map[a] || String((r && r.savedAt) || '') >= String((map[a] && map[a].savedAt) || '')) map[a] = r; });
   return { lots, map };
 }
+// "LOTS-GN 68 · LOTS-62 430 · own 5" (stock behind a central-inventory listing)
+const stockTxt = (l) => (l.src || []).map((x) => `LOTS-GN ${x.gn} · LOTS-62 ${x.s62}${x.own ? ` · own ${x.own}` : ''}`).join(' + ');
 const bestSlab = (p) => { let b = null; ((p && p.slabs) || []).forEach((x) => { const v = Number(x.price); if (v > 0 && (b == null || v < b)) b = v; }); return b; };
 // LOTS side of one ASIN (your mapping only): Amazon units LOTS can supply, lowest LOTS stock, cost per Amazon unit
 function lotsFor(asin, L) {
@@ -96,10 +98,30 @@ function lotsFor(asin, L) {
   for (const [acct, label] of Object.entries(ACCOUNTS)) {
     const S = await loadSnap(acct);
     if (!S) { findings.push({ key: `nosnap_${acct}`, now: true, text: `⛔ <b>${label}</b>: no Amazon data saved - the Amazon robot is not running.` }); continue; }
+    // Central inventory (owner 17 Nov 2026): accounts switched to "AIKM tool" get stock = max(LOTS-GN, LOTS-62) + own stock,
+    // not LOTS-GN alone. For those, re-check Amazon against the SAME raw stock numbers the plan used (fix 20 Nov 2026:
+    // comparing with LOTS-GN only gave hundreds of false "oversell" alerts for Sasta Store). 1 read per account.
+    let central = null;
+    try {
+      const pd = await spa.collection('spapiSnapshots').doc(`${acct}_invPlan`).get(); const P = pd.exists ? pd.data() : null;
+      if (P && P.live && !P.broken && now - (P.at || 0) < 3 * 3600e3) {
+        const keys = JSON.parse(P.keys || '{}'); central = {};
+        JSON.parse(P.rows || '[]').forEach((r) => {
+          if (r[3] == null || !r[2]) return;
+          let units = Infinity, low = Infinity; const src = [];
+          for (const part of String(r[2]).split('+')) {
+            const [k, nd] = part.split('*'), need = Number(nd) || 1, K = keys[k]; if (!K) return;
+            const gn = Number(K[0]) || 0, s62 = Number(K[1]) || 0, own = Number(K[2]) || 0, stock = Math.max(gn, s62) + own;
+            units = Math.min(units, Math.floor(Math.max(0, stock) / need + 1e-9)); low = Math.min(low, stock); src.push({ gn, s62, own, need });
+          }
+          central[r[0]] = { units, low, need: src.length === 1 ? src[0].need : 1, src, central: true };
+        });
+      }
+    } catch (e) { console.warn(`${acct}: central inventory plan not read:`, e.message || e); central = null; }
     const self = S.inventory.filter((i) => i && i.sku && i.asin && (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT');
     const wrongOos = [], oversell = [], omsLag = [];
     for (const i of self) {
-      const l = lotsFor(i.asin, L); if (!l) continue;
+      const l = (central && central[i.sku]) || lotsFor(i.asin, L); if (!l) continue;
       const amz = parseInt(i.quantity, 10) || 0, bl = blockedByAsin[i.asin] || 0;
       const free = Math.floor((l.low - bl * l.need) / l.need);
       const id = `${acct}:${i.sku}`;
@@ -132,7 +154,7 @@ function lotsFor(asin, L) {
         `\n<b>Fix:</b> OMS Guru → Channel → List Channels → ${label} Amazon → check inventory sync is ON / re-connect Amazon.` });
     }
     if (overConf.length) findings.push({ key: `over_${acct}`, n: overConf.length, text: `🟠 <b>${label} · ${overConf.length} OVERSELL risk</b> (Amazon shows more than LOTS has)\n` +
-      overConf.sort(bySales).slice(0, 8).map((x) => `• ${esc((x.i.name || x.i.sku).slice(0, 38))} — Amazon ${x.amz}, LOTS ${x.l.low}${x.l.need !== 1 ? ` (= ${x.l.units} Amazon units)` : ''}\n   <code>${esc(x.i.sku)}</code>`).join('\n') });
+      overConf.sort(bySales).slice(0, 8).map((x) => `• ${esc((x.i.name || x.i.sku).slice(0, 38))} — Amazon ${x.amz}, ${x.l.central ? stockTxt(x.l) : `LOTS ${x.l.low}`}${x.l.need !== 1 ? ` (= ${x.l.units} Amazon units)` : ''}\n   <code>${esc(x.i.sku)}</code>`).join('\n') });
 
     // 3 + 4: robot price changes in the last 24 h
     const bySku = Object.fromEntries(self.map((i) => [i.sku, i]));
