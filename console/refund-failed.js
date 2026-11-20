@@ -157,7 +157,7 @@
     });
     return out.sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); });
   }
-  var RETRY = { tax: 1, price: 1, data: 1, send: 1, other: 1 }, ROBOT = { "SASTA STORE": 1, "PRASO ENTERPRISES": 1 };
+  var RETRY = { tax: 1, price: 1, data: 1, send: 1, other: 1 }, ROBOT = /* all 5 Amazon accounts use the robot (owner 20 Nov 2026, Finance access for all) */ new Proxy({}, { get: function (t, k) { return /sasta|praso|vishal|munda|aikm/i.test(String(k)) ? 1 : 0; } });
   function retryable() { return rows().filter(function (r) { return !r.fixed && RETRY[r.k] && ROBOT[r.a]; }); }
   async function getToken() {
     var t = "";

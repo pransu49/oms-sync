@@ -19,10 +19,7 @@ const admin = require('firebase-admin');
 const MARKETPLACE_ID = 'A21TJRUUN4KGV';
 const PROBE = String(process.env.PROBE || '').toLowerCase() === 'true';
 const BY = String(process.env.REQUESTED_BY || 'console').slice(0, 60);
-const ACCOUNTS = {
-  'SASTA STORE': { key: 'sastastore', token: process.env.SPAPI_REFRESH_TOKEN_SASTASTORE },
-  'PRASO ENTERPRISES': { key: 'praso', token: process.env.SPAPI_REFRESH_TOKEN_PRASO },
-};
+const { accountOf, connected } = require('./refund-accounts'); // all 5 Amazon accounts (owner 20 Nov 2026)
 const HEAD = ['order-id', 'order-item-id', 'adjustment-reason-code', 'currency', 'item-price-adj', 'item-tax-adj', 'shipping-price-adj', 'shipping-tax-adj',
   'gift-wrap-price-adj', 'gift-wrap-tax-adj', 'item-promotion-adj', 'item-promotion-id', 'ship-promotion-adj', 'ship-promotion-id'];
 const REASONS = ['CustomerCancel', 'CustomerReturn', 'CouldNotShip', 'NoInventory', 'GeneralAdjustment'];
@@ -185,7 +182,7 @@ async function fixAmounts(sp, rows, checks, add, tick) {
 async function main() {
   let lines;
   if (PROBE) {
-    lines = Object.keys(ACCOUNTS).filter((a) => ACCOUNTS[a].token).map((a) => ({ a, o: '000-0000000-0000000', i: '00000000000000', r: 'CustomerCancel', ip: 1, it: 0, sp: 0, stx: 0 }));
+    lines = connected().map((A) => ({ a: A.name, o: '000-0000000-0000000', i: '00000000000000', r: 'CustomerCancel', ip: 1, it: 0, sp: 0, stx: 0 }));
     console.log('PROBE: fake order per account - Amazon will reject it, no money moves.');
   } else {
     try { lines = JSON.parse(process.env.LINES || '[]'); } catch (e) { throw new Error('Refund list from the console could not be read.'); }
@@ -195,9 +192,9 @@ async function main() {
   const checks = (checksSnap.exists && checksSnap.data().orders) || {};
   if (DRY) {
     const res = []; const addD = (x, st, msg) => res.push(`${st.padEnd(7)} ${x.o} ${x.i} ${msg}`);
-    for (const a of Object.keys(ACCOUNTS)) {
-      const rows = lines.filter((x) => x.a === a); if (!rows.length || !ACCOUNTS[a].token) continue;
-      const ok = await fixAmounts(client(ACCOUNTS[a].token), rows, checks, addD);
+    for (const A of connected()) {
+      const rows = lines.filter((x) => { const y = accountOf(x.a); return y && y.key === A.key; }); if (!rows.length) continue;
+      const ok = await fixAmounts(client(A.token), rows, checks, addD);
       ok.forEach((x) => res.push(`send    ${x.o} ${x.i} ${f2(x.ip)}/${f2(x.it)}/${f2(x.sp)}/${f2(x.stx)}`));
     }
     res.forEach((l) => console.log('DRYRES ' + l));
@@ -219,8 +216,8 @@ async function main() {
     if (!x || !/^\d{3}-\d{7}-\d{7}$/.test(String(x.o)) || !/^\d{6,20}$/.test(String(x.i))) { add(x || {}, 'error', 'Bad order / item id'); return; }
     if (!REASONS.includes(x.r)) x.r = 'CustomerCancel';
     if (!PROBE && !RECORD_FEED && done.has(x.i)) { add(x, 'skipped', 'Already refunded by the robot earlier'); return; }
-    const acc = ACCOUNTS[x.a];
-    if (!acc || !acc.token) { add(x, 'skipped', 'Account not connected to Amazon API - use the download file'); return; }
+    const acc = accountOf(x.a);
+    if (!acc) { add(x, 'skipped', 'Account not connected to Amazon API - use the download file'); return; }
     (byAcc[x.a] = byAcc[x.a] || []).push(x);
   });
 
@@ -228,12 +225,12 @@ async function main() {
     await setLive('running', `${a}: reading Amazon's exact amounts for ${rows.length} line(s)…`);
     try {
       if (!RECORD_FEED) {
-        const fixed = await fixAmounts(client(ACCOUNTS[a].token), rows, checks, add, (msg) => setLive('running', `${a}: ${msg}`));
+        const fixed = await fixAmounts(client(accountOf(a).token), rows, checks, add, (msg) => setLive('running', `${a}: ${msg}`));
         rows.length = 0; fixed.forEach((x) => rows.push(x));
         if (!rows.length) continue;
       }
       await setLive('running', `${a}: sending ${rows.length} refund line(s) to Amazon…`);
-      const r = await submit(client(ACCOUNTS[a].token), rows, (msg) => setLive('running', `${a}: ${rows.length} line(s) sent — ${msg}`));
+      const r = await submit(client(accountOf(a).token), rows, (msg) => setLive('running', `${a}: ${rows.length} line(s) sent — ${msg}`));
       const { summary, errors } = parseReport(r.report);
       console.log(`  ${a} report: ${summary || '(no report text)'}`);
       if (r.report) console.log(r.report.split(/\r?\n/).slice(0, 25).join('\n'));

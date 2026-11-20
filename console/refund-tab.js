@@ -416,7 +416,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
   }
 
   /* ---------- Refund robot (only on your command) ---------- */
-  var ROBOT = { "SASTA STORE": 1, "PRASO ENTERPRISES": 1 }, RWF = "refund-robot.yml";
+  var ROBOT = /* all 5 Amazon accounts use the robot (owner 20 Nov 2026, Finance access for all) */ new Proxy({}, { get: function (t, k) { return /sasta|praso|vishal|munda|aikm/i.test(String(k)) ? 1 : 0; } }), RWF = "refund-robot.yml";
   async function refundNow(acc) {
     var reason = $("rfReason").value, reasonTxt = $("rfReason").selectedOptions[0].textContent;
     var lines = sel.filter(function (o) { return !o.off && o.a === acc && !refunded(o.i); });

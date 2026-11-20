@@ -10,15 +10,12 @@ try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only
 const SellingPartnerAPI = require('amazon-sp-api');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const ACCOUNTS = {
-  'SASTA STORE': process.env.SPAPI_REFRESH_TOKEN_SASTASTORE,
-  'PRASO ENTERPRISES': process.env.SPAPI_REFRESH_TOKEN_PRASO,
-};
+const { accountOf } = require('./refund-accounts'); // all 5 Amazon accounts (owner 20 Nov 2026)
 const clients = {};
 function client(acc) {
-  const token = ACCOUNTS[acc]; if (!token) return null;
-  return clients[acc] = clients[acc] || new SellingPartnerAPI({
-    region: 'eu', refresh_token: token,
+  const A = accountOf(acc); if (!A) return null;
+  return clients[A.key] = clients[A.key] || new SellingPartnerAPI({
+    region: 'eu', refresh_token: A.token,
     credentials: { SELLING_PARTNER_APP_CLIENT_ID: process.env.SPAPI_CLIENT_ID, SELLING_PARTNER_APP_CLIENT_SECRET: process.env.SPAPI_CLIENT_SECRET },
   });
 }
@@ -46,7 +43,7 @@ async function refundOf(acc, orderId, raw) {
   return total > 0 ? { refunded: total, at: String(at).slice(0, 10) } : null;
 }
 
-module.exports = { refundOf, hasAccount: (a) => !!ACCOUNTS[a] };
+module.exports = { refundOf, hasAccount: (a) => !!accountOf(a) };
 
 // ---- run on its own: check the refund list (or PROBE_ORDERS) ----
 if (require.main === module) (async () => {
@@ -77,7 +74,7 @@ if (require.main === module) (async () => {
   const prev = (await ref.get()).data() || {};
   const known = prev.orders || {};
   const orders = {};
-  ((listDoc.data() || {}).orders || []).forEach((o) => { if (ACCOUNTS[o.a]) orders[o.o] = o.a; });
+  ((listDoc.data() || {}).orders || []).forEach((o) => { if (accountOf(o.a)) orders[o.o] = o.a; });
   const todo = Object.keys(orders).filter((id) => !known[id]); // already-refunded orders are never re-checked
   console.log(`Checking ${todo.length} order(s) with Amazon (already known refunded: ${Object.keys(known).length}).`);
   const found = {}, errors = {};
@@ -97,4 +94,8 @@ if (require.main === module) (async () => {
   await ref.set({ orders: merged, at: admin.firestore.FieldValue.serverTimestamp(), lastRun: { checked: todo.length, newlyRefunded: Object.keys(found).length, errors, financeAccessDenied: Object.keys(denied) } });
   console.log(`Already refunded on Amazon: ${Object.keys(found).length} new, ${Object.keys(merged).length} total. Errors: ${JSON.stringify(errors)}`);
   Object.entries(found).forEach(([id, v]) => console.log(`  ${v.a} ${id} refunded ₹${v.r} on ${v.at}`));
+  // per-account summary (owner 20 Nov 2026: check every account)
+  const per = {};
+  Object.entries(orders).forEach(([id, a]) => { const p = per[a] = per[a] || { list: 0, refunded: 0, pending: 0 }; p.list++; if (merged[id]) p.refunded++; else p.pending++; });
+  Object.entries(per).forEach(([a, p]) => console.log(`SUMMARY ${a}: ${p.list} on refund list · already refunded ${p.refunded} · still pending ${p.pending}${denied[a] ? ' · FINANCE ACCESS DENIED (not checked)' : ''}`));
 })().catch((e) => { console.error('REFUND CHECK FAILED:', e.message || e); process.exit(1); });
