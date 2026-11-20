@@ -2659,7 +2659,10 @@ async function runCentralInventory(sellerId) {
     const min = ownOnly ? 1 : OOS_LOTS_BELOW, target = low < min || units < 1 ? 0 : Math.min(units, INV_CAP);
     if (target === 0 && amz > 0) toZero++;
     // small moves are left to the next real change (Amazon already takes its own orders off) - fewer API calls
-    const near = target > 0 && amz > 0 && (Math.abs(target - amz) < Math.max(5, amz * 0.25) || (target >= INV_CAP && amz >= INV_CAP));
+    // Tolerance only when Amazon shows LESS than we have (fewer pushes, no harm). Amazon showing MORE than the stock is
+    // always corrected (owner 20 Nov 2026: watchdog found ~300 Sasta listings 10-25% above real stock = oversell risk).
+    const near = target > 0 && amz > 0 && ((amz <= target && target - amz < Math.max(5, amz * 0.25)) || (amz > target && amz - target <= 2) || (target >= INV_CAP && amz >= INV_CAP));
+    // order of fixing: zeros first, then the biggest over-shown amounts
     rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), target, amz, target === amz || near ? 'ok' : 'diff']);
   }
   const keys = {}; Object.entries(keyInfo).forEach(([k, I]) => { keys[k] = [I.gn, I.s62, I.o, I.pd]; });
@@ -2670,7 +2673,7 @@ async function runCentralInventory(sellerId) {
   if (live && broken) console.warn(`Central inventory: ${toZero} of ${inStock} in-stock listings would go to 0 - stock data looks broken, NOTHING pushed.`);
   if (CENTRAL_LIVE && sellerId) {
     const todo = rows.filter((r) => r[3] != null && r[5] === 'diff')
-      .sort((a, b) => (a[3] === 0 ? 0 : 1) - (b[3] === 0 ? 0 : 1)).slice(0, INV_MAX_PUSH);
+      .sort((a, b) => ((a[3] === 0 ? 0 : 1) - (b[3] === 0 ? 0 : 1)) || ((b[4] - b[3]) - (a[4] - a[3]))).slice(0, INV_MAX_PUSH);
     for (const r of todo) {
       const docId = `${ACCOUNT_LABEL}_${sidSafe(r[0])}`;
       try { await setAmazonQuantity(sellerId, r[0], r[3]); r[4] = r[3]; r[5] = 'ok'; pushed++;
