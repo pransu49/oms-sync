@@ -159,6 +159,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   getOrderItems and sends Amazon's exact ItemPrice/ItemTax/ShippingPrice/ShippingTax (partial item refunds scaled by Amazon's tax ratio);
   cancelled (qty 0) and already-refunded (`refundChecks`) are skipped; promotions / part-refunded go to Failed Refunds for manual refund.
   Input `dry=true` = check only (prints DRYRES lines, sends/saves nothing). Line flag `full:1` = refund item + shipping in full.
+- **Refund accounts** (owner 20 Nov 2026): `refund-accounts.js` = the ONE list of Amazon accounts for refund-check + refund-robot (matched by name regex, tokens from env); console ROBOT maps use the same regex. New account: add it there + its token in `refund-check.yml` / `refund-robot.yml`.
 - Failed Refunds (`console/refund-failed.js`, owner 6 Nov 2026) is loaded by the block at the end of `console/refund-tab.js` (`aikmRefundFailedJs`) — keep it.
   It is shown INSIDE the Bulk Refund page ("Failed refunds" button in its top bar), NOT as a side-menu tab (owner 7 Nov 2026).
   It lists robot refund lines Amazon rejected (status "error" in OMS `aikm_admin/refundLog`) with the reason + manual fix; hides ones later refunded
