@@ -390,7 +390,7 @@
    Loads the exact latest version (by commit) so updates show at once; falls back to @main. */
 (function () { try { if (document.getElementById("aikmRefundJs")) return;
   function add(ref) { if (document.getElementById("aikmRefundJs")) return; var s = document.createElement("script"); s.id = "aikmRefundJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); s.onerror = function () { if (ref !== "main") { s.remove(); add("main"); } }; /* brand-new version not on the CDN yet -> latest saved copy */ document.head.appendChild(s); }
+    var __u = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/refund-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); if (ref === "main") { /* jsDelivr @main can lag hours behind (owner 20 Nov 2026): take the file straight from GitHub (5-min cache), CDN if that fails */ fetch("https://raw.githubusercontent.com/pransu49/oms-sync/main/console/refund-tab.js?t=" + Math.floor(Date.now() / 6e4)).then(function (r) { if (!r.ok) throw 0; return r.text(); }).then(function (t) { s.src = URL.createObjectURL(new Blob([t], { type: "text/javascript" })); }).catch(function () { s.src = __u; }); } else s.src = __u; s.onerror = function () { if (ref !== "main") { s.remove(); add("main"); } }; /* brand-new version not on the CDN yet -> latest saved copy */ document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/refund-tab.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -423,7 +423,7 @@
    Keep this block at the end of this file when editing the Easy Ship tab. Loads the latest version (by commit); falls back to @main. */
 (function () { try { if (document.getElementById("aikmMeeshoJs")) return;
   function add(ref) { if (document.getElementById("aikmMeeshoJs")) return; var s = document.createElement("script"); s.id = "aikmMeeshoJs"; s.defer = true;
-    s.src = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/meesho-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); s.onerror = function () { if (ref !== "main") { s.remove(); add("main"); } }; /* brand-new version not on the CDN yet -> latest saved copy */ document.head.appendChild(s); }
+    var __u = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/meesho-tab.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); if (ref === "main") { /* jsDelivr @main can lag hours behind (owner 20 Nov 2026): take the file straight from GitHub (5-min cache), CDN if that fails */ fetch("https://raw.githubusercontent.com/pransu49/oms-sync/main/console/meesho-tab.js?t=" + Math.floor(Date.now() / 6e4)).then(function (r) { if (!r.ok) throw 0; return r.text(); }).then(function (t) { s.src = URL.createObjectURL(new Blob([t], { type: "text/javascript" })); }).catch(function () { s.src = __u; }); } else s.src = __u; s.onerror = function () { if (ref !== "main") { s.remove(); add("main"); } }; /* brand-new version not on the CDN yet -> latest saved copy */ document.head.appendChild(s); }
   var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
   fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/meesho-tab.js&per_page=1")
     .then(function (r) { return r.ok ? r.json() : null; })

@@ -7,6 +7,9 @@
   clears the `@main` copy of every changed `console/*` file on push — keep it, or users see old versions (owner 7 Nov 2026).
   It also warms `@<new commit>` (a brand-new commit answers 404 for the first minutes - owner 20 Nov 2026 lost the Bulk Refund menu item that way).
   Every loader's `add(ref)` has `s.onerror` -> retry `@main` (keep it in new loaders).
+  jsDelivr's `@main` LAGS hours behind even after a purge (owner 20 Nov 2026: picklist missing; @main still served an older commit with age 15 s),
+  so in every loader `ref === "main"` now fetches `raw.githubusercontent.com/.../main/console/<file>` (5-min cache, CORS *) and runs it as a
+  Blob URL script; only if that fails it uses jsDelivr `@main?v=`. Copy that `__u` pattern into new loaders.
 - **Never commit `node_modules`** (owner 20 Nov 2026): jsDelivr serves only repos under 50 MB; a committed node_modules (46 MB, 18 Nov) made new
   console versions + `@main?v=` answer 403 "Package size exceeded" and the Bulk Refund tab vanished. It is in `.gitignore`; workflows `npm install`.
 - After any change to `console/easyship-tab.js`, check: `grep -c refund-tab console/easyship-tab.js` must be 1 or more.
