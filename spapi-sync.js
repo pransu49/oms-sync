@@ -2663,7 +2663,7 @@ async function runCentralInventory(sellerId) {
     // small moves are left to the next real change (Amazon already takes its own orders off) - fewer API calls
     // Tolerance only when Amazon shows LESS than we have (fewer pushes, no harm). Amazon showing MORE than the stock is
     // always corrected (owner 20 Nov 2026: watchdog found ~300 Sasta listings 10-25% above real stock = oversell risk).
-    const near = target > 0 && amz > 0 && ((amz <= target && target - amz < Math.max(5, amz * 0.25)) || (amz > target && amz - target <= 2) || (target >= INV_CAP && amz >= INV_CAP));
+    const near = target > 0 && amz > 0 && ((amz <= target && target - amz < Math.max(5, amz * 0.25)) || (amz > target && amz - target <= 2) || (target >= INV_CAP && amz >= INV_CAP && amz <= units));  // above the 500 cap: left alone only while Amazon is not above the real stock
     // order of fixing: zeros first, then the biggest over-shown amounts
     rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), target, amz, target === amz || near ? 'ok' : 'diff']);
   }
