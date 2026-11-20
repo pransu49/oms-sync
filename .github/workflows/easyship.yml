@@ -57,7 +57,7 @@ jobs:
       - name: Already started today?
         id: done
         if: steps.when.outputs.go == 'check'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .easyship-auto
           key: easyship-auto-${{ steps.when.outputs.day }}
@@ -73,7 +73,7 @@ jobs:
         if: steps.decide.outputs.go == 'true' && steps.when.outputs.auto == 'true'
         shell: bash
         run: mkdir -p .easyship-auto && date > .easyship-auto/started
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v6
         if: steps.decide.outputs.go == 'true' && steps.when.outputs.auto == 'true'
         with:
           path: .easyship-auto
@@ -95,7 +95,7 @@ jobs:
           node-version: '20'
       - run: npm install --no-save cheerio@1.0.0 pdf-lib@1.17.1 firebase-admin@12
       - name: Restore saved OMS orders copy
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         continue-on-error: true
         with:
           path: .cache/oms-chunks.json
@@ -121,7 +121,7 @@ jobs:
 
       - name: Keep OMS orders copy for the next run
         if: always() && hashFiles('.cache/oms-chunks.json') != ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         continue-on-error: true
         with:
           path: .cache/oms-chunks.json
