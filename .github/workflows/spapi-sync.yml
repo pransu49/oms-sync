@@ -23,8 +23,30 @@ concurrency:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write        # to start the other accounts' syncs (step below)
     steps:
       - uses: actions/checkout@v4
+
+      # Owner 20 Nov 2026 (Munda GST/HSN pushes waited hours): GitHub's own timer skips most runs, and only Praso + Sasta are
+      # started by cron-job.org. This Praso run therefore also starts Munda, Vishal and AIKM when their last run is 12+ min old
+      # and none is running/waiting. Mode "fast" - the script upgrades it to a full sync itself when one is due (FULL_DUE_MS).
+      - name: Start the other accounts' syncs if GitHub's timer skipped them
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          for w in spapi-sync-munda.yml spapi-sync-vishal.yml spapi-sync-aikm.yml; do
+            last=$(gh api "repos/${{ github.repository }}/actions/workflows/$w/runs?per_page=5" -q '[.workflow_runs[] | {s: .status, t: .created_at}]' 2>/dev/null || echo '[]')
+            busy=$(echo "$last" | jq '[.[] | select(.s != "completed")] | length')
+            newest=$(echo "$last" | jq -r '.[0].t // "1970-01-01T00:00:00Z"')
+            age=$(( $(date -u +%s) - $(date -u -d "$newest" +%s) ))
+            if [ "$busy" != "0" ]; then echo "$w: already running/waiting - skip"; continue; fi
+            if [ "$age" -lt 720 ]; then echo "$w: last run ${age}s ago - skip"; continue; fi
+            gh api -X POST "repos/${{ github.repository }}/actions/workflows/$w/dispatches" -f ref=main -f 'inputs[mode]=fast' && echo "$w: started (last run ${age}s ago)"
+          done
 
       - uses: actions/setup-node@v4
         with:

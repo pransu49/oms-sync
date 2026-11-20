@@ -324,3 +324,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   button whose text starts "Show/Load N more" or "Show more (" once it is within 350 px of the visible end, and puts the scroll position back
   (lists redraw their table). Loaded by `aikmAutoMoreJs` blocks at the end of `amazon-name-search.js` and `refund-tab.js` — keep them.
   New lists: keep the "Show N more" wording and it works automatically. 0 Firebase.
+- **Other accounts started by the Praso run** (owner 20 Nov 2026, Munda GST/HSN pushes waited 2+ h): only Praso + Sasta are started by
+  cron-job.org; GitHub's own timer skipped most Munda/Vishal runs. The first step of `spapi-sync.yml` (job permission `actions: write`)
+  dispatches `spapi-sync-munda/vishal/aikm.yml` in mode fast when their newest run is 12+ min old and none is running/waiting
+  (the script upgrades to full when FULL_DUE_MS says so). Keep that step until cron-job.org also starts those 3 workflows.
