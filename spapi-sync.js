@@ -2665,7 +2665,10 @@ async function runCentralInventory(sellerId) {
     // always corrected (owner 20 Nov 2026: watchdog found ~300 Sasta listings 10-25% above real stock = oversell risk).
     const near = target > 0 && amz > 0 && ((amz <= target && target - amz < Math.max(5, amz * 0.25)) || (amz > target && amz - target <= 2) || (target >= INV_CAP && amz >= INV_CAP && amz <= units));  // above the 500 cap: left alone only while Amazon is not above the real stock
     // order of fixing: zeros first, then the biggest over-shown amounts
-    rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), target, amz, target === amz || near ? 'ok' : 'diff']);
+    // [8] = when the robot set this listing to 0 on Amazon (lastStockPush), so the Central inventory tab can show the newest
+    // out-of-stock first (owner 20 Nov 2026). 0 = in stock / not set to 0 by the robot.
+    const lp = it.lastStockPush, oosAt = amz === 0 && lp && lp.status === 'applied' && lp.qty === 0 ? lp.at || 0 : 0;
+    rows.push([it.sku, it.asin, ps.map((x) => x.k + '*' + x.need).join('+'), target, amz, target === amz || near ? 'ok' : 'diff', '', '', oosAt]);
   }
   const keys = {}; Object.entries(keyInfo).forEach(([k, I]) => { keys[k] = [I.gn, I.s62, I.o, I.pd]; });
   const broken = toZero >= 20 && toZero > inStock * 0.6;
@@ -2678,7 +2681,7 @@ async function runCentralInventory(sellerId) {
       .sort((a, b) => ((a[3] === 0 ? 0 : 1) - (b[3] === 0 ? 0 : 1)) || ((b[4] - b[3]) - (a[4] - a[3]))).slice(0, INV_MAX_PUSH);
     for (const r of todo) {
       const docId = `${ACCOUNT_LABEL}_${sidSafe(r[0])}`;
-      try { await setAmazonQuantity(sellerId, r[0], r[3]); r[4] = r[3]; r[5] = 'ok'; pushed++;
+      try { await setAmazonQuantity(sellerId, r[0], r[3]); r[4] = r[3]; r[5] = 'ok'; pushed++; r[8] = r[3] === 0 ? Date.now() : 0;
         snapPatch('inventory', docId, { quantity: r[3], lastStockPush: { status: 'applied', at: Date.now(), qty: r[3], reason: 'Central inventory (AIKM tool): LOTS + own stock - pending orders' } });
       } catch (e) { failed++; r[5] = 'fail'; if (errs.length < 20) errs.push([r[0], String(e.message || e).slice(0, 140)]);
         snapPatch('inventory', docId, { lastStockPush: { status: 'failed', at: Date.now(), qty: r[3], error: e.message || String(e) } }); }
