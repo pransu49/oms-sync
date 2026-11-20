@@ -1307,18 +1307,19 @@
         var ac = String(o.channel || "").replace(/\s*-\s*(Amazon|Meesho|Flipkart|Snapdeal|Shopify).*$/i, "").trim(); if (ac) accts[ac] = (accts[ac] || 0) + 1;
       });
     });
-    var arr = Object.keys(prods).map(function (k) { return prods[k]; }).sort(function (a, b) { return a.n.localeCompare(b.n, "en", { sensitivity: "base" }); });
+    var arr = Object.keys(prods).map(function (k) { return prods[k]; }).sort(function (a, b) { return (b.q - a.q) || a.n.localeCompare(b.n, "en", { sensitivity: "base" }); });   // highest qty first (owner 20 Nov 2026)
     var units = arr.reduce(function (s, p) { return s + p.q; }, 0);
     var label = d ? new Date(d + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "All dates";
     var html = '<!doctype html><html><head><meta charset="utf-8"><title>Picklist · Pickup pending · ' + esc(label) + '</title>' +
-      '<style>@page{size:A4;margin:12mm}*{box-sizing:border-box}body{font:12px/1.4 Inter,Arial,sans-serif;color:#0B1220;margin:0;padding:18px}' +
-      '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #0B1220;padding-bottom:8px;margin-bottom:10px}' +
-      '.k{font-size:10px;letter-spacing:.14em;font-weight:700;color:#B8912B}.t{font-size:20px;font-weight:700;margin-top:2px}.s{color:#555;font-size:11.5px}' +
-      '.sum{display:flex;gap:18px;font-size:12px}.sum b{font-size:16px;display:block}' +
-      'table{width:100%;border-collapse:collapse}th{background:#0B1220;color:#E9CC6E;text-align:left;font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:6px 8px}' +
-      'td{padding:5px 8px;border-bottom:1px solid #e3e3e3;vertical-align:top}tr:nth-child(even) td{background:#faf8f2}td.q{font-weight:700;font-size:14px;text-align:center;width:60px}' +
-      'td.c{width:26px;text-align:center}td.c span{display:inline-block;width:14px;height:14px;border:1.5px solid #0B1220;border-radius:3px}td.n{width:34px;color:#888}' +
-      '.sku{color:#777;font-size:10.5px}.note{margin-top:10px;font-size:11px;color:#a33}.bar{margin:0 0 12px;display:flex;gap:8px}' +
+      '<style>@page{size:A4;margin:7mm}*{box-sizing:border-box}body{font:10px/1.25 Inter,Arial,sans-serif;color:#0B1220;margin:0;padding:12px;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+      '.hd{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:1.5px solid #0B1220;padding-bottom:4px;margin-bottom:5px}' +
+      '.k{font-size:8px;letter-spacing:.12em;font-weight:700;color:#B8912B}.t{font-size:14px;font-weight:700;margin-top:1px}.s{color:#555;font-size:9px}' +
+      '.sum{display:flex;gap:12px;font-size:9px;text-align:right}.sum b{font-size:13px;display:block}' +
+      'table{width:100%;border-collapse:collapse}th{background:#0B1220;color:#E9CC6E;text-align:left;font-size:8px;letter-spacing:.05em;text-transform:uppercase;padding:3px 5px}' +
+      'td{padding:2px 5px;border-bottom:1px solid #e6e6e6;vertical-align:middle}tr:nth-child(even) td{background:#faf8f2}td.q{font-weight:700;font-size:11px;text-align:center;width:38px}' +
+      'td.c{width:18px;text-align:center}td.c span{display:inline-block;width:10px;height:10px;border:1.2px solid #0B1220;border-radius:2px}td.n{width:22px;color:#888}' +
+      '.sku{color:#888;font-size:8.5px;margin-left:6px}.note{margin-top:6px;font-size:9px;color:#a33}.bar{margin:0 0 8px;display:flex;gap:8px}' +
+      'tr{page-break-inside:avoid}thead{display:table-header-group}' +
       '.bar button{font:600 12px Inter,Arial;padding:7px 14px;border-radius:8px;border:1px solid #0B1220;background:#0B1220;color:#E9CC6E;cursor:pointer}' +
       '@media print{.bar{display:none}body{padding:0}}</style></head><body>' +
       '<div class="bar"><button onclick="print()">Print / Save PDF</button></div>' +
@@ -1327,7 +1328,7 @@
       (Object.keys(accts).length ? " · " + esc(Object.keys(accts).join(", ")) : "") + '</div></div>' +
       '<div class="sum"><div><b>' + list.length + '</b>shipments</div><div><b>' + arr.length + '</b>products</div><div><b>' + units + '</b>units</div></div></div>' +
       '<table><thead><tr><th>#</th><th>Product</th><th>Qty</th><th>Orders</th><th>✓</th></tr></thead><tbody>' +
-      arr.map(function (p, i) { return '<tr><td class="n">' + (i + 1) + '</td><td>' + esc(p.n) + (p.sku ? '<div class="sku">' + esc(p.sku) + "</div>" : "") + '</td><td class="q">' + p.q + '</td><td class="n" style="width:60px;text-align:center;color:#333">' + Object.keys(p.o).length + '</td><td class="c"><span></span></td></tr>'; }).join("") +
+      arr.map(function (p, i) { return '<tr><td class="n">' + (i + 1) + '</td><td>' + esc(p.n) + (p.sku ? '<span class="sku">' + esc(p.sku) + "</span>" : "") + '</td><td class="q">' + p.q + '</td><td class="n" style="width:42px;text-align:center;color:#333">' + Object.keys(p.o).length + '</td><td class="c"><span></span></td></tr>'; }).join("") +
       "</tbody></table>" +
       (noItems.length ? '<div class="note">' + noItems.length + " shipment(s) have no product details in OMS: " + esc(noItems.slice(0, 20).join(", ")) + (noItems.length > 20 ? " …" : "") + "</div>" : "") +
       "</body></html>";
