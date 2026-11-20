@@ -1,6 +1,6 @@
 /* AIKM Admin Console — Bulk Refund tab (Amazon Order Adjustment file).
    Loaded by easyship-tab.js (no Shopify edit needed).
-   Data: aikm_admin/omsRefundOrders in "aikm-oms-sync" — SELF-SHIP orders whose latest NimbusPost shipment is RTO (last 60 days),
+   Data: aikm_admin/omsRefundOrders in "aikm-oms-sync" — SELF-SHIP orders whose latest NimbusPost / ProShip shipment is RTO / lost / pickup missed (last 60 days),
    refreshed once a day by refund-sync.yml. Read ONCE when the tab is opened (1 Firebase read).
    Orders not found there are looked up in the 15-day OMS data (only when needed), or in an OMS export file
    uploaded here (that file is read in the browser only — nothing is saved). */
@@ -54,7 +54,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     var sub = document.createElement("div");
     sub.className = "subtabbar no-print"; sub.id = "subtab-refund"; sub.style.display = "none";
     sub.innerHTML = '<span class="subtab-label">Amazon Bulk Refund</span>' +
-      '<span class="rf-meta" id="rfSyncLine">Self-ship refund pending · NimbusPost · last 60 days</span>' +
+      '<span class="rf-meta" id="rfSyncLine">Self-ship refund pending · NimbusPost + ProShip · last 60 days</span>' +
       '<span style="flex:1"></span>' +
       '<label class="subbtn" style="cursor:pointer;" title="Order older than 60 days? Upload an OMS Guru export (zip / csv / xlsx). Saved for all devices until the next upload."><i class="ti ti-upload"></i> Upload OMS export<input type="file" id="rfFile" accept=".zip,.csv,.xlsx,.xls" style="display:none"></label>' +
       '<button type="button" class="subbtn" id="rfSyncBtn" title="Pull the latest 60 days from OMS Guru now (about 3–6 minutes)"><i class="ti ti-refresh"></i> Update now</button>';
@@ -72,7 +72,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
         '<div class="panel"><h2>1 · Pick orders</h2>' +
           '<textarea id="rfIds" placeholder="Paste Amazon order IDs here — one per line, or copy a whole column from Excel.&#10;e.g. 408-1718820-2871569"></textarea>' +
           '<div class="rf-row"><button type="button" class="btn-gold" id="rfFindBtn"><i class="ti ti-search"></i> Find orders</button>' +
-          '<span class="rf-meta">or show from NimbusPost:</span>' +
+          '<span class="rf-meta">or show from NimbusPost + ProShip:</span>' +
           '<span class="rf-chip" data-rf-show="rto">Returned (RTO)</span><span class="rf-chip" data-rf-show="late">Pickup missed</span><span class="rf-chip" data-rf-show="lost">Lost / damaged</span><span class="rf-chip" data-rf-show="all">All refund pending</span>' +
           '<button type="button" class="secondary" id="rfClearBtn" style="margin-left:auto;"><i class="ti ti-x"></i> Clear</button></div>' +
           '<div id="rfMiss"></div></div>' +
@@ -98,7 +98,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
           "<b>3.</b> Orders → <b>Upload Order Related Files</b> → <b>Order Adjustment</b> → upload.<br>" +
           "<b>4.</b> Check <b>Review File Status</b> → should say Done, 0 errors.<br><br>" +
           "<b>Refund pending when:</b> shipment returned (any RTO stage), lost/damaged, or not picked up after Amazon\'s Deliver By date (SASTA STORE &amp; Praso).<br>" +
-          "<b>Self-ship only:</b> status comes from NimbusPost (OMS often still says Shipped). Easy Ship orders are never listed.<br>" +
+          "<b>Self-ship only:</b> status comes from the courier — ProShip (newest) or NimbusPost (OMS often still says Shipped). Easy Ship orders are never listed.<br>" +
           "<b>Safe:</b> Amazon never refunds more than the customer paid — an order already refunded is rejected, not paid twice.<br>" +
           "<b>Older than 60 days?</b> Use <b>Upload OMS export</b> (top right)." +
         "</div></div>" +
@@ -351,7 +351,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
   /* ---------- 3. render ---------- */
   function render() {
     if (!$("tab-refund")) return;
-    $("rfSyncLine").textContent = (loaded ? "Self-ship refund pending · NimbusPost · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship RTO · NimbusPost · last 60 days") +
+    $("rfSyncLine").textContent = (loaded ? "Self-ship refund pending · NimbusPost + ProShip · last 60 days · updated " + (when(storeAt) || "never — click Update now") : "Self-ship refund pending · NimbusPost + ProShip · last 60 days") +
       (upMeta ? " · OMS export saved: " + upMeta.name + " (" + Number(upMeta.lines || 0).toLocaleString("en-IN") + " lines, " + when(upMeta.at) + ")" : "");
     var pend = store.filter(function (o) { return !refunded(o.i); });
     var amzDone = store.filter(function (o) { var r = refunded(o.i); return r && r.amz; }).length;
@@ -379,7 +379,8 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
         var why = /^rto/.test(o.nb || "") ? "Shipment returned · " + o.ns.replace(/^rto/i, "RTO")
           : o.nb === "late" ? "Not picked up · Deliver By " + dd(o.db) + " passed"
           : o.nb === "lost" ? (/damage/i.test(o.ns) ? "Damaged" : "Lost") + " in transit"
-          : "Not RTO / lost / late in NimbusPost";
+          : "Not RTO / lost / late in NimbusPost or ProShip";
+        if (o.nb && o.src) why += " · " + (o.src === "proship" ? "ProShip" : "NimbusPost");
         return "<tr" + (o.off ? ' style="opacity:.5"' : "") + "><td><input type='checkbox' data-rf-on='" + esc(o.i) + "'" + (o.off ? "" : " checked") + (rf ? " disabled title='" + (rf.amz ? "Already refunded — found in the uploaded Amazon refund file" : "Already refunded by the robot") + "'" : "") + "></td>" +
           "<td class='cx-awb'>" + esc(o.o) + "<div class='rf-meta'>" + esc(o.i) + "</div></td><td>" + esc(o.a) + "</td>" +
           "<td style='white-space:nowrap'>" + (o.db ? "<span class='" + (o.db < today() ? "rf-db-late" : "") + "'>" + esc(new Date(o.db + "T00:00:00").toLocaleDateString("en-IN", { day: "2-digit", month: "short" })) + "</span>" + (o.db < today() ? "<div class='rf-meta'>passed</div>" : o.db === today() ? "<div class='rf-meta'>today</div>" : "") : "<span class='rf-meta'>—</span>") + "</td>" +
