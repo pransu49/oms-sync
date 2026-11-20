@@ -3,12 +3,12 @@ try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only
 // Never refunds anything itself: it only lines orders up. Money moves when the owner presses
 // "Approve & refund" in the console (which shows a confirm box first).
 //
-// Picks: SELF-SHIP Amazon orders whose latest NimbusPost shipment is RTO initiated / in transit / received
+// Picks: SELF-SHIP Amazon orders whose latest NimbusPost or ProShip shipment is RTO initiated / in transit / received
 // (rto, rto_delivered). Skips: already refunded (refund robot log, Amazon refund records, Amazon returns
 // report), marked "Don't refund" in the console, cancelled-before-shipping orders.
 // Order lines (item id, price, tax, shipping) come from OMS Guru data: 60-day refund list, then 15-day sync.
 //
-// Reads : main Firebase  nimbusDash/*, aikm_admin/refundSkip
+// Reads : main Firebase  nimbusDash/*, aikm_admin/proshipIndex, aikm_admin/refundSkip
 //         OMS Firebase   aikm_admin/omsRefundOrders, aikm_admin/omsOrders/chunks, aikm_admin/refundLog,
 //                        aikm_admin/refundChecks, aikm_admin/rtoIndex
 // Writes: OMS Firebase   aikm_admin/refundProposals { items, count, amount, at, hash, notified }
@@ -47,8 +47,18 @@ async function main() {
       if (!latest[id] || String(r.cr || '') > String(latest[id].cr || '')) latest[id] = r;
     });
   });
-  const rto = Object.entries(latest).filter(([, r]) => /^rto/.test(r.b || ''));
+  let rto = Object.entries(latest).filter(([, r]) => /^rto/.test(r.b || ''));
   console.log(`NimbusPost: ${Object.keys(latest).length} self-ship orders, ${rto.length} with RTO started or received.`);
+  // ---- 1b. ProShip (ships everything since 13 Nov 2026; owner 20 Nov 2026) — newest courier wins ----
+  try {
+    const { loadProshipIndex, proshipRefunds } = require('./proship-refund');
+    const ps = proshipRefunds(await loadProshipIndex(db), {}, { late: false, lost: false }); // Ready list = returned (RTO) only, like NimbusPost
+    const before = rto.length;
+    rto = rto.filter(([id]) => !ps.active.has(id) && !ps.pending[id]);                      // re-shipped by ProShip / replaced by ProShip's RTO
+    const dropped = before - rto.length;
+    Object.entries(ps.pending).forEach(([id, v]) => rto.push([id, { b: v.nb, st: v.ns, a: v.aw, c: v.c, ls: v.nd, dl: v.nd, src: 'proship' }]));
+    console.log(`ProShip: ${ps.counts.rto} with RTO started or received; ${dropped} NimbusPost order(s) replaced by their newer ProShip shipment.`);
+  } catch (e) { console.log('ProShip skipped:', e.message || e); }
 
   // ---- 2. order lines from OMS Guru data ----
   const lines = {};
@@ -85,7 +95,7 @@ async function main() {
       if (done.has(o.i)) { why.refunded++; return; }
       if (/^cancelled( before shipping)?$/i.test(String(o.st || '').trim())) { why.cancelled++; return; }
       items.push(Object.assign({}, o, {
-        nb: r.b === 'rto_delivered' ? 'rto_delivered' : 'rto', ns: String(r.st || r.b).replace(/_/g, ' '), aw: r.a || '', c: r.c || '',
+        nb: r.b === 'rto_delivered' ? 'rto_delivered' : 'rto', ns: String(r.st || r.b).replace(/_/g, ' '), aw: r.a || '', c: r.c || '', src: r.src || 'nimbus',
         nd: String((r.b === 'rto_delivered' ? r.dl || r.ls : r.ls) || '').slice(0, 10), db: o.db || dbIdx[id] || '', amt: amount(o), robot: 1 }));
     });
   });

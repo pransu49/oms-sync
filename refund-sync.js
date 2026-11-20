@@ -252,11 +252,13 @@ async function nimbusShipments() {
 // latest non-cancelled shipment per order; keep the order only if that shipment is RTO
 // Deliver-by dates from the Amazon (SP-API) sync: MAIN console Firebase, deliverByIndex/<account>
 // (order id -> 'YYYY-MM-DD'). Only accounts connected to SP-API (SASTA STORE, Praso) have it.
+let mainDb = null; // main console Firebase (deliver-by dates + ProShip index)
 async function loadDeliverBy() {
   const svc = process.env.FIREBASE_SERVICE_ACCOUNT_MAIN;
   if (!svc) { console.log('No FIREBASE_SERVICE_ACCOUNT_MAIN - deliver-by rule skipped.'); return {}; }
   const app = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(svc)) }, 'main');
-  const snap = await app.firestore().collection('deliverByIndex').get();
+  mainDb = app.firestore();
+  const snap = await mainDb.collection('deliverByIndex').get();
   const map = {};
   snap.forEach((d) => Object.assign(map, (d.data() || {}).orders || {}));
   console.log(`Deliver-by dates loaded: ${Object.keys(map).length} orders (${snap.docs.map((d) => d.id).join(', ')}).`);
@@ -307,7 +309,7 @@ function rtoOrders(ship, deliverBy) {
 
 // Compact record: a=account, o=order id, i=order item id, q=qty, p=item price per unit (incl. tax),
 // s=shipping per unit (incl. tax), t=tax %, st=OMS status, d=order date, ty=payment type, n=product,
-// ns=NimbusPost status, nb=rto|rto_delivered|lost|late, aw=AWB, c=courier, nd=status date, db=Amazon Deliver By date
+// ns=courier status (NimbusPost or ProShip, see src), nb=rto|rto_delivered|lost|late, aw=AWB, c=courier, nd=status date, db=Amazon Deliver By date
 function slim(row, rto) {
   const ch = row['Channel Name'] || '';
   return Object.assign({
@@ -347,10 +349,27 @@ async function main() {
   console.log(`Logging into OMS Guru as ${EMAIL}...`);
   await login();
   await new Promise((r) => setTimeout(r, 1500 + Math.floor(Math.random() * 1500)));
-  console.log('Reading NimbusPost shipments (self-ship) ...');
-  const ship = await nimbusShipments();
-  const rto = rtoOrders(ship, await loadDeliverBy());
-  console.log(`NimbusPost: ${ship.length} shipments in ${DAYS_BACK} days, ${Object.keys(rto).length} order(s) refund pending.`);
+  const deliverBy = await loadDeliverBy();
+  // 1) NimbusPost (older shipments; NimbusPost was switched off 13 Nov 2026 - kept for its RTOs still coming back)
+  let rto = {};
+  try {
+    console.log('Reading NimbusPost shipments (self-ship) ...');
+    const ship = await nimbusShipments();
+    rto = rtoOrders(ship, deliverBy);
+    Object.values(rto).forEach((v) => { v.src = 'nimbus'; });
+    console.log(`NimbusPost: ${ship.length} shipments in ${DAYS_BACK} days, ${Object.keys(rto).length} order(s) refund pending.`);
+  } catch (e) { console.log('NimbusPost skipped:', e.message || e); }
+  // 2) ProShip (ships everything since 13 Nov 2026) - newest courier, so it wins over NimbusPost
+  if (mainDb) {
+    const { loadProshipIndex, proshipRefunds } = require('./proship-refund');
+    const ps = proshipRefunds(await loadProshipIndex(mainDb), deliverBy);
+    let overridden = 0;
+    ps.active.forEach((id) => { if (rto[id]) { delete rto[id]; overridden++; } }); // re-shipped by ProShip, not returned
+    Object.assign(rto, ps.pending);
+    console.log(`ProShip: refund pending ${ps.counts.rto} returned (RTO), ${ps.counts.lost} lost/damaged, ${ps.counts.late} not picked up before Deliver By; ` +
+      `${ps.counts.active} live/delivered (${overridden} older NimbusPost RTO(s) dropped - re-shipped); ${ps.counts.noDate} pickup-pending without Deliver By date.`);
+  } else console.log('ProShip skipped: no FIREBASE_SERVICE_ACCOUNT_MAIN.');
+  console.log(`Refund pending in total (NimbusPost + ProShip): ${Object.keys(rto).length} order(s).`);
 
   // OMS Guru's "download" link is always the PREVIOUS export on the account, not the one just asked for.
   // So: 1) queue our long export (the link we get back belongs to someone else - ignored),
