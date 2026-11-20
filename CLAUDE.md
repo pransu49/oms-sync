@@ -5,6 +5,8 @@
   When you rewrite or replace `easyship-tab.js`, copy that block to the end of the new file.
 - Console files are loaded from jsDelivr (`@<commit>`, or `@main?v=<10-min stamp>` when the GitHub lookup is over its 60/hour limit — the browser keeps a plain `@main` copy for 7 days, so EVERY loader must add the `?v=` stamp; owner 14 Nov 2026 saw a stale Self-Ship). `cdn-purge.yml`
   clears the `@main` copy of every changed `console/*` file on push — keep it, or users see old versions (owner 7 Nov 2026).
+  It also warms `@<new commit>` (a brand-new commit answers 404 for the first minutes - owner 20 Nov 2026 lost the Bulk Refund menu item that way).
+  Every loader's `add(ref)` has `s.onerror` -> retry `@main` (keep it in new loaders).
 - After any change to `console/easyship-tab.js`, check: `grep -c refund-tab console/easyship-tab.js` must be 1 or more.
 - The console page (`page.dalbhaat-admin-console.liquid` on Shopify) also loads the refund tab by itself
   (block `AIKM BULK REFUND LOADER`). Keep that block too when replacing the console template.

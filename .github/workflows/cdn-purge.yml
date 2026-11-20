@@ -24,4 +24,9 @@ jobs:
               curl -sS -m 20 "https://purge.jsdelivr.net/gh/pransu49/oms-sync@main/$f" -o /dev/null && break; sleep 5
             done
             echo "refreshed $f"
+            # warm the CDN for the exact new version, so consoles asking for it (by commit) don't get "not found" for the first minutes
+            for i in 1 2 3 4 5 6; do
+              code=$(curl -sS -m 30 -o /dev/null -w "%{http_code}" "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@${GITHUB_SHA}/$f" || true)
+              [ "$code" = "200" ] && { echo "  ready at @${GITHUB_SHA:0:7}"; break; }; sleep 10
+            done
           done
