@@ -267,6 +267,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   NimbusPost / Zippy pills, panels and the "Upload NimbusPost export" button are hidden by CSS in `console/proship-tab.js` (`aikm-ship-off-css`).
   Their code is still loaded (weight settings are shared) and `nimbus-labels.yml` stays — it is the label robot for ProShip too.
   Owner's choice: orders ProShip can't serve (pincode not served) and non-Amazon orders are shipped by hand outside the console.
+  SHIPMENT TRACKING (owner 20 Nov 2026 "deploy ProShip here"): the console's old "Nimbus Tracking" screen (data-tab `nimbusdash`, built in the
+  Shopify console JS) is shown again as "Shipment Tracking" and fed with ProShip shipments by the block "Shipment Tracking = ProShip" at the end
+  of `console/proship-tab.js` (window.__ndInject with rows from proshipIndex; proship-tab's own listener shares the index as window.__psIdx +
+  event `aikm-proship-idx` -> 0 extra reads). "Sync NimbusPost now" there = proship.yml mode sync. Keep that block.
 
 - **Amazon fees in profit** (owner 17 Nov 2026, order 408-3117078-5273165): Amazon's Product Fees ESTIMATE returns closing fee 0 for all
   self-ship SKUs up to Rs 300, but the Finance API shows Rs 20 + 18% GST (Rs 23.60) is really charged. `feeFor()` in `spapi-sync.js`

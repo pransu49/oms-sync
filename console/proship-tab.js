@@ -306,6 +306,9 @@
       idxRef.onSnapshot(function (s) {
         try { idx = s.exists && s.data().data ? JSON.parse(s.data().data) : {}; } catch (e) { idx = {}; }
         feedFallback(); frMedAt = 0;
+        /* shared with Shipment Tracking (no extra Firebase read) */
+        window.__psIdx = idx; window.__psIdxAt = s.exists && s.data().updatedAt && s.data().updatedAt.toDate ? s.data().updatedAt.toDate() : new Date();
+        try { document.dispatchEvent(new CustomEvent("aikm-proship-idx")); } catch (e) {}
         if (isOpen()) { renderDates(); if (typeof buildPool === "function") setTimeout(buildPool, 0); }
         if (typeof window.__aikmCfRefresh === "function") window.__aikmCfRefresh();
       }, function (e) { console.warn("ProShip index read error", e); });
@@ -331,13 +334,15 @@
     /* NimbusPost + Zippy switched off (owner 13 Nov 2026: ProShip ships everything now) — hide their pills, panels and the
        "Upload NimbusPost export" button. Their code stays loaded (other panels read their weight settings). */
     var off = document.createElement("style"); off.id = "aikm-ship-off-css";
-    off.textContent = "#fsTabNimbus,#fsTabZippy,#selfshipNimbusPanel,#selfshipZippyPanel,#cfUpload,#cfUpNote,#ndHvBanner{display:none !important;}" +
+    off.textContent = "#fsTabNimbus,#fsTabZippy,#selfshipNimbusPanel,#selfshipZippyPanel,#cfUpload,#cfUpNote{display:none !important;}" +
       /* side-menu items: the menu's own styles use html#aikm ... !important, so this needs the same weight */
-      "html#aikm body #mainTabbar .tabbtn[data-tab=\"nimbusdash\"],html#aikm body #mainTabbar .tabbtn[data-tab*=\"zippy\"],html#aikm body .tabbtn[data-tab=\"nimbusdash\"],html#aikm body .tabbtn[data-tab*=\"zippy\"]{display:none !important;}";  // NimbusPost / Zippy off (owner 13 Nov 2026) - side-menu items hidden too
+      "html#aikm body #mainTabbar .tabbtn[data-tab*=\"zippy\"],html#aikm body .tabbtn[data-tab*=\"zippy\"]{display:none !important;}" +
+      /* Shipment Tracking (old NimbusPost tab) shows ProShip now (owner 20 Nov 2026): hide the NimbusPost set-up card */
+      "html#aikm body #ndSetup{display:none !important;}";  // NimbusPost / Zippy off (owner 13 Nov 2026) - side-menu items hidden too
     document.head.appendChild(off);
     /* belt and braces: hide the side-menu buttons inline too (beats any menu style), re-checked as other tabs load */
     var hideOff = function () {
-      document.querySelectorAll('.tabbtn[data-tab="nimbusdash"],.tabbtn[data-tab*="zippy"]').forEach(function (b) {
+      document.querySelectorAll('.tabbtn[data-tab*="zippy"]').forEach(function (b) {
         if (b.style.display !== "none") { b.style.setProperty("display", "none", "important"); if (b.classList.contains("active")) { var c = document.querySelector('.tabbtn[data-tab="courier"]'); if (c) c.click(); } }
       });
     };
@@ -1197,6 +1202,80 @@
     })();
     window.__proshipBuild = build; window.__proshipRows = function () { return lastRows; };
   }
+})();
+
+/* ===== Shipment Tracking = ProShip (owner 20 Nov 2026: "deploy ProShip here, we are not using NimbusPost").
+   The console's old "Nimbus Tracking" screen (KPIs, date-wise pickup -> in transit, handed-over-not-picked check, product column,
+   multi-select, Excel) is fed with ProShip shipments from aikm_admin/proshipIndex - the SAME listener the Self-Ship screen uses,
+   so 0 extra Firebase reads. Menu item renamed "Shipment Tracking". ===== */
+(function () {
+  if (window.__aikmShipTrack) return; window.__aikmShipTrack = true;
+  function bucket(v) {
+    if (v.s === "cancelled") return "cancelled";
+    if (v.s === "delivered") return "delivered";
+    if (v.s === "rto_delivered") return "rto_delivered";
+    if (v.s === "rto") return "rto";
+    var st = String(v.st || "ORDER_PLACED").toUpperCase().replace(/[\s-]+/g, "_");
+    if (/CANCEL/.test(st)) return "cancelled";
+    if (/^RTO/.test(st)) return /DELIVERED/.test(st) ? "rto_delivered" : "rto";
+    if (/DELIVERED/.test(st) && !/UNDELIVERED|OUT_FOR/.test(st)) return "delivered";
+    if (/PICKUP_FAIL|NOT_PICKED|PICKUP_EXCEPTION|ORDER_PLACED|PICKUP_PENDING|OUT_FOR_PICKUP|AWB_REGISTERED|MANIFEST|BOOKED|PICKUP_SCHEDULED|READY_TO_SHIP|PENDING/.test(st)) return "pickup";
+    if (/OUT_FOR_DELIVERY/.test(st)) return "ofd";
+    if (/UNDELIVERED|NDR|FAILED|EXCEPTION|LOST|DAMAGE/.test(st) || v.s === "lost") return "exception";
+    return "transit";
+  }
+  function pretty(v) {
+    if (v.s === "cancelled") return "Cancelled";
+    var st = String(v.st || "Booked").replace(/_/g, " ").toLowerCase().replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    return st === "Order Placed" ? "Pickup pending" : st;
+  }
+  var last = null, lastN = -1;
+  function rowsFrom(idx) {
+    return Object.keys(idx || {}).map(function (k) {
+      var v = idx[k] || {}; if (!v.a) return null;
+      return { a: String(v.a), o: k, c: v.c || "ProShip", st: pretty(v), b: bucket(v), cr: v.t ? new Date(v.t).toISOString() : "", pu: "", ed: "", pt: v.ac || "", f: v.r || "" };
+    }).filter(Boolean);
+  }
+  function inject(force) {
+    if (typeof window.__ndInject !== "function" || !window.__psIdx) return;
+    var cur = typeof window.__ndRows === "function" ? window.__ndRows() : [];
+    if (!force && last === window.__psIdx && cur.length === lastN) return;   // nothing new
+    var rs = rowsFrom(window.__psIdx); last = window.__psIdx; lastN = rs.length;
+    window.__ndInject(rs, { updatedAt: { toDate: function () { return window.__psIdxAt || new Date(); } }, daysBack: 15 });
+  }
+  document.addEventListener("aikm-proship-idx", function () { inject(true); });
+  /* the old NimbusPost listener may answer later with an empty list - put ProShip back */
+  setInterval(function () { inject(false); }, 4000);
+
+  function texts() {
+    var b = document.querySelector('.tabbtn[data-tab="nimbusdash"]');
+    if (b && !b.dataset.psNamed) {
+      b.dataset.psNamed = "1";
+      [].slice.call(b.childNodes).forEach(function (n) { if (n.nodeType === 3 && /Nimbus/i.test(n.textContent)) n.textContent = "Shipment Tracking"; });
+      b.title = "ProShip shipments: pickup, in transit, delivered, RTO";
+    }
+    var l = document.querySelector("#subtab-nimbusdash .subtab-label"); if (l && l.textContent !== "ProShip Shipments") l.textContent = "ProShip Shipments";
+    var m = document.querySelector("#ndDaysPanel .nb-muted"); if (m && /NimbusPost/.test(m.textContent)) m.textContent = m.textContent.replace(/NimbusPost/g, "ProShip");
+    var e = document.querySelector("#ndBody td.nb-muted"); if (e && /NimbusPost/.test(e.textContent)) e.textContent = window.__psIdx ? "No shipments match these filters." : "Loading ProShip shipments…";
+    /* "Sync NimbusPost now" -> "Sync ProShip now" */
+    var sb = document.getElementById("subtab-nimbusdash"); if (!sb) return;
+    var old = sb.querySelector('[data-sync-now="nimbus"]');
+    if (old && !sb.querySelector("[data-ps-sync]")) {
+      var n = document.createElement("button"); n.type = "button"; n.className = old.className; n.dataset.psSync = "1";
+      var lab = '<i class="ti ti-refresh"></i> Sync ProShip now';
+      n.innerHTML = lab; n.title = "Refresh ProShip shipment statuses now (also runs by itself every 30 min)";
+      n.addEventListener("click", function () {
+        if (typeof window.aikmGhDispatch !== "function") { alert("Please reload the console (Ctrl + Shift + R) and try again."); return; }
+        n.disabled = true; n.innerHTML = '<i class="ti ti-loader-2 ps-spin"></i> Syncing…';
+        window.aikmGhDispatch("proship.yml", { mode: "sync" })
+          .then(function () { n.innerHTML = '<i class="ti ti-check"></i> Started — new statuses in 2–3 min'; })
+          .catch(function (er) { alert(er.message || er); })
+          .then(function () { setTimeout(function () { n.disabled = false; n.innerHTML = lab; }, 90000); });
+      });
+      old.parentNode.replaceChild(n, old);
+    }
+  }
+  texts(); setInterval(texts, 2000);
 })();
 
 /* ===== DO NOT REMOVE - loads the bulk "tick loss orders" bar (console/loss-bulk.js) for the confirmation, ProShip,
