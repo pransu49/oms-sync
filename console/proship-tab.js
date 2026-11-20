@@ -1307,7 +1307,7 @@
         var ac = String(o.channel || "").replace(/\s*-\s*(Amazon|Meesho|Flipkart|Snapdeal|Shopify).*$/i, "").trim(); if (ac) accts[ac] = (accts[ac] || 0) + 1;
       });
     });
-    var arr = Object.keys(prods).map(function (k) { return prods[k]; }).sort(function (a, b) { return (b.q - a.q) || a.n.localeCompare(b.n, "en", { sensitivity: "base" }); });   // highest qty first (owner 20 Nov 2026)
+    var arr = Object.keys(prods).map(function (k) { return prods[k]; }).sort(function (a, b) { return b.q - a.q; });   // highest qty on top, nothing else (owner 20 Nov 2026)
     var units = arr.reduce(function (s, p) { return s + p.q; }, 0);
     var label = d ? new Date(d + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric" }) : "All dates";
     var html = '<!doctype html><html><head><meta charset="utf-8"><title>Picklist · Pickup pending · ' + esc(label) + '</title>' +
@@ -1327,8 +1327,8 @@
       '<div class="s">ProShip shipments booked' + (d ? " this day" : "") + ' and still waiting for pickup · printed ' + new Date().toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) +
       (Object.keys(accts).length ? " · " + esc(Object.keys(accts).join(", ")) : "") + '</div></div>' +
       '<div class="sum"><div><b>' + list.length + '</b>shipments</div><div><b>' + arr.length + '</b>products</div><div><b>' + units + '</b>units</div></div></div>' +
-      '<table><thead><tr><th>#</th><th>Product</th><th>Qty</th><th>Orders</th><th>✓</th></tr></thead><tbody>' +
-      arr.map(function (p, i) { return '<tr><td class="n">' + (i + 1) + '</td><td>' + esc(p.n) + (p.sku ? '<span class="sku">' + esc(p.sku) + "</span>" : "") + '</td><td class="q">' + p.q + '</td><td class="n" style="width:42px;text-align:center;color:#333">' + Object.keys(p.o).length + '</td><td class="c"><span></span></td></tr>'; }).join("") +
+      '<table><thead><tr><th>#</th><th>Product</th><th>Qty</th><th>✓</th></tr></thead><tbody>' +
+      arr.map(function (p, i) { return '<tr><td class="n">' + (i + 1) + '</td><td>' + esc(p.n) + '</td><td class="q">' + p.q + '</td><td class="c"><span></span></td></tr>'; }).join("") +
       "</tbody></table>" +
       (noItems.length ? '<div class="note">' + noItems.length + " shipment(s) have no product details in OMS: " + esc(noItems.slice(0, 20).join(", ")) + (noItems.length > 20 ? " …" : "") + "</div>" : "") +
       "</body></html>";
