@@ -365,6 +365,36 @@
       f.__aikm = true;
       try { fsMerge = f; } catch (e) {} window.fsMerge = f;
     })();
+    // 1b. FAST SAVE (owner 21 Nov 2026 "taking too much time in saving mapping"): the page's save cleared the WHOLE match memory and
+    //     re-matched every listing against ~6,700 LOTS items before the window could close (several seconds frozen).
+    //     Now only the saved ASIN is forgotten, the window closes at once and the page redraws a moment later.
+    (function fastSave(n) {
+      if (typeof saveSpapiBundle !== "function" || typeof matchMemo === "undefined") return void (n < 40 && setTimeout(function () { fastSave(n + 1); }, 1000));
+      var forget = function (asin) {
+        try {
+          var names = {}; (typeof spapiInventoryRaw !== "undefined" ? spapiInventoryRaw || [] : []).forEach(function (i) { if (i.asin === asin && i.name) names[i.name] = 1; });
+          Array.from(matchMemo.keys()).forEach(function (k) { if (k.indexOf(asin + "||") === 0 || names[k]) matchMemo.delete(k); });
+          if (typeof lotsPriceByCode !== "undefined") { delete lotsPriceByCode["BUNDLE:" + asin]; delete lotsPriceByCode["VENDOR:" + asin]; }
+        } catch (e) { try { matchMemo.clear(); } catch (e2) {} }
+      };
+      var wrap = function (name) {
+        var orig = window[name]; if (typeof orig !== "function" || orig.__fast) return;
+        var w = function (asin) {
+          var sr = window.spRender, had = Object.prototype.hasOwnProperty.call(matchMemo, "clear");
+          matchMemo.clear = function () { forget(asin); };
+          window.spRender = function () {};
+          try { return orig.apply(this, arguments); }
+          finally {
+            if (!had) delete matchMemo.clear;
+            if (window.spRender !== sr) window.spRender = sr;
+            say("Saving…");
+            setTimeout(function () { try { spMarkAllDirty(); spRender(); } catch (e) {} }, 60);
+          }
+        };
+        w.__fast = true; window[name] = w;
+      };
+      wrap("saveSpapiBundle"); wrap("saveSpapiVendor");
+    })(0);
     // 2. load overflow mappings into the page once
     (function loadOverflow(n) {
       var ok = false; try { ok = typeof STORE !== "undefined" && STORE && STORE.asinLotsMap && Object.keys(STORE.asinLotsMap).length > 0; } catch (e) {}

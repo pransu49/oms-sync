@@ -347,3 +347,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   cron-job.org; GitHub's own timer skipped most Munda/Vishal runs. The first step of `spapi-sync.yml` (job permission `actions: write`)
   dispatches `spapi-sync-munda/vishal/aikm.yml` in mode fast when their newest run is 12+ min old and none is running/waiting
   (the script upgrades to full when FULL_DUE_MS says so). Keep that step until cron-job.org also starts those 3 workflows.
+- **Fast mapping save** (owner 21 Nov 2026, "taking too much time in saving mapping"): block "1b. FAST SAVE" in `initMapFix()` of
+  `amazon-name-search.js` wraps the page's `saveSpapiBundle` / `saveSpapiVendor`: their `matchMemo.clear()` only forgets the saved ASIN
+  (and its listing names), their `spRender()` is deferred 60 ms, so the map window closes at once ("Saving…" toast, then "✓ Saved").
+  Before, every save re-matched ~1,000 listings against ~6,700 LOTS items while the window stayed open. Keep it.
