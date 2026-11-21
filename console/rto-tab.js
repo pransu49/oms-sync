@@ -41,7 +41,7 @@
     "@media (max-width:760px){html#aikm body #tab-rto .rt-card{grid-template-columns:1fr}html#aikm body #tab-rto .rt-act{flex-direction:row;flex-wrap:wrap}}",
   ].join(""); document.head.appendChild(st); })();
 
-  var S = { rows: [], at: null, errors: [], loaded: false, loading: null, q: "", k: "rto", s: "", acc: "", shown: PAGE, rec: {}, unsub: null, pend: "" };
+  var S = { rows: [], at: null, errors: [], loaded: false, loading: null, q: "", k: "rto", s: "todo", acc: "", shown: PAGE, rec: {}, unsub: null, pend: "" };
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function inr(n) { return n ? "₹" + Math.round(n).toLocaleString("en-IN") : "—"; }
@@ -116,6 +116,10 @@
     return S.rows.filter(function (r) {
       if (!ignoreChips) {
         if (S.k && r.k !== S.k) return false;
+        var hd = isDone(r);
+        if (S.s === "todo" && hd) return false;
+        if (S.s === "done" && !hd) return false;
+        if (S.s === "todo" || S.s === "done" || S.s === "all") {} else
         if (S.s === "omsno" ? !(r.s === "back" && !omsOk(r)) : S.s === "got" ? !(S.rec[r.o] || {}).r : S.s && (r.s !== S.s || (S.s === "back" && (S.rec[r.o] || {}).r))) return false;
         if (S.acc && short(r.acc) !== S.acc) return false;
       }
@@ -190,10 +194,11 @@
       ["k:rto", "RTO (undelivered)", n(function (r) { return r.k === "rto"; })],
       ["k:cust", "Customer returns", n(function (r) { return r.k === "cust"; })],
       "|",
-      ["s:way", "On the way back", n(function (r) { return inK(r) && r.s === "way" && !(S.rec[r.o] || {}).r; })],
-      ["s:back", "Amazon says returned", n(function (r) { return inK(r) && r.s === "back" && !(S.rec[r.o] || {}).r; })],
-      ["s:got", "Received by me", n(function (r) { return inK(r) && (S.rec[r.o] || {}).r; })],
-      ["s:omsno", "Returned · OMS not accepted", n(function (r) { return inK(r) && r.s === "back" && !omsOk(r); })],
+      ["s:todo", "To check", n(function (r) { return inK(r) && !isDone(r); })],
+      ["s:way", "On the way back", n(function (r) { return inK(r) && r.s === "way" && !isDone(r); })],
+      ["s:omsno", "Back · OMS not accepted", n(function (r) { return inK(r) && r.s === "back" && !isDone(r); })],
+      ["s:done", "Done", n(function (r) { return inK(r) && isDone(r); })],
+      ["s:all", "All", n(function (r) { return inK(r); })],
       "|",
       ["acc:Praso", "Praso", ""], ["acc:Sasta Store", "Sasta Store", ""],
     ];
@@ -233,6 +238,8 @@
     "</div></div>";
   }
   // Amazon says returned? OMS Guru accepted the return? (owner 21 Nov 2026: verify both on every card)
+  // done = received by us here, or OMS Guru already accepted the return (owner 21 Nov 2026: "too many RTO" -> show only what needs checking)
+  function isDone(r) { return !!(S.rec[r.o] || {}).r || omsOk(r); }
   function omsOk(r) { var rec = S.rec[r.o] || {}; return /return received|returned/i.test(r.om || "") || (rec.oms && rec.oms.s === "done"); }
   function verifyRow(r, rec) {
     var amz = r.rd ? ["back", "Amazon: RTO delivered ✓ " + dd(r.rd)] : r.nd ? ["back", "ProShip: RTO delivered ✓ " + dd(r.nd)] :
