@@ -50,7 +50,7 @@
     ".iv-seg{display:inline-flex;background:#EBE6DA;border-radius:10px;padding:3px;gap:2px}.iv-sg{all:unset;cursor:pointer;padding:7px 12px;border-radius:8px;font-size:12px;font-weight:500;color:var(--ink-2,#4A5468);white-space:nowrap}.iv-sg.on{background:#fff;color:var(--ink,#14213D);font-weight:600;box-shadow:0 1px 3px rgba(15,30,53,.1)}" +
     ".iv-sub{font-size:11px;color:var(--muted,#8B909B);margin-top:2px}.iv-empty{padding:50px 20px;text-align:center;color:var(--muted,#8B909B)}" +
     ".iv-end{text-align:center;padding:12px;font-size:11.5px;color:var(--muted,#8B909B)}.iv-tbl th.t-r{text-align:right}.iv-tbl th.cm-th{cursor:pointer}" +
-    ".iv-st{display:inline-block;font-size:11px;font-weight:600;border-radius:20px;padding:2px 9px;white-space:nowrap}.iv-st.ok{background:#E6F3EC;color:#1E7A4B}.iv-st.bad{background:#FCECEA;color:#B42318}" +
+    ".iv-st.warn{background:#FBF1DF;color:#A86A12}.iv-st{display:inline-block;font-size:11px;font-weight:600;border-radius:20px;padding:2px 9px;white-space:nowrap}.iv-st.ok{background:#E6F3EC;color:#1E7A4B}.iv-st.bad{background:#FCECEA;color:#B42318}" +
     ".iv-sel{height:36px;border:1px solid var(--line,#E7E1D3);border-radius:9px;padding:0 10px;font:600 12.5px Inter,sans-serif;color:var(--navy,#0F1E35);background:#fff;outline:none;cursor:pointer}.iv-sel:focus{border-color:var(--gold,#C9A24B)}" +
     ".iv-tools .ap-search{flex:0 1 320px}.iv-accs .iv-sg{padding:7px 10px}" +
     ".iv-pc{display:flex;align-items:center;gap:12px}.iv-pic{flex:none;width:56px;height:56px;border:1px solid var(--line,#E7E1D3);border-radius:9px;background:#fff;display:inline-flex;align-items:center;justify-content:center;overflow:hidden}" +
@@ -182,7 +182,7 @@
       '<td class="r"><input class="iv-own-in" type="number" min="0" step="1" data-k="' + esc(r.k) + '" data-v="' + (K.own || 0) + '" value="' + (K.own || 0) + '"></td>' +
       '<td class="r">' + (K.pd ? '<span style="color:#A86A12;font-weight:600">' + nf(K.pd) + "</span>" : "0") + "</td>" +
       '<td class="r"><span class="iv-q ' + (r.oos ? "bad" : "ok") + '">' + nf(Math.max(0, Math.floor(r.freeGN))) + "</span>" + (r.free !== r.freeGN ? '<div class="iv-sub">Sasta ' + nf(Math.max(0, Math.floor(r.free))) + "</div>" : "") + "</td>" +
-      '<td><span class="iv-st ' + (r.oos ? "bad" : "ok") + '">' + (r.oos ? "Out of stock" : "In stock") + "</span>" + (r.oosAt ? '<div class="iv-sub" title="When the robot set it to 0 on Amazon">OOS on Amazon · ' + ago(r.oosAt) + "</div>" : "") + "</td>" +
+      '<td>' + (r.sasta ? '<span class="iv-st warn" title="LOTS-GN is under 10, LOTS-62 has stock. Only Sasta Store sells LOTS-62 stock, so Sasta stays live; the other accounts are 0.">Live on Sasta only</span><div class="iv-sub">LOTS-62 stock · others 0</div>' : '<span class="iv-st ' + (r.oos ? "bad" : "ok") + '">' + (r.oos ? "Out of stock" : "In stock") + "</span>") + (r.oosAt ? '<div class="iv-sub" title="When the robot set it to 0 on Amazon">OOS on Amazon · ' + ago(r.oosAt) + "</div>" : "") + "</td>" +
       "<td>" + (ch || '<span class="iv-sub">' + (K.mappedOnly ? "Mapped to LOTS · no live listing on these accounts" : "No Amazon listing linked yet") + "</span>") + "</td></tr>"; }
   function pic(u) { if (!u.img) return '<span class="iv-pic empty"><i class="ti ti-photo"></i></span>';
     return '<a class="iv-pic" href="https://www.amazon.in/dp/' + esc(u.asin) + '" target="_blank" rel="noopener"><img loading="lazy" alt="" src="' + esc(String(u.img).replace(/\.([a-z]+)$/i, "._SL120_.$1")) + '" onerror="this.parentNode.classList.add(\'empty\');this.remove()"></a>'; }
@@ -207,11 +207,11 @@
         if (!KEYS[k]) KEYS[k] = { gn: null, s62: null, own: CTL.own[k] ? +CTL.own[k].q || 0 : 0, pd: 0, mappedOnly: true }; }); });
     Object.keys(KEYS).forEach(function (k) { var K = KEYS[k]; if (K.gn == null && !/^A:/.test(k) && LP[k] && LP[k].qty != null && isFinite(parseFloat(LP[k].qty))) K.gn = parseFloat(LP[k].qty); });
     var keys = Object.keys(KEYS).filter(function (k) { return M[k] || KEYS[k].mappedOnly || (CTL.own[k] && +CTL.own[k].q > 0); });
-    var rows = keys.map(function (k) { var K = KEYS[k], L = M[k] || [], free = freeOf(K, true), freeGN = freeOf(K, false), vend = /^A:/.test(k), oos = freeGN < (vend ? 1 : 10);
+    var rows = keys.map(function (k) { var K = KEYS[k], L = M[k] || [], free = freeOf(K, true), freeGN = freeOf(K, false), vend = /^A:/.test(k), oos = freeGN < (vend ? 1 : 10), sasta = oos && !vend && free >= 10;
       var diff = L.some(function (x) { return x.st === "diff" || x.st === "fail"; });
       var oosAt = L.reduce(function (m, x) { return x.target === 0 && x.oosAt > m ? x.oosAt : m; }, 0);
-      return { k: k, K: K, L: L, oosAt: oosAt, name: nameOf(k), free: free, freeGN: freeGN, oos: oos, diff: diff, own: (K.own || 0) > 0, pend: (K.pd || 0) > 0,
-        v: { name: nameOf(k), gn: vend ? null : K.gn, s62: vend ? null : K.s62, own: K.own || 0, pd: K.pd || 0, fin: Math.max(0, Math.floor(freeGN)), st: oos ? "Out of stock" : "In stock",
+      return { k: k, K: K, L: L, oosAt: oosAt, sasta: sasta, name: nameOf(k), free: free, freeGN: freeGN, oos: oos, diff: diff, own: (K.own || 0) > 0, pend: (K.pd || 0) > 0,
+        v: { name: nameOf(k), gn: vend ? null : K.gn, s62: vend ? null : K.s62, own: K.own || 0, pd: K.pd || 0, fin: Math.max(0, Math.floor(freeGN)), st: sasta ? "Live on Sasta only (LOTS-62)" : oos ? "Out of stock" : "In stock",
           amz: !L.length ? "No Amazon listing" : diff ? "Amazon differs - fixed at next push" : "Matches Amazon" } }; });
     var unl = []; ACC.forEach(function (a) { var P = PLAN[a[0]]; if (P) P.rows.forEach(function (r) { if (r[5] === "unlinked" || r[5] === "nostock") unl.push({ ac: a[0], acct: a[1], sku: r[0], asin: r[1], amz: r[4], why: r[5], name: r[6] || "", img: r[7] || "" }); }); });
     unl.forEach(function (u) { if (!u.name || !u.img) { var f = (typeof spapiInventoryRaw !== "undefined" ? spapiInventoryRaw || [] : []).find(function (i) { return i.asin === u.asin && (i.name || i.img); }); if (f) { u.name = u.name || f.name || ""; u.img = u.img || f.img || ""; } } });
@@ -230,7 +230,7 @@
     if (hasCM()) { CM.rows[T] = list; list = cmApply(T, list, COLS); }
     CUR = list; CUR_UNL = unl; shownN = 0;
     var head = '<div class="iv-k">' + tile("all", src === "vendor" ? "Vendor products" : src === "lots" ? "LOTS products" : "All products", "#14213D", rows.length, src === "lots" ? "mapped to LOTS" : "products") + tile("in", "In stock", "#1E7A4B", rows.filter(function (r) { return !r.oos; }).length, "10+ free") +
-      tile("oos", "Out of stock", "#B42318", rows.filter(function (r) { return r.oos; }).length, "under 10 free") + tile("pend", "Pending orders", "#C9A24B", rows.filter(function (r) { return r.pend; }).length, "products blocked") +
+      tile("oos", "Out of stock", "#B42318", rows.filter(function (r) { return r.oos; }).length, "under 10 free · " + nf(rows.filter(function (r) { return r.sasta; }).length) + " live on Sasta") + tile("pend", "Pending orders", "#C9A24B", rows.filter(function (r) { return r.pend; }).length, "products blocked") +
       tile("own", "Own stock", "#1F4E8C", rows.filter(function (r) { return r.own; }).length, "products in your godown") + tile("diff", "Amazon differs", "#A86A12", rows.filter(function (r) { return r.diff; }).length, "fixed at next push") + "</div>";
     var seg = function (v, l, n) { return '<button type="button" class="iv-sg' + (src === v ? " on" : "") + '" data-src="' + v + '">' + l + (n != null ? " · " + nf(n) : "") + "</button>"; };
     var accN = function (a) { return filt === "unl" ? unlAll.filter(function (u) { return !a || u.ac === a; }).length : rowsAll.filter(function (r) { return !a || r.L.some(function (x) { return x.acct === a; }); }).length; };
