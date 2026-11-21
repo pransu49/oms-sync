@@ -351,3 +351,5 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   `amazon-name-search.js` wraps the page's `saveSpapiBundle` / `saveSpapiVendor`: their `matchMemo.clear()` only forgets the saved ASIN
   (and its listing names), their `spRender()` is deferred 60 ms, so the map window closes at once ("Saving…" toast, then "✓ Saved").
   Before, every save re-matched ~1,000 listings against ~6,700 LOTS items while the window stayed open. Keep it.
+  Inside the Self-Ship map frame (window.AIKM_EMBED) there is NO redraw after a save, and the frame's costOf() forgets only that ASIN
+  (it used matchMemo.clear() -> 10-20 s before Self-Ship got the 'close' message, owner 21 Nov 2026). Close message sent 30 ms after the window hides.

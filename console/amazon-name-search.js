@@ -388,7 +388,10 @@
             if (!had) delete matchMemo.clear;
             if (window.spRender !== sr) window.spRender = sr;
             say("Saving…");
-            setTimeout(function () { try { spMarkAllDirty(); spRender(); } catch (e) {} }, 60);
+            // inside the Self-Ship map frame nothing of the Amazon page is visible -> no redraw at all (it blocked the
+            // "window closed" message for 10-20 s); on the Amazon page redraw after the window has closed
+            if (!window.AIKM_EMBED) setTimeout(function () { try { spMarkAllDirty(); spRender(); } catch (e) {} }, 400);
+            else try { spMarkAllDirty(); } catch (e) {}
           }
         };
         w.__fast = true; window[name] = w;
@@ -1173,7 +1176,8 @@
   function recOf(asin) { try { return JSON.stringify(STORE.asinLotsMap[asin] || null); } catch (e) { return "null"; } }
   function costOf(asin) {
     try {
-      matchMemo.clear();
+      // owner 21 Nov 2026 (10-20 s stuck after Save): forget only this ASIN, not every match on the page
+      Array.from(matchMemo.keys()).forEach(function (k) { if (k.indexOf(asin + "||") === 0) matchMemo.delete(k); });
       var nm = typeof spMatchName === "function" ? spMatchName(asin) : "";
       var m = resolveSpapiLotsMatch(nm || asin, asin), p = m && m.code ? lotsPriceByCode[m.code] : null, sl = p ? bestSlabFor(p.slabs) : null;
       return { cost: sl ? sl.price : null, name: m ? m.name : "" };
@@ -1206,7 +1210,7 @@
               setTimeout(function () {
                 var after = recOf(asin), saved = after !== before && after !== "null", c = saved ? costOf(asin) : { cost: null, name: "" };
                 tell({ type: "close", asin: asin, acct: acct || spapiCurrentAccount, saved: saved, cost: c.cost, name: c.name, wasSaved: before !== "null" });
-              }, 250);
+              }, 30);
             });
             obs.observe(mm, { attributes: true, attributeFilter: ["style"] }); lastObs = obs;
           }
