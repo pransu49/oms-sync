@@ -92,12 +92,12 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
         /* Amazon refund-file upload removed (owner 7 Nov 2026): Finance API access now marks refunded orders. Older uploads are still read. */
         '<div class="panel"><h2>Refund robot <span class="rf-meta" id="rfRobotState"></span></h2><div id="rfRobot"><div class="rf-empty">No robot refunds yet.</div></div></div>' +
         '<div class="panel"><h2>How to upload</h2><div class="rf-rule">' +
-          "<b>SASTA STORE &amp; Praso:</b> tick orders → check amounts → <b>Refund now</b>. The robot sends it to Amazon and shows Refunded / Failed below.<br><br><b>Other accounts:</b><br>" +
+          "<b>All 5 accounts:</b> tick orders → check amounts → <b>Refund now</b>. The robot sends it to Amazon and shows Refunded / Failed below.<br><br><b>By hand (if the robot fails):</b><br>" +
           "<b>1.</b> Download the file for an account.<br>" +
           "<b>2.</b> Log into <b>that account</b> in Seller Central.<br>" +
           "<b>3.</b> Orders → <b>Upload Order Related Files</b> → <b>Order Adjustment</b> → upload.<br>" +
           "<b>4.</b> Check <b>Review File Status</b> → should say Done, 0 errors.<br><br>" +
-          "<b>Refund pending when:</b> shipment returned (any RTO stage), lost/damaged, or not picked up after Amazon\'s Deliver By date (SASTA STORE &amp; Praso).<br>" +
+          "<b>Refund pending when:</b> shipment returned (any RTO stage), lost/damaged, or not picked up after Amazon\'s Deliver By date.<br>" +
           "<b>Self-ship only:</b> status comes from the courier — ProShip (newest) or NimbusPost (OMS often still says Shipped). Easy Ship orders are never listed.<br>" +
           "<b>Safe:</b> Amazon never refunds more than the customer paid — an order already refunded is rejected, not paid twice.<br>" +
           "<b>Older than 60 days?</b> Use <b>Upload OMS export</b> (top right)." +
@@ -124,6 +124,7 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     ["rfDbFrom", "rfDbTo"].forEach(function (id) { $(id).addEventListener("change", function () { setDbf("range", $("rfDbFrom").value, $("rfDbTo").value); }); });
     p.addEventListener("click", function (e) {
       var c = e.target.closest("[data-rf-show]"); if (c) { showStatus(c.dataset.rfShow); return; }
+      var pa = e.target.closest("[data-rf-pacc]"); if (pa) { showStatus("all", pa.dataset.rfPacc); return; }
       var d = e.target.closest("[data-rf-dl]"); if (d) { download(d.dataset.rfDl); return; }
       var rn = e.target.closest("[data-rf-now]"); if (rn) { refundNow(rn.dataset.rfNow); return; }
       var x = e.target.closest("[data-rf-x]"); if (x) { sel = sel.filter(function (o) { return o.i !== x.dataset.rfX; }); render(); return; }
@@ -241,17 +242,26 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     $("rfReadyAt").textContent = ready.at ? "· checked " + when(ready.at) : "";
     var it = readyItems();
     if (!loaded) return;
-    if (!it.length) { $("rfReadyBody").innerHTML = '<div class="rf-meta">Nothing waiting. The robot checks every hour (8 AM–10 PM) for self-ship orders whose RTO started or came back, and sends you a Telegram message.</div>'; return; }
     var by = {};
     it.forEach(function (o) { var b = by[o.a] = by[o.a] || { o: {}, back: {}, amt: 0 }; b.o[o.o] = 1; if (o.nb === "rto_delivered") b.back[o.o] = 1; b.amt = r2(b.amt + calc(o).tot); });
-    $("rfReadyBody").innerHTML = '<div class="rf-meta" style="margin-bottom:10px">Self-ship orders whose <b>RTO started or came back</b> — not refunded yet. Check, then approve. Nothing is refunded without your OK.</div>' +
-      Object.keys(by).sort().map(function (a) {
-        var b = by[a], n = Object.keys(b.o).length, back = Object.keys(b.back).length;
-        return '<div class="rf-acc"><div class="rf-acc-info"><div class="rf-acc-name">' + esc(a) + '</div><div class="rf-acc-sub">' + n + " order(s) · " + inr(b.amt) + " · RTO received " + back + " · on the way " + (n - back) + "</div></div>" +
-          '<button type="button" class="secondary" data-rf-review="' + esc(a) + '"><i class="ti ti-list-check"></i> Review</button>' +
-          (ROBOT[a] ? '<button type="button" class="btn-gold" data-rf-approve="' + esc(a) + '"><i class="ti ti-circle-check"></i> Approve &amp; refund</button>' : '<button type="button" class="btn-gold" data-rf-review="' + esc(a) + '"><i class="ti ti-download"></i> Review &amp; file</button>') + "</div>";
+    // every Amazon account, always shown (owner 20 Nov 2026: "all accounts not visible")
+    var pend = {};
+    store.forEach(function (o) { if (refunded(o.i)) return; var k = accKey(o.a), p = pend[k] = pend[k] || { o: {}, rto: {}, late: {}, lost: {} };
+      p.o[o.o] = 1; if (/^rto/.test(o.nb)) p.rto[o.o] = 1; else if (o.nb === "late") p.late[o.o] = 1; else if (o.nb === "lost") p.lost[o.o] = 1; });
+    var nk = function (m) { return Object.keys(m || {}).length; };
+    $("rfReadyBody").innerHTML = '<div class="rf-meta" style="margin-bottom:10px">' + (it.length ? 'Self-ship orders whose <b>RTO started or came back</b> — not refunded yet. Check, then approve. Nothing is refunded without your OK.' : 'No returned (RTO) order is waiting. Pickup-missed and lost orders need your check — open an account below.') + '</div>' +
+      ACC_LIST.map(function (A) {
+        var a = Object.keys(by).filter(function (x) { return accKey(x) === A.k; })[0], b = a && by[a], p = pend[A.k] || {};
+        var n = b ? Object.keys(b.o).length : 0, back = b ? Object.keys(b.back).length : 0, tot = nk(p.o);
+        var sub = (n ? '<b style="color:var(--x-text)">' + n + " ready · " + inr(b.amt) + "</b> (RTO received " + back + " · on the way " + (n - back) + ") · " : "") +
+          (tot ? tot + " pending: " + nk(p.rto) + " returned · " + nk(p.late) + " pickup missed · " + nk(p.lost) + " lost" : '<span style="color:var(--x-green)">✓ nothing pending</span>');
+        return '<div class="rf-acc"' + (n || tot ? "" : ' style="opacity:.6"') + '><div class="rf-acc-info"><div class="rf-acc-name">' + esc(A.n) + '</div><div class="rf-acc-sub">' + sub + "</div></div>" +
+          (tot ? '<button type="button" class="secondary" data-rf-pacc="' + A.k + '"><i class="ti ti-list-search"></i> Show ' + tot + "</button>" : "") +
+          (n ? '<button type="button" class="secondary" data-rf-review="' + esc(a) + '"><i class="ti ti-list-check"></i> Review</button><button type="button" class="btn-gold" data-rf-approve="' + esc(a) + '"><i class="ti ti-circle-check"></i> Approve &amp; refund</button>' : "") + "</div>";
       }).join("");
   }
+  var ACC_LIST = [{ k: "sasta", n: "SASTA STORE" }, { k: "praso", n: "PRASO ENTERPRISES" }, { k: "vishal", n: "Vishal E commerce" }, { k: "munda", n: "E Commerce Munda" }, { k: "aikm", n: "AIKM Pharma" }];
+  function accKey(a) { var m = String(a || "").match(/sasta|praso|vishal|munda|aikm/i); return m ? m[0].toLowerCase() : String(a || ""); }
   function reviewReady(acc, approve) {
     chip(""); missing = []; setDbf("all", "", "", true);
     sel = []; addSel(readyItems().filter(function (o) { return o.a === acc; }));
@@ -338,11 +348,12 @@ html#aikm body #tab-refund .rf-link{background:none !important;border:0 !importa
     } catch (e) { toast("Lookup failed: " + e.message, true); }
     $("rfFindBtn").disabled = false; await fillDeliverBy(); render();
   }
-  async function showStatus(k) {
-    await load(false); chip(k); sel = []; missing = [];
+  async function showStatus(k, acc) {
+    await load(false); chip(acc ? "" : k); sel = []; missing = [];
     addSel(store.filter(function (o) {
-      return !refunded(o.i) && (k === "all" ? true : k === "rto" ? /^rto/.test(o.nb) : o.nb === k);
+      return !refunded(o.i) && (!acc || accKey(o.a) === acc) && (k === "all" ? true : k === "rto" ? /^rto/.test(o.nb) : o.nb === k);
     }));
+    if (acc) try { $("rfTable").scrollIntoView({ behavior: "smooth", block: "start" }); } catch (e) {}
     sel.forEach(function (o) { o.off = true; }); // nothing ticked until you choose
     await fillDeliverBy(); render();
     toast(sel.length + " refund-pending line(s) shown — tick the ones to refund.");
