@@ -116,7 +116,7 @@
     return S.rows.filter(function (r) {
       if (!ignoreChips) {
         if (S.k && r.k !== S.k) return false;
-        if (S.s === "got" ? !(S.rec[r.o] || {}).r : S.s && (r.s !== S.s || (S.s === "back" && (S.rec[r.o] || {}).r))) return false;
+        if (S.s === "omsno" ? !(r.s === "back" && !omsOk(r)) : S.s === "got" ? !(S.rec[r.o] || {}).r : S.s && (r.s !== S.s || (S.s === "back" && (S.rec[r.o] || {}).r))) return false;
         if (S.acc && short(r.acc) !== S.acc) return false;
       }
       return matches(r, q);
@@ -193,6 +193,7 @@
       ["s:way", "On the way back", n(function (r) { return inK(r) && r.s === "way" && !(S.rec[r.o] || {}).r; })],
       ["s:back", "Amazon says returned", n(function (r) { return inK(r) && r.s === "back" && !(S.rec[r.o] || {}).r; })],
       ["s:got", "Received by me", n(function (r) { return inK(r) && (S.rec[r.o] || {}).r; })],
+      ["s:omsno", "Returned · OMS not accepted", n(function (r) { return inK(r) && r.s === "back" && !omsOk(r); })],
       "|",
       ["acc:Praso", "Praso", ""], ["acc:Sasta Store", "Sasta Store", ""],
     ];
@@ -225,12 +226,25 @@
       '<div class="rt-ids"><span>AWB ' + hl(r.a || "—") + "</span>" + (r.a2 ? "<span>AWB " + hl(r.a2) + "</span>" : "") +
         (r.ra ? "<span>Return ID " + hl(r.ra) + "</span>" : "") + (rec.id ? "<span>Return ID " + hl(rec.id) + " ✓</span>" : "") + "</div>" +
       (money ? '<div class="rt-money">' + money + "</div>" : "") +
-      (rec.r ? '<div class="rt-money">' + (rec.cond === "bad" ? '<span class="rt-tag cust">Damaged</span> ' : "") + omsLine(rec) + "</div>" :
-        r.om ? '<div class="rt-money"><span class="rt-muted">OMS Guru status: ' + esc(r.om) + (/return received/i.test(r.om) ? " ✓ (already accepted there)" : "") + "</span></div>" : "") +
+      verifyRow(r, rec) +
     '</div><div class="rt-act">' +
       (S.pend && (r._t + " " + (rec.id || "")).indexOf(S.pend) < 0 ? '<button type="button" class="btn-gold" data-rt-link="' + esc(r.o) + '"><i class="ti ti-link"></i> This is the parcel</button>' : "") +
       actions(r, rec) +
     "</div></div>";
+  }
+  // Amazon says returned? OMS Guru accepted the return? (owner 21 Nov 2026: verify both on every card)
+  function omsOk(r) { var rec = S.rec[r.o] || {}; return /return received|returned/i.test(r.om || "") || (rec.oms && rec.oms.s === "done"); }
+  function verifyRow(r, rec) {
+    var amz = r.rd ? ["back", "Amazon: RTO delivered ✓ " + dd(r.rd)] : r.nd ? ["back", "Courier: RTO delivered ✓ " + dd(r.nd)] :
+      /returned to seller/i.test(r.os || "") ? ["back", "Amazon: returned to seller ✓"] : ["way", "Amazon: not delivered back yet"];
+    var oms;
+    if (rec.r && rec.oms && rec.oms.s !== "done") oms = omsLine(rec);
+    else if (omsOk(r)) oms = '<span class="rt-tag back">OMS Guru: return accepted ✓' + (r.om ? " · " + esc(r.om) : "") + "</span>";
+    else if (r.om) oms = '<span class="rt-tag cust">OMS Guru: not accepted · ' + esc(r.om) + "</span>";
+    else oms = '<span class="rt-tag">OMS Guru: status not known</span>';
+    return '<div class="rt-money" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' +
+      '<span class="rt-tag ' + amz[0] + '">' + esc(amz[1]) + "</span>" + (r.rst && !r.rd ? '<span class="rt-muted">Amazon return: ' + esc(r.rst) + "</span>" : "") +
+      oms + (rec.cond === "bad" ? '<span class="rt-tag cust">Damaged</span>' : "") + "</div>";
   }
   function omsLine(rec) {
     var o = rec.oms;

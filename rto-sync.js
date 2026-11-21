@@ -91,8 +91,17 @@ async function main() {
     });
   });
   // the 60-day refund list also knows the account of older self-ship orders
-  try { ((await omsDb.collection('aikm_admin').doc('omsRefundOrders').get()).data() || {}).orders?.forEach((o) => { if (o.aw && o.a) accByAwb[o.aw] = o.a; if (o.o && o.a && !omsBy[o.o]) omsBy[o.o] = { acc: o.a, a: o.aw || '', it: { t: String(o.n || '').slice(0, 90), sku: '', asin: '', q: num(o.q) || 1 } }; }); } catch (e) {}
-  console.log(`OMS orders known: ${Object.keys(omsBy).length}`);
+  try { ((await omsDb.collection('aikm_admin').doc('omsRefundOrders').get()).data() || {}).orders?.forEach((o) => { if (o.aw && o.a) accByAwb[o.aw] = o.a; if (o.o && o.a && !omsBy[o.o]) omsBy[o.o] = { acc: o.a, a: o.aw || '', os: o.st || '', it: { t: String(o.n || '').slice(0, 90), sku: '', asin: '', q: num(o.q) || 1 } }; }); } catch (e) {}
+  // OMS Guru status of older orders (live data = last 15 days): the 60-day shipped archive (oms-archive.yml, twice a day)
+  let archived = 0;
+  try {
+    (await omsDb.collection('aikm_admin').doc('omsArchive').collection('chunks').get()).forEach((d) => (d.data().orders || []).forEach((o) => {
+      const id = baseOrder(o.channelOrderId); if (!id) return;
+      if (!omsBy[id]) { omsBy[id] = { acc: String(o.channel || '').replace(/\s*-\s*(Amazon|Meesho|Flipkart|Snapdeal|Shopify).*$/i, '').trim(), it: { t: String(o.productName || o.sku || '').slice(0, 90), sku: o.sku || '', asin: o.asin || '', q: num(o.qty) || 1 } }; }
+      if (!omsBy[id].os && o.status) { omsBy[id].os = o.status; archived++; }
+    }));
+  } catch (e) { console.log('OMS archive not read:', e.message); }
+  console.log(`OMS orders known: ${Object.keys(omsBy).length} (status from archive: ${archived})`);
 
   const rows = {}; // orderId -> row
   const row = (id) => (rows[id] = rows[id] || { o: id });
