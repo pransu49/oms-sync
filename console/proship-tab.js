@@ -174,7 +174,7 @@
       "html#aikm body #aikmShipHub .hj-act button{all:unset;cursor:pointer;font-size:12px;font-weight:600;padding:6px 12px;border-radius:8px;border:1px solid var(--x-line);background:#fff;color:#0F1E35;}" +
       "html#aikm body #aikmShipHub .hj-act button.bad{color:#B42318;border-color:#F3B8B1;}html#aikm body #aikmShipHub .hj-act button:hover{background:#0F1E35;color:#fff;border-color:#0F1E35;}" +
       /* console sub-bar above (Sync / Push / Confirm / Rejected): one tidy row, status texts become tooltips */
-      "html#aikm body #subtab-selfship{display:flex !important;align-items:center;gap:8px;flex-wrap:wrap;}" +
+      "html#aikm body #subtab-selfship:not([style*=\"display: none\"]):not([style*=\"display:none\"]){display:flex !important;align-items:center;gap:8px;flex-wrap:wrap;}" +
       "html#aikm body #subtab-selfship .sn-pushinfo,html#aikm body #subtab-selfship .sn-amzinfo{display:none !important;}" +
       "html#aikm body #subtab-selfship .sn-btn,html#aikm body #subtab-selfship .pe-btn,html#aikm body #subtab-selfship button{height:34px;box-sizing:border-box;border-radius:9px !important;padding:0 13px !important;font-size:12px !important;}" +
       "html#aikm body #subtab-selfship .sn-btn.sn-amz,html#aikm body #subtab-selfship .sn-btn.sn-push{background:#fff !important;color:#0F1E35 !important;border:1px solid var(--x-line) !important;}" +
