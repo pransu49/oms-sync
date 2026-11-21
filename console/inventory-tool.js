@@ -44,6 +44,7 @@
     ".iv-tbl td{padding:10px 12px;border-bottom:1px solid var(--line-2,#F0ECE2);vertical-align:middle}.iv-tbl .r{text-align:right;font-variant-numeric:tabular-nums}" +
     ".iv-q{font:600 15px Lexend,sans-serif;font-variant-numeric:tabular-nums}.iv-q.bad{color:#B42318}.iv-q.ok{color:#1E7A4B}" +
     ".iv-own-in{width:74px;border:1px solid var(--line,#E7E1D3);border-radius:8px;padding:6px 8px;font:600 13px Inter,sans-serif;text-align:right;outline:none}.iv-own-in:focus{border-color:var(--gold,#C9A24B);box-shadow:0 0 0 3px rgba(201,162,75,.15)}" +
+    ".iv-own-add{all:unset;cursor:pointer;font:600 12px Inter,sans-serif;color:var(--muted,#8B909B);padding:5px 9px;border-radius:7px;border:1px dashed transparent}.iv-own-add:hover{color:var(--navy,#0F1E35);border-color:var(--line,#E7E1D3);background:#fff}" +
     ".iv-own-in.dirty{border-color:#C9A24B;background:#FFFBEF}" +
     ".iv-ch{display:inline-flex;align-items:center;gap:5px;font-size:11px;border:1px solid var(--line,#E7E1D3);border-radius:7px;padding:3px 7px;margin:2px 4px 2px 0;white-space:nowrap;background:#fff}" +
     ".iv-ch b{font-variant-numeric:tabular-nums}.iv-ch.diff{border-color:#EBC27A;background:#FBF1DF}.iv-ch.fail{border-color:#F3B8B1;background:#FCECEA}" +
@@ -83,6 +84,9 @@
           var i = $("spapiMatchModalInput"); if (i && !i.value) { i.value = nm.split(/[|,(]/)[0].trim().slice(0, 60); i.dispatchEvent(new Event("input", { bubbles: true })); } }, 150);
         toast("Map it to the LOTS product and Save — the next sync picks it up"); }
     });
+    $("ivCard").addEventListener("click", function (e) { var b = e.target.closest("[data-own-k]"); if (!b) return;
+      var i = document.createElement("input"); i.className = "iv-own-in"; i.type = "number"; i.min = "0"; i.step = "1"; i.dataset.k = b.dataset.ownK; i.dataset.v = "0"; i.value = ""; i.placeholder = "0";
+      b.replaceWith(i); i.focus(); });
     $("ivCard").addEventListener("input", function (e) { var i = e.target.closest(".iv-own-in"); if (i) { i.classList.toggle("dirty", String(i.value) !== String(i.dataset.v)); countDirty(); } });
     $("ivCard").addEventListener("keydown", function (e) { if (e.key === "Enter" && e.target.closest(".iv-own-in")) { e.preventDefault(); saveOwn(); } });
     return true;
@@ -179,7 +183,9 @@
     var ch = r.L.map(function (x) { var t = x.target == null ? "—" : nf(x.target); return '<span class="iv-ch ' + (x.st === "diff" ? "diff" : x.st === "fail" ? "fail" : "") + '" title="' + esc(x.sku) + (x.need !== 1 ? " · uses " + x.need + " per listing" : "") + (x.combo ? " · combo" : "") + '">' + esc(x.an) + " <b>" + t + "</b>" + (x.target != null && x.amz !== x.target ? ' <span style="color:#8B909B">(' + nf(x.amz) + ")</span>" : "") + "</span>"; }).join("");
     return '<tr><td><div style="font-weight:500;max-width:340px;line-height:1.35">' + esc(r.name) + '</div><div class="iv-sub">' + (vend ? "Vendor product · ASIN " + esc(r.k.slice(2)) : "LOTS code " + esc(r.k)) + "</div></td>" +
       '<td class="r">' + (vend ? "—" : nf(K.gn)) + '</td><td class="r">' + (vend ? "—" : nf(K.s62)) + "</td>" +
-      '<td class="r"><input class="iv-own-in" type="number" min="0" step="1" data-k="' + esc(r.k) + '" data-v="' + (K.own || 0) + '" value="' + (K.own || 0) + '"></td>' +
+            /* owner 21 Nov 2026: LOTS products with no own stock show a small "+ Add" link (too many 0 boxes) - the box opens on click */
+      '<td class="r">' + (!vend && !(K.own > 0) ? '<button type="button" class="iv-own-add" data-own-k="' + esc(r.k) + '" title="Add stock you keep in your own godown">+ Add</button>'
+        : '<input class="iv-own-in" type="number" min="0" step="1" data-k="' + esc(r.k) + '" data-v="' + (K.own || 0) + '" value="' + (K.own || 0) + '">') + '</td>' +
       '<td class="r">' + (K.pd ? '<span style="color:#A86A12;font-weight:600">' + nf(K.pd) + "</span>" : "0") + "</td>" +
       '<td class="r"><span class="iv-q ' + (r.oos ? "bad" : "ok") + '">' + nf(Math.max(0, Math.floor(r.freeGN))) + "</span>" + (r.free !== r.freeGN ? '<div class="iv-sub">Sasta ' + nf(Math.max(0, Math.floor(r.free))) + "</div>" : "") + "</td>" +
       '<td>' + (r.sasta ? '<span class="iv-st warn" title="LOTS-GN is under 10, LOTS-62 has stock. Only Sasta Store sells LOTS-62 stock, so Sasta stays live; the other accounts are 0.">Live on Sasta only</span><div class="iv-sub">LOTS-62 stock · others 0</div>' : '<span class="iv-st ' + (r.oos ? "bad" : "ok") + '">' + (r.oos ? "Out of stock" : "In stock") + "</span>") + (r.oosAt ? '<div class="iv-sub" title="When the robot set it to 0 on Amazon">OOS on Amazon · ' + ago(r.oosAt) + "</div>" : "") + "</td>" +
