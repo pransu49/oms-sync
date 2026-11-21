@@ -1,8 +1,12 @@
 name: OMS Archive (for Auto sale bills)
 
 # Saves the last N days of SHIPPED orders to aikm_admin/omsArchive so Auto sale bills
-# can bill dates older than the live 15-day window. Runs on command only (never on a timer: two OMS exports close together can mix up files).
+# can bill dates older than the live 15-day window. Also gives RTO Check the OMS Guru status of older orders (owner 21 Nov 2026).
+# Twice a day (~7:10 AM + 3:10 PM IST), 60 days. Same concurrency group as the live sync, and the archive checks every file's
+# dates (a file of the wrong window is refused), so the two exports can't mix up.
 on:
+  schedule:
+    - cron: '40 1,9 * * *'
   workflow_dispatch:
     inputs:
       days:
@@ -17,7 +21,7 @@ concurrency:
 jobs:
   archive:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -29,6 +33,6 @@ jobs:
           OMS_EMAIL: ${{ secrets.OMS_EMAIL }}
           OMS_PASSWORD: ${{ secrets.OMS_PASSWORD }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_OMS }}
-          OMS_DAYS_BACK: ${{ github.event.inputs.days || '40' }}
+          OMS_DAYS_BACK: ${{ github.event.inputs.days || '60' }}
           OMS_ARCHIVE_DOC: omsArchive
         run: node sync.js
