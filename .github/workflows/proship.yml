@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 120   # 1,500 orders ≈ 15–25 min; generous so a big job is never cut off
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
       - run: npm install firebase-admin
