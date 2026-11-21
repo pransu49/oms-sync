@@ -50,7 +50,7 @@ jobs:
       - name: Already started today?
         id: done
         if: steps.when.outputs.go == 'check'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .mp-auto
           key: mp-auto-${{ steps.when.outputs.day }}
@@ -66,7 +66,7 @@ jobs:
         if: steps.decide.outputs.go == 'true' && steps.when.outputs.auto == 'true'
         shell: bash
         run: mkdir -p .mp-auto && date > .mp-auto/started
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v6
         if: steps.decide.outputs.go == 'true' && steps.when.outputs.auto == 'true'
         with:
           path: .mp-auto
