@@ -1279,6 +1279,36 @@
   }
   texts(); setInterval(texts, 2000);
 
+  /* ---------- "Cancelled" card (owner 21 Nov 2026) - the console's own card list has none, so it is added here.
+     Clicking it borrows another card's click (with data-f switched to "cancelled") so the console's own multi-card filter does the work. ---------- */
+  function flagCancel() {
+    var rs = typeof window.__ndRows === "function" ? window.__ndRows() : [], n = 0;
+    rs.forEach(function (x) { if (x.r && x.r.b === "cancelled") { x.flags.cancelled = true; n++; } });
+    return n;
+  }
+  function cancelCard() {
+    var k = document.getElementById("ndKpis"); if (!k) return;
+    var n = flagCancel(), c = k.querySelector(".nd-kpi-cxl");
+    if (!c) {
+      c = document.createElement("button"); c.type = "button"; c.className = "nd-kpi nd-k-muted nd-kpi-cxl";
+      c.title = "Shipments cancelled in ProShip (not shipped / AWB cancelled)";
+      c.addEventListener("click", function () {
+        flagCancel();
+        var host = k.querySelector('.nd-kpi[data-f]:not([data-f="all"]):not(.nd-kpi-cxl)'); if (!host) return;
+        host.dataset.f = "cancelled"; host.click();
+      });
+      k.appendChild(c);
+    }
+    var act = document.getElementById("ndActive"), on = !!(act && /cancelled/i.test(act.textContent));
+    var html = '<i class="ti ti-ban"></i><div class="nd-kpi-n">' + n.toLocaleString("en-IN") + '</div><div class="nd-kpi-l">Cancelled</div>';
+    if (c.innerHTML !== html) c.innerHTML = html;
+    c.classList.toggle("on", on);
+    if (act) [].slice.call(act.childNodes).forEach(function (t) { if (t.nodeType === 3 && /\bcancelled\b/.test(t.textContent)) t.textContent = t.textContent.replace(/\bcancelled\b/g, "Cancelled"); });
+  }
+  var kmo = new MutationObserver(function () { cancelCard(); });
+  var kmoT = setInterval(function () { var k = document.getElementById("ndKpis"); if (!k) return; clearInterval(kmoT); kmo.observe(k, { childList: true }); var a2 = document.getElementById("ndActive"); if (a2) kmo.observe(a2, { childList: true, characterData: true, subtree: true }); cancelCard(); }, 1500);
+  setInterval(cancelCard, 4000);   /* rows are rebuilt now and then (manifest reload) - put the flag back */
+
   /* ---------- Picklist of PENDING PICKUP shipments, per booked date (owner 20 Nov 2026) ---------- */
   function esc(v) { return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function nid(v) { return String(v || "").replace(/^`+/, "").replace(/^#/, "").replace(/\s+/g, "").trim(); }
