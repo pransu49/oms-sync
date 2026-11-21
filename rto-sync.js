@@ -1,5 +1,5 @@
 try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only)
-// rto-sync.js — builds the RTO Check list for the console (read-only on Amazon and NimbusPost).
+// rto-sync.js — builds the RTO Check list for the console (read-only on Amazon and ProShip).
 //
 // Sources
 //  1. Amazon returns report (GET_FLAT_FILE_RETURNS_DATA_BY_RETURN_DATE, last 60 days) per account:
@@ -7,7 +7,7 @@ try { require('./fb-meter'); } catch (e) {} // Firebase usage meter (counts only
 //     "Return delivery date" (= parcel reached you).
 //  2. Amazon orders report (last 90 days): order status ("Shipped - Returned to Seller"), city, state, PIN,
 //     price, Easy Ship / self-ship.
-//  3. NimbusPost (main Firebase nimbusDash): self-ship RTOs incl. the NEW return AWB (ra).
+//  3. ProShip (main Firebase aikm_admin/proshipIndex, 1 read): self-ship RTOs. (NimbusPost + Zippy switched off Nov 2026.)
 //  4. OMS Guru orders (OMS Firebase): customer name, COD/prepaid, original AWB.
 // Note: Amazon never exposes the new ATS return tracking ID (515…). The console lets the user link it
 // once (saved in main Firebase aikm_admin/rtoReceived) so it is searchable afterwards.
@@ -80,7 +80,7 @@ async function main() {
   const mainApp = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) }, 'main');
   const omsDb = oms.firestore(), mainDb = mainApp.firestore();
 
-  // ---- OMS Guru orders: name, payment, awb (and account for NimbusPost rows) ----
+  // ---- OMS Guru orders: name, payment, awb (and account for ProShip rows) ----
   const omsBy = {}, accByAwb = {};
   (await require('./oms-chunks').cachedChunks(omsDb.collection('aikm_admin').doc('omsOrders').collection('chunks'))).forEach((d) => {
     (d.data().orders || []).forEach((o) => {
@@ -143,28 +143,27 @@ async function main() {
     } catch (e) { errors.push(`${acc.key}: ${e.code || ''} ${e.message || e}`); console.log('ERROR', acc.key, e.code || '', e.message || e); }
   }
 
-  // ---- NimbusPost self-ship RTOs (has the NEW return AWB) ----
-  let nim = 0;
-  (await mainDb.collection('nimbusDash').get()).forEach((d) => {
-    if (d.id === '_meta') return;
-    let rs = d.data().rows; if (typeof rs === 'string') { try { rs = JSON.parse(rs); } catch (e) { rs = []; } }
-    (rs || []).forEach((r) => {
-      if (!/^rto/.test(r.b || '')) return;
-      const id = baseOrder(r.o); if (!id) return;
-      const x = row(id); nim++;
-      x.src = x.src || 'nimbus';
-      x.nb = r.b; x.nst = r.st || '';
+  // ---- ProShip self-ship RTOs (owner 21 Nov 2026: NimbusPost + Zippy are off, ProShip ships everything) ----
+  // main aikm_admin/proshipIndex = ONE doc {data: JSON {orderId:{a awb, c courier, s ok|rto|rto_delivered|..., st ProShip status, t last change ms, ac account}}}
+  let psN = 0;
+  try {
+    const d = (await mainDb.collection('aikm_admin').doc('proshipIndex').get()).data() || {};
+    const idx = typeof d.data === 'string' ? JSON.parse(d.data) : (d.data || {});
+    Object.entries(idx).forEach(([oid, r]) => {
+      if (!/^rto/.test(r.s || '')) return;
+      const id = baseOrder(oid); if (!id) return;
+      const x = row(id); psN++;
+      x.src = x.src || 'proship';
+      x.nb = r.s; x.nst = String(r.st || '').replace(/_/g, ' ');
       x.a = x.a || r.a || ''; if (r.a && r.a !== x.a) x.a2 = r.a;
-      if (r.ra) x.ra = r.ra;
-      x.cr = r.cr ? String(r.cr).slice(0, 10) : x.cr;
-      x.nd = r.b === 'rto_delivered' ? String(r.dl || r.ls || '').slice(0, 10) : '';
-      x.n = x.n || r.n || ''; x.ci = x.ci || r.ci || ''; x.pin = x.pin || r.pin || '';
-      x.v = x.v || Math.round(num(r.v)); x.pay = x.pay || r.pt || '';
+      const when = r.t ? new Date(Number(r.t) + 5.5 * 36e5).toISOString().slice(0, 10) : '';
+      x.nd = r.s === 'rto_delivered' ? when : '';
+      x.rq = x.rq || (r.s === 'rto' ? when : '');
       x.cour = r.c || '';
-      x.acc = x.acc || accByAwb[r.a] || '';
+      x.acc = x.acc || r.ac || accByAwb[r.a] || '';
     });
-  });
-  console.log(`NimbusPost RTO shipments: ${nim}`);
+  } catch (e) { console.log('ProShip index not read:', e.message); }
+  console.log(`ProShip RTO shipments: ${psN}`);
 
   // ---- enrich from OMS ----
   Object.values(rows).forEach((x) => {

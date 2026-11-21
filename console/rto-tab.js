@@ -1,7 +1,7 @@
 /* AIKM Admin Console — RTO Check tab.
    Loaded by refund-tab.js (no Shopify edit needed).
    Data: aikm-oms-sync  aikm_admin/rtoIndex  (built every 3 h by rto-sync.yml from Amazon returns/orders
-         reports for Praso + Sasta Store, and NimbusPost RTOs). Read ONCE when the tab is opened.
+         reports for Praso + Sasta Store, and ProShip RTOs; NimbusPost + Zippy are off). Read ONCE when the tab is opened.
    Received / linked return IDs: main console Firebase  aikm_admin/rtoReceived  (listened only while open).
    Amazon never shares the new ATS return ID (515…): search by anything on the label, then "Link" it once. */
 (function () {
@@ -135,7 +135,7 @@
 
     var sub = document.createElement("div");
     sub.className = "subtabbar no-print"; sub.id = "subtab-rto"; sub.style.display = "none";
-    sub.innerHTML = '<span class="subtab-label">RTO Check</span><span class="rt-muted" id="rtSyncLine">Praso + Sasta Store · Amazon + NimbusPost · last 60 days</span><span style="flex:1"></span>' +
+    sub.innerHTML = '<span class="subtab-label">RTO Check</span><span class="rt-muted" id="rtSyncLine">Praso + Sasta Store · Amazon + ProShip · last 60 days</span><span style="flex:1"></span>' +
       '<button type="button" class="subbtn" id="rtSyncBtn" title="Pull the latest returns from Amazon now (about 3–5 minutes)"><i class="ti ti-refresh"></i> Update now</button>';
     content.insertBefore(sub, content.firstChild);
 
@@ -209,14 +209,14 @@
     var st = got ? ['back', "Received " + dd(rec.r)] : r.s === "back" ? ["back", "Returned to you " + dd(r.rd || r.nd)] : ["way", "On the way back" + (r.rq ? " · since " + dd(r.rq) : "")];
     var items = (r.items && r.items.length ? r.items : []).map(function (i) { return "<b>" + esc(i.t || i.sku) + "</b> × " + (i.q || 1); }).join("<br>");
     var cod = /cod/i.test(r.pay || "");
-    var selfShip = !!r.nb || r.src === "nimbus";
+    var selfShip = !!r.nb || r.src === "proship";
     var money = r.ref ? '<span class="rt-tag gold">Refunded to buyer ' + inr(r.ref) + "</span>" :
       cod ? '<span class="rt-muted">COD — no money was collected, nothing to refund</span>' :
       !r.pay ? "" : selfShip ? '<span class="rt-tag cust">Prepaid — refund it from the Bulk Refund tab</span>' :
       '<span class="rt-muted">Prepaid — Amazon refunds the buyer itself (Easy Ship)</span>';
     return '<div class="rt-card' + (got ? " got" : "") + '"><div>' +
       '<div class="rt-top"><span class="rt-oid" data-rt-copy="' + esc(r.o) + '" title="Click to copy">' + hl(r.o) + "</span>" +
-        '<span class="rt-tag">' + esc(short(r.acc)) + (r.es ? " · Easy Ship" : r.src === "nimbus" || r.nb ? " · Self-ship" : "") + "</span>" +
+        '<span class="rt-tag">' + esc(short(r.acc)) + (r.es ? " · Easy Ship" : r.nb ? " · Self-ship · ProShip" : "") + "</span>" +
         '<span class="rt-tag ' + st[0] + '">' + esc(st[1]) + "</span>" +
         (r.k === "cust" ? '<span class="rt-tag cust">Customer return' + (r.rs ? " · " + esc(r.rs) : "") + "</span>" : "") + "</div>" +
       '<div class="rt-line">' + (items || '<span class="rt-muted">Product not known</span>') + "</div>" +
@@ -235,8 +235,8 @@
   // Amazon says returned? OMS Guru accepted the return? (owner 21 Nov 2026: verify both on every card)
   function omsOk(r) { var rec = S.rec[r.o] || {}; return /return received|returned/i.test(r.om || "") || (rec.oms && rec.oms.s === "done"); }
   function verifyRow(r, rec) {
-    var amz = r.rd ? ["back", "Amazon: RTO delivered ✓ " + dd(r.rd)] : r.nd ? ["back", "Courier: RTO delivered ✓ " + dd(r.nd)] :
-      /returned to seller/i.test(r.os || "") ? ["back", "Amazon: returned to seller ✓"] : ["way", "Amazon: not delivered back yet"];
+    var amz = r.rd ? ["back", "Amazon: RTO delivered ✓ " + dd(r.rd)] : r.nd ? ["back", "ProShip: RTO delivered ✓ " + dd(r.nd)] :
+      /returned to seller/i.test(r.os || "") ? ["back", "Amazon: returned to seller ✓"] : (r.nb === "rto" ? ["way", "ProShip: RTO on the way" + (r.nst ? " · " + r.nst.toLowerCase() : "")] : ["way", "Amazon: not delivered back yet"]);
     var oms;
     if (rec.r && rec.oms && rec.oms.s !== "done") oms = omsLine(rec);
     else if (omsOk(r)) oms = '<span class="rt-tag back">OMS Guru: return accepted ✓' + (r.om ? " · " + esc(r.om) : "") + "</span>";
@@ -280,7 +280,7 @@
     if (!$("tab-rto")) return;
     if (S.at && S.at.toDate) {
       var m = Math.round((Date.now() - S.at.toDate().getTime()) / 60000);
-      $("rtSyncLine").textContent = "Updated " + (m < 1 ? "just now" : m < 120 ? m + " min ago" : Math.round(m / 60) + " h ago") + " · Praso + Sasta Store · Amazon + NimbusPost · last 60 days" + (S.errors.length ? " · ⚠ " + S.errors.length + " account error" : "");
+      $("rtSyncLine").textContent = "Updated " + (m < 1 ? "just now" : m < 120 ? m + " min ago" : Math.round(m / 60) + " h ago") + " · Praso + Sasta Store · Amazon + ProShip · last 60 days" + (S.errors.length ? " · ⚠ " + S.errors.length + " account error" : "");
     }
     $("rtChips").innerHTML = chipsHtml();
     if (!S.loaded) return;
