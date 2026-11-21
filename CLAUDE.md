@@ -281,6 +281,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   The console's own "Sync NimbusPost now" button is HIDDEN, not removed (the console re-adds it when missing).
   "Cancelled" KPI card (owner 21 Nov 2026) is added by the same block (the console's CARDS list has none): flags rows with r.b == "cancelled"
   as `cancelled` (re-applied every 4 s, enrich() drops it) and clicks a borrowed card with data-f="cancelled" so the console's own filter runs.
+  KPI strip (owner 21 Nov 2026 "one line, premium boxes"): all 12 cards on ONE row (grid of 12, scrolls sideways on small screens), tone accent bar + icon chip;
+  two long labels shortened on screen ("Not picked up", "Late delivery", full text as tooltip). CSS in `aikm-track-compact`.
   "Rejected · N" = OMS push failures + Amazon confirm failures; amazon-confirm.js keeps only failures of the last 3 days in `amazonConfirm.ids`
   (owner 20 Nov 2026: 109 InvalidCarrier errors from 31 Oct stayed on screen 20 days). Older failures stay in idsJson.
 
