@@ -329,6 +329,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Console: Robot pill may show "offline" for up to 30 s after opening (inline snippet runs before the deferred sign-in script).
   Open: (4) npm audit 1 high (adm-zip) + 9 moderate -> Dependabot PRs, due 16 Feb 2027.
   Until approved, OMS Guru Order Sync must stay ON (only source of buyer addresses).
+  Backup fix 21 Nov 2026: Purchase Bills Apps Script `dailyBackup` failed 19-21 Nov (401) - its SB_KEY still held the public key. Now
+  `const SB_KEY = String(getProperty('SB_SECRET')||'').replace(hidden chars)` (the saved property had an invisible character -> "Invalid API key"), no Bearer header.
+  POS (`/pages/pos`, own Firebase sasta-store-pos as [DEFAULT]) must NOT load aikm-auth.js; its vendor prices use block
+  `AIKM STAFF SIGN-IN FOR VENDOR PRICES` before </body> (named app `aikm_staff`, hidden from firebase.apps, adds the staff token to Supabase calls).
 - **Sign-in gate** (owner 17 Nov 2026 — all 3 Firestore DBs were `allow read, write: if true`): `console/aikm-auth.js`, loaded on EVERY tool page
   right after the Firebase SDK tags (app + firestore + **auth** compat 10.12.2), before page scripts, pinned by COMMIT SHA (`@0001fa0…`, tag pushes fail; change the SHA in the
   6 Shopify templates when the file changes: aikm, amazon, complaints, label, dalbhaat-admin-console, purchase-bills). Creates one app per project (main = [DEFAULT], `aikm_spapi`, `aikm_oms`); every later
