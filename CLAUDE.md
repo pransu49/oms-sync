@@ -286,6 +286,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   ATS label "Ship Date" (owner 22 Nov 2026 "future date"): we send NO date to ProShip (buildOrder has none); ATS labels showed Ship Date 22/11 and 24/11
   for orders booked 21 Nov 17:03-17:10 IST with Amazon ship-by 21 Nov -> set by ProShip/ATS (likely their next pickup slot). `label-date-diag.yml` (manual,
   read-only, OCR of the newest ATS labels, every non-date word masked) prints it. Owner to raise it with ProShip (22 Nov 2026).
+  SHIP DATE ON THE TOOL (owner 23 Nov 2026): `tools/ats-shipdate.js` = step "Read ATS label ship dates" in `proship.yml` after every sync/ship run:
+  live ATS AWBs (last 6 days) without `sd` -> label OCR (pdftoppm + tesseract, max 250/run, 2 tries -> `sdx`) -> proshipIndex v.sd "YYYY-MM-DD"
+  (own transaction, never fails the run). Shown as "Ship date" column in Self-Ship Shipped table + "Ship 24 Nov" tag in Shipment Tracking's
+  Courier cell (red = later than OMS slaDate). Firebase: ~1-3 ops per run. First run: 250 read, 0 unreadable.
   "Rejected · N" = OMS push failures + Amazon confirm failures; amazon-confirm.js keeps only failures of the last 3 days in `amazonConfirm.ids`
   (owner 20 Nov 2026: 109 InvalidCarrier errors from 31 Oct stayed on screen 20 days). Older failures stay in idsJson.
 
