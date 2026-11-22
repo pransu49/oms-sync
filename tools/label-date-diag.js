@@ -24,7 +24,7 @@ function dates(o, pre, out) {
   const j = await (await fetch(BASE + '/api/auth/signin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: process.env.PROSHIP_USERNAME, password: process.env.PROSHIP_PASSWORD }) })).json();
   token = j.accessToken; if (!token) throw new Error('login failed');
   const idx = JSON.parse((await main.collection('aikm_admin').doc('proshipIndex').get()).get('data') || '{}');
-  const ats = Object.entries(idx).filter(([, v]) => /ats|amazon/i.test(v.c || '') && v.s !== 'cancelled').sort((a, b) => b[1].t - a[1].t).slice(0, 5);
+  const ats = Object.entries(idx).filter(([, v]) => /ats|amazon/i.test(v.c || '') && v.s !== 'cancelled').sort((a, b) => b[1].t - a[1].t).slice(0, 2);
   console.log('ATS AWBs in index:', Object.values(idx).filter((v) => /ats|amazon/i.test(v.c || '')).length, '· checking newest', ats.length);
   const list = [];
   for (let off = 0; off < 400; off += 50) { const r = await getWithBody('/api/order/external/details', { created_from: day(-3), created_to: day(1), offset: off, limit: 50 }); const d = (r && r.data) || []; list.push(...d); if (d.length < 50) break; }
@@ -38,9 +38,12 @@ function dates(o, pre, out) {
       if (!url) { console.log('no label url', JSON.stringify(lr).slice(0, 200)); continue; }
       fs.writeFileSync('/tmp/l.pdf', Buffer.from(await (await fetch(url)).arrayBuffer()));
       const txt = execSync('pdftotext -layout /tmp/l.pdf -').toString();
-      const lines = txt.split('\n').filter((l) => /\d{1,4}[-\/.]\d{1,2}[-\/.]\d{2,4}|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b|date|ship/i.test(l));
-      // only the date words, never names/addresses
-      lines.forEach((l) => { const m = l.match(/([A-Za-z .]*(date|ship|dt)[A-Za-z .]*[:\-]?\s*)?(\d{1,4}[-\/.]\d{1,2}[-\/.]\d{2,4}|\d{1,2}[ -](jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[ -,]*\d{2,4})/ig); if (m) console.log('LABEL:', m.join(' | ')); });
+      const KEEP = /^(date|ship|shipped|shipping|invoice|order|awb|pickup|dt|dated|weight|manifest|by|on|dispatch|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*|ats|amazon|prepaid|cod|am|pm|ist)$/i;
+      console.log('label chars:', txt.length, '· pages:', (txt.match(/\f/g) || []).length);
+      // every word that is not a date/label keyword is masked (no buyer data in the log); long digit runs (phones) masked too
+      txt.split('\n').map((l) => l.replace(/[A-Za-z]+/g, (w) => (KEEP.test(w) ? w : '*')).replace(/\d{7,}/g, '#').replace(/\s+/g, ' ').trim())
+        .filter((l) => /\d/.test(l) && /date|ship|dt|invoice|order|[-\/.]\d{1,2}[-\/.]|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|:\d\d/i.test(l))
+        .forEach((l) => console.log('LABEL:', l));
     } catch (e) { console.log('label error', e.message); }
   }
   process.exit(0);
