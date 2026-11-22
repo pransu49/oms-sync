@@ -104,6 +104,8 @@
       "html#aikm body #hubShipTable .hs-it{max-width:340px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;}" +
       "html#aikm body #hubShipTable .hs-it em{font-style:normal;font-weight:700;color:#B08A36;}html#aikm body #hubShipTable .hs-more{font-style:normal;font-size:10.5px;font-weight:700;background:#F1F0EC;color:#4A5468;border-radius:10px;padding:1px 6px;}" +
       "html#aikm body #hubShipTable .hs-time{font-size:12px;color:#4A5468;}" +
+      "html#aikm body #hubShipTable .hs-sd{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:600;background:var(--x-surface-2);border:1px solid var(--x-line);color:var(--x-text-2);}" +
+      "html#aikm body #hubShipTable .hs-sd.late{background:#FEE4E2;border-color:transparent;color:#B42318;}" +
       "html#aikm body #hubShipTable .hs-act{width:1%;white-space:nowrap;text-align:right;}" +
       "html#aikm body #hubShipTable .hs-ib{all:unset;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:5px;height:28px;min-width:28px;padding:0 9px;box-sizing:border-box;border-radius:8px;border:1px solid #E7E1D3;background:#fff;font-size:12px;font-weight:600;color:#0F1E35;margin-left:5px;transition:all .12s;}" +
       "html#aikm body #hubShipTable .hs-ib:hover{background:#0F1E35;border-color:#0F1E35;color:#fff;}html#aikm body #hubShipTable .hs-ib[disabled]{opacity:.6;pointer-events:none;}" +
@@ -387,7 +389,7 @@
         '<div id="psResult" style="display:none;">' +
           '<div class="nb-kpis" id="psKpis"></div>' +
           '<div id="hubShipWrap" style="display:none;"><div class="table-scroll"><table class="data" id="hubShipTable"><thead><tr>' +
-            '<th class="hs-ck"><input type="checkbox" id="hubShipAll" title="Select all (for bulk labels)"></th><th>SLA</th><th>Order</th><th>Buyer</th><th>Items</th><th>AWB \u00b7 courier</th><th>Status</th><th>Booked</th><th class="hs-act">Actions</th>' +
+            '<th class="hs-ck"><input type="checkbox" id="hubShipAll" title="Select all (for bulk labels)"></th><th>SLA</th><th>Order</th><th>Buyer</th><th>Items</th><th>AWB \u00b7 courier</th><th>Status</th><th title="Ship Date printed on the ATS label (read from the label every 30 min). Red = later than Amazon ship-by date.">Ship date</th><th>Booked</th><th class="hs-act">Actions</th>' +
           '</tr></thead><tbody id="hubShipBody"></tbody></table></div></div>' +
           '<div id="psPoolWrap"><div class="table-scroll"><table class="data" id="psTable"><thead><tr>' +
             '<th style="width:28px;"><input type="checkbox" id="psAll" title="Select all"></th><th>SLA</th><th>Order</th><th>Buyer &amp; address</th><th>Items</th><th class="r hub-sort" id="hubPSort" title="Sort by profit">Profit <i class="ti ti-arrows-sort" id="hubPSortI"></i><div class="hub-sub">our tool \u00b7 OMS</div></th><th class="r">Weight</th><th>Status</th>' +
@@ -800,10 +802,11 @@
           '<td class="hs-it" title="' + esc(itTxt) + '">' + (its.length ? esc(its[0]) + ' <em>\u00d7 ' + r.items[its[0]] + "</em>" + (its.length > 1 ? ' <i class="hs-more">+' + (its.length - 1) + "</i>" : "") : "") + "</td>" +
           '<td class="hs-nw"><span class="hs-mono">' + esc(v.a) + '</span><span class="hs-cour">' + esc(v.c || "ProShip") + "</span></td>" +
           '<td><span class="hub-st ' + cls + '">' + esc(st) + "</span></td>" +
+          '<td class="hs-nw">' + (v.sd ? '<span class="hs-sd' + (r.sla && v.sd > r.sla ? " late" : "") + '" title="Ship Date on the ATS label' + (r.sla && v.sd > r.sla ? " - LATER than Amazon ship-by " + esc(niceDay(r.sla)) : "") + '">' + esc(niceDay(v.sd)) + "</span>" : '<span class="nb-muted">\u2014</span>') + "</td>" +
           '<td class="hs-nw hs-time">' + (v.t ? esc(when(v.t)) + "<span>" + esc(ago(v.t)) + "</span>" : "") + "</td>" +
           '<td class="hs-act"><button type="button" class="hs-ib hub-lbl" data-id="' + esc(r.id) + '" title="Download this label (PDF)"><i class="ti ti-printer"></i><span>Label</span></button>' +
           (canCancel ? '<button type="button" class="hs-ib hs-cx ps-x" data-awb="' + esc(v.a) + '" data-id="' + esc(r.id) + '" title="Cancel this shipment"><i class="ti ti-x"></i></button>' : "") + "</td></tr>";
-      }).join("") : '<tr><td colspan="9" class="nb-muted" style="text-align:center;padding:22px !important;">Nothing here.</td></tr>';
+      }).join("") : '<tr><td colspan="10" class="nb-muted" style="text-align:center;padding:22px !important;">Nothing here.</td></tr>';
       shipShown = rows.slice(0, 1500).map(function (r) { return r.id; });
       rows.forEach(function (r) { lblInfo[r.id] = { acct: r.acct || "", items: Object.keys(r.items).map(function (k) { return [k, r.items[k]]; }) }; });
       Object.keys(shipSel).forEach(function (k) { if (shipShown.indexOf(k) < 0) delete shipSel[k]; });
@@ -1244,6 +1247,34 @@
     window.__ndInject(rs, { updatedAt: { toDate: function () { return window.__psIdxAt || new Date(); } }, daysBack: 15 });
   }
   document.addEventListener("aikm-proship-idx", function () { inject(true); });
+  /* ATS label "Ship Date" (owner 23 Nov 2026): proshipIndex v.sd (read from the label by tools/ats-shipdate.js) shown in the
+     Courier cell of every tracking row; red when it is later than Amazon's ship-by date (OMS slaDate). 0 Firebase. */
+  var sdMap = null, sdAt = null;
+  function ymdOf(x) { var d = x ? new Date(x) : null; return d && !isNaN(d) ? d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2) + "-" + ("0" + d.getDate()).slice(-2) : ""; }
+  function shortDay(k) { var p = k.split("-"); return new Date(+p[0], +p[1] - 1, +p[2]).toLocaleDateString("en-IN", { day: "numeric", month: "short" }); }
+  function shipDates() {
+    var tb = document.querySelector("#ndTable tbody"); if (!tb || !window.__psIdx) return;
+    if (sdAt !== window.__psIdx) {
+      var sla = {}; (window.omsOrdersRaw || []).forEach(function (o) { var k = String(o.channelOrderId || "").replace(/^[`#]+/, "").trim(); if (k && o.slaDate) sla[k] = ymdOf(o.slaDate); });
+      sdMap = {}; Object.keys(window.__psIdx).forEach(function (k) { var v = window.__psIdx[k]; if (v && v.a && v.sd) sdMap[String(v.a)] = { sd: v.sd, late: !!(sla[k] && v.sd > sla[k]), sla: sla[k] || "" }; });
+      sdAt = window.__psIdx;
+    }
+    [].slice.call(tb.rows).forEach(function (tr) {
+      if (tr.cells.length < 7 || tr.querySelector(".nd-sd")) return;
+      var awb = (tr.cells[1].textContent.match(/\d{8,}/) || [""])[0], x = sdMap[awb]; if (!x) return;
+      var sp = document.createElement("span"); sp.className = "nd-sd" + (x.late ? " late" : "");
+      sp.title = "Ship Date on the ATS label" + (x.late ? " - LATER than Amazon ship-by " + shortDay(x.sla) : "");
+      sp.textContent = "Ship " + shortDay(x.sd); tr.cells[5].appendChild(sp);
+    });
+  }
+  setInterval(shipDates, 1500);
+  (function () {
+    if (document.getElementById("aikm-nd-sd-css")) return;
+    var st = document.createElement("style"); st.id = "aikm-nd-sd-css";
+    st.textContent = "html#aikm body #ndTable .nd-sd{display:block;width:max-content;margin-top:3px;padding:1px 8px;border-radius:20px;font-size:10.5px;font-weight:600;background:var(--x-surface-2);border:1px solid var(--x-line);color:var(--x-text-2);}" +
+      "html#aikm body #ndTable .nd-sd.late{background:#FEE4E2;border-color:transparent;color:#B42318;}";
+    document.head.appendChild(st);
+  })();
   /* the old NimbusPost listener may answer later with an empty list - put ProShip back */
   setInterval(function () { inject(false); }, 4000);
 

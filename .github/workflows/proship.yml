@@ -71,6 +71,17 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ inputs.mode != 'selftest' && secrets.FIREBASE_SERVICE_ACCOUNT || '' }}
           FIREBASE_SERVICE_ACCOUNT_OMS: ${{ inputs.mode != 'selftest' && secrets.FIREBASE_SERVICE_ACCOUNT_OMS || '' }}
 
+      # ATS label "Ship Date" -> proshipIndex (owner 23 Nov 2026). Only after status refreshes; never fails the run.
+      - name: Read ATS label ship dates
+        if: ${{ always() && (github.event_name == 'schedule' || inputs.mode == 'sync' || inputs.mode == 'ship') }}
+        continue-on-error: true
+        timeout-minutes: 20
+        run: node tools/ats-shipdate.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PROSHIP_USERNAME: ${{ secrets.PROSHIP_USERNAME }}
+          PROSHIP_PASSWORD: ${{ secrets.PROSHIP_PASSWORD }}
+
       # new AWBs -> OMS Guru right away (Amazon is confirmed after the next OMS sync), same as NimbusPost / Zippy
       - name: Keep OMS orders copy for the next run
         if: always() && hashFiles('.cache/oms-chunks.json') != ''
