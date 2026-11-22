@@ -37,7 +37,7 @@ function dates(o, pre, out) {
       const url = lr.LABEL || (lr.result || {}).LABEL;
       if (!url) { console.log('no label url', JSON.stringify(lr).slice(0, 200)); continue; }
       fs.writeFileSync('/tmp/l.pdf', Buffer.from(await (await fetch(url)).arrayBuffer()));
-      const txt = execSync('pdftotext -layout /tmp/l.pdf -').toString();
+      execSync('pdftoppm -r 300 -png /tmp/l.pdf /tmp/lp'); const txt = execSync('for f in /tmp/lp*.png; do tesseract "$f" - 2>/dev/null; done; rm -f /tmp/lp*.png', { shell: '/bin/bash' }).toString();
       const KEEP = /^(date|ship|shipped|shipping|invoice|order|awb|pickup|dt|dated|weight|manifest|by|on|dispatch|jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|nov\w*|dec\w*|ats|amazon|prepaid|cod|am|pm|ist)$/i;
       console.log('label chars:', txt.length, '· pages:', (txt.match(/\f/g) || []).length);
       // every word that is not a date/label keyword is masked (no buyer data in the log); long digit runs (phones) masked too
