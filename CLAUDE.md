@@ -285,7 +285,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   two long labels shortened on screen ("Not picked up", "Late delivery", full text as tooltip). CSS in `aikm-track-compact`.
   ATS label "Ship Date" (owner 22 Nov 2026 "future date"): we send NO date to ProShip (buildOrder has none); ATS labels showed Ship Date 22/11 and 24/11
   for orders booked 21 Nov 17:03-17:10 IST with Amazon ship-by 21 Nov -> set by ProShip/ATS (likely their next pickup slot). `label-date-diag.yml` (manual,
-  read-only, OCR of the newest ATS labels, every non-date word masked) prints it. Raised with ProShip by the owner.
+  read-only, OCR of the newest ATS labels, every non-date word masked) prints it. Owner to raise it with ProShip (22 Nov 2026).
   "Rejected · N" = OMS push failures + Amazon confirm failures; amazon-confirm.js keeps only failures of the last 3 days in `amazonConfirm.ids`
   (owner 20 Nov 2026: 109 InvalidCarrier errors from 31 Oct stayed on screen 20 days). Older failures stay in idsJson.
 
