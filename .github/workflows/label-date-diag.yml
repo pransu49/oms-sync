@@ -1,0 +1,16 @@
+name: Label date check (read-only)
+on: workflow_dispatch
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: sudo apt-get install -y -qq poppler-utils >/dev/null && npm install --no-save firebase-admin@12
+      - run: node tools/label-date-diag.js
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          PROSHIP_USERNAME: ${{ secrets.PROSHIP_USERNAME }}
+          PROSHIP_PASSWORD: ${{ secrets.PROSHIP_PASSWORD }}
