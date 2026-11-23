@@ -34,7 +34,8 @@
     ".ll-nm{font-weight:500;max-width:380px;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.ll-s{font-size:11px;color:#8B909B;margin-top:2px}" +
     ".ll-loss{display:inline-block;background:#FEE4E2;color:#B42318;font-weight:700;border-radius:20px;padding:2px 9px}.ll-tag{display:inline-block;font-size:10px;font-weight:700;background:#F6EEDB;color:#B08A36;border-radius:5px;padding:1px 6px;margin-left:6px}" +
     ".ll-in{width:70px;border:1px solid #E7E1D3;border-radius:7px;padding:5px 7px;font:600 12.5px Inter,sans-serif;text-align:right}.ll-push{all:unset;cursor:pointer;font:600 11.5px Inter,sans-serif;padding:5px 10px;border-radius:7px;border:1px solid #E7E1D3;margin-left:5px}.ll-push:hover{background:#0F1E35;color:#fff;border-color:#0F1E35}" +
-    ".ll-empty{padding:70px 20px;text-align:center;color:#8B909B}";
+    ".ll-empty{padding:70px 20px;text-align:center;color:#8B909B}" +
+    "#premiumConfirmModal,#premiumPromptModal{z-index:1700!important}.ll-q2{display:block;font-size:11px;font-weight:600;color:#1E7A4B;margin-top:3px}";
   document.head.appendChild(css);
 
   /* owner 23 Nov 2026: "deploy option for update mapping, as some have wrong mapping" */
@@ -89,7 +90,7 @@
       var c = e.target.closest("[data-f]"); if (c) { filt = c.dataset.f; draw(); return; }
       var mb = e.target.closest("[data-map]"); if (mb) { fixMap(mb.dataset.map); return; }
       var p = e.target.closest("[data-push]"); if (p) { var r = ROWS.find(function (x) { return x.sku === p.dataset.push; }), inp = o.querySelector('[data-in="' + CSS.escape(p.dataset.push) + '"]');
-        if (r && inp && typeof spapiPushPriceToAmazon === "function") spapiPushPriceToAmazon(r.sku, r.asin, r.p, inp.value); return; }
+        if (r && inp) pushOne(r, inp.value); return; }
       if (e.target.id === "llAll") { var s = shown(), all = s.length && s.every(function (r) { return tick.has(r.sku); }); s.forEach(function (r) { all ? tick.delete(r.sku) : tick.add(r.sku); }); draw(); return; }
       if (e.target.id === "llGo") pushTicked();
     });
@@ -115,20 +116,30 @@
           '<button type="button" class="ll-push" style="margin:4px 0 0" data-map="' + esc(r.asin) + '">Fix mapping</button></td>'; })() +
           '<td class="r">' + (r.q > 0 ? r.q : '<span style="color:#8B909B">0</span>') + '</td><td class="r"><b>' + f2(r.p) + '</b></td><td class="r">' + f2(r.c) + '</td><td class="r"><span class="ll-loss">₹' + r.e + "</span></td>" +
           '<td class="r">' + (sug ? "<b>₹" + sug + "</b>" : remapped[r.asin] ? '<span style="color:#8B909B">after sync</span>' : '<span style="color:#B42318">above MRP</span>') + '</td><td class="r">' + (r.t ? "₹" + r.t : "—") + '</td><td class="r">' + f2(r.mrp) + "</td>" +
-          '<td style="white-space:nowrap"><input class="ll-in" data-in="' + esc(r.sku) + '" type="number" value="' + (sug || "") + '"><button type="button" class="ll-push" data-push="' + esc(r.sku) + '">Push</button></td></tr>'; }).join("") + "</tbody></table>"
+          '<td style="white-space:nowrap"><input class="ll-in" data-in="' + esc(r.sku) + '" type="number" value="' + (sug || "") + '"><button type="button" class="ll-push" data-push="' + esc(r.sku) + '">Push</button>' + (queued[r.sku] ? '<span class="ll-q2">✓ Queued ₹' + queued[r.sku] + ' · next sync</span>' : "") + "</td></tr>"; }).join("") + "</tbody></table>"
       : '<div class="ll-empty">✓ No listings in loss here.</div>';
   }
   function draw() { $("llTitle").textContent = acctName() + " · " + ROWS.filter(function (r) { return r.q > 0; }).length + " live listings lose money"; bar(); rows(); var q = $("llQ"); q.oninput = rows; }
   function open() { overlay().style.display = "flex"; $("llBody").innerHTML = '<div class="ll-empty">Loading…</div>'; $("llBar").innerHTML = "";
     load().then(function (d) { build(d); paint(); draw(); }).catch(function (e) { $("llBody").innerHTML = '<div class="ll-empty">Could not load: ' + esc(e.message || e) + "</div>"; }); }
   function close() { $("llOv").style.display = "none"; }
+  var queued = {};
+  function write(list) {
+    var db = typeof fbDbSpapi !== "undefined" ? fbDbSpapi : null; if (!db) { toast("Not connected — reload the page", true); return Promise.reject(); }
+    var b = db.batch(); list.forEach(function (x) { b.set(db.collection("spapiPriceUpdates").doc(acct() + "_" + x.r.sku.replace(/\//g, "%2F")), { account: acct(), sku: x.r.sku, asin: x.r.asin || null, oldPrice: x.r.p, newPrice: x.p, status: "pending", source: "loss-list", requestedAt: firebase.firestore.FieldValue.serverTimestamp() }); });
+    return b.commit().then(function () { list.forEach(function (x) { queued[x.r.sku] = x.p; tick.delete(x.r.sku); }); rows(); bar(); })
+      .catch(function (e) { toast("⚠ Not queued: " + (e.message || e), true); throw e; });
+  }
+  function pushOne(r, val) {
+    var n = Math.round(parseFloat(val)); if (!(n > 0)) return toast("Type a price first", true);
+    if (r.mrp && n > r.mrp) return toast("₹" + n + " is above the MRP ₹" + r.mrp, true);
+    var go = function () { write([{ r: r, p: n }]).then(function () { toast("✓ ₹" + r.p + " → ₹" + n + " queued — Amazon updates at the next sync (~15 min)"); }).catch(function () {}); };
+    if (typeof askPremiumConfirm !== "function") return go();
+    askPremiumConfirm({ kicker: "Push price to Amazon", title: esc(r.name || r.sku), message: "₹" + r.p + " → ₹" + n + (r.f && n < r.f ? "\n\n⚠ Below the safe price ₹" + r.f + " — still a loss / under ₹15 profit." : "") + "\n\nAmazon is updated at the next sync.", confirmLabel: "Push ₹" + n }).then(function (ok) { ok && go(); });
+  }
   function pushTicked() {
     var list = ROWS.filter(function (r) { return tick.has(r.sku) && !remapped[r.asin] && r.f && (!r.mrp || r.f <= r.mrp); }); if (!list.length) return;
-    var go = function () {
-      var db = typeof fbDbSpapi !== "undefined" ? fbDbSpapi : null; if (!db) return toast("Not connected", true);
-      var b = db.batch(); list.forEach(function (r) { b.set(db.collection("spapiPriceUpdates").doc(acct() + "_" + r.sku.replace(/\//g, "%2F")), { account: acct(), sku: r.sku, asin: r.asin || null, oldPrice: r.p, newPrice: r.f, status: "pending", source: "loss-list", requestedAt: firebase.firestore.FieldValue.serverTimestamp() }); });
-      b.commit().then(function () { list.forEach(function (r) { tick.delete(r.sku); }); toast("✓ " + list.length + " price" + (list.length > 1 ? "s" : "") + " queued — Amazon updates at the next sync"); bar(); }).catch(function (e) { toast("⚠ Not queued: " + (e.message || e), true); });
-    };
+    var go = function () { write(list.map(function (r) { return { r: r, p: r.f }; })).then(function () { toast("✓ " + list.length + " price" + (list.length > 1 ? "s" : "") + " queued — Amazon updates at the next sync"); }).catch(function () {}); };
     if (typeof askPremiumConfirm === "function") askPremiumConfirm({ kicker: "Push safe prices", title: list.length + " listing" + (list.length > 1 ? "s" : ""), message: "Each ticked listing goes to its SAFE price (lowest that earns ₹15 or 10% per order).\n\nAmazon is updated at the next sync.", confirmLabel: "Queue " + list.length }).then(function (ok) { ok && go(); });
     else go();
   }
