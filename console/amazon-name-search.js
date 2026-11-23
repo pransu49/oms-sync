@@ -167,7 +167,7 @@
       if (on && !yp) r.insertAdjacentHTML("beforeend", ypHtml(i, sel)); else if (!on && yp) yp.remove();
       var pr = r.querySelector(".aa-pr"); pr && (pr.innerHTML = priceHtml(h, sel));
     }
-    function ypHtml(i, sel) { return '<label class="aa-yp' + (sel.bad ? " bad" : "") + '" title="Your selling price. Empty = robot prices it (₹1 under Buy Box, never below ₹15 or 10% profit)">₹<input data-yp="' + i + '" inputmode="decimal" placeholder="auto" value="' + esc(sel.price || "") + '"></label>'; }
+    function ypHtml(i, sel) { return '<label class="aa-yp' + (sel.bad ? " bad" : "") + '" title="Your sale price - required (owner 23 Nov 2026: no auto price). Must still earn ₹15 or 10% per order.">₹<input data-yp="' + i + '" inputmode="decimal" placeholder="price" value="' + esc(sel.price || "") + '"></label>'; }
     function toggle(i) {
       var h = hits[i]; if (!h || !h.ok) return;
       if (pick.has(h.k)) pick.delete(h.k); else pick.set(h.k, { p: h.p, price: "" });
@@ -308,6 +308,10 @@
       if (!pick.size) return toast("Select one or more products first", true);
       var db = G.db(); if (!db) return toast("Not connected — reload the page", true);
       var items = Array.from(pick.entries()), bad = items.filter(function (e) { return e[1].bad; });
+      // owner 23 Nov 2026: sale price is required for every selected product (auto price created loss listings)
+      var noPrice = items.filter(function (e) { return !(parseFloat(e[1].price) > 0); });
+      if (noPrice.length) { toast("Type the sale price for " + noPrice.length + " selected product" + (noPrice.length > 1 ? "s" : "") + " (₹ box on the row) — no auto price any more", true);
+        var bi = hits.findIndex(function (h) { return h.k === noPrice[0][0]; }), box = bi >= 0 && $("aaRl").querySelector('[data-yp="' + bi + '"]'); box && box.focus(); return; }
       if (bad.length) return toast("⚠ " + bad.length + " price" + (bad.length > 1 ? "s are" : " is") + " below the " + RULE + " profit rule (red box) — raise it or clear it for auto price", true);
       var qty = Math.max(1, parseInt($("aaQty").value) || 10), b = $("aaBulk");
       b.classList.add("busy");
@@ -328,7 +332,59 @@
     initList(ov);
     initAttention();
     initMapFix();
+    initManualPrice(ov, form);
     return true;
+  }
+
+  /* ===== Manual sale price (owner 23 Nov 2026: "deploy sale price to be entered manually, listing has been created in loss") =====
+     1. ASIN / barcode box: a required "Sale price ₹" field; List on Amazon saves it as wantPrice (robot uses it, still refuses below ₹15 / 10%).
+     2. Rows the robot sent back as "needs_price" get a "Set price" button. */
+  function initManualPrice(ov, form) {
+    if (window.__aaManualPrice || !form) return; window.__aaManualPrice = true;
+    var go = $("aaGo"), ta = $("aaAsin"); if (!go || !ta) return;
+    var gstL = $("aaGst") && $("aaGst").closest("label");
+    (gstL || go).insertAdjacentHTML(gstL ? "afterend" : "beforebegin", '<label>Sale price ₹<input id="aaPrice" type="number" step="1" min="1" placeholder="required" title="Your selling price on Amazon (the robot no longer picks a price)"></label>');
+    form.style.gridTemplateColumns = "minmax(0,2.2fr) minmax(0,.6fr) minmax(0,.8fr) minmax(0,.8fr) minmax(0,.6fr) minmax(0,.8fr) auto";
+    async function add() {
+      var toks = Array.from(new Set(ta.value.toUpperCase().split(/[\s,;]+/).map(function (x) { return x.trim(); }).filter(Boolean)));
+      var bc = function (t) { return /^\d{8}$|^\d{12,14}$/.test(t); }, items = toks.filter(function (t) { return bc(t) || /^[A-Z0-9]{10}$/.test(t); }), bad = toks.filter(function (t) { return items.indexOf(t) < 0; });
+      if (bad.length) return toast("Not an ASIN or barcode: " + bad.slice(0, 3).join(", "), true);
+      if (!items.length) return toast("Enter an ASIN (10 characters) or a barcode (8, 12, 13 or 14 digits)", true);
+      var num = function (id) { var v = parseFloat(($(id) || {}).value); return v > 0 ? v : null; }, price = num("aaPrice");
+      if (!price) { $("aaPrice").focus(); return toast("Type the sale price first — the robot no longer sets the price itself", true); }
+      var qty = Math.max(1, parseInt($("aaQty").value) || 10), cost = num("aaCost"), mrp = num("aaMrp"), gr = ($("aaGst").value || "").trim(), gst = gr === "" ? null : parseFloat(gr);
+      if (items.length > 1 && cost) return toast("Cost applies to one ASIN at a time — add them one by one, or leave cost empty to use the mapping", true);
+      if (mrp && price > mrp) return toast("Sale price ₹" + price + " is above the MRP ₹" + mrp, true);
+      var db = G.db(); if (!db) return toast("Not connected — reload the page", true);
+      go.classList.add("busy");
+      try { var b = db.batch(); items.forEach(function (a) { b.set(db.collection("spapiAddAsin").doc(acct() + "_" + (bc(a) ? "bc_" : "") + a), { account: acct(), asin: bc(a) ? "" : a, barcode: bc(a) ? a : null,
+          qty: qty, cost: cost, mrp: mrp, gst: gst, wantPrice: price, status: "pending", requestedAt: Date.now(), error: null, price: null, profit: null }); });
+        await b.commit(); ta.value = ""; ["aaCost", "aaMrp", "aaGst", "aaPrice"].forEach(function (id) { $(id) && ($(id).value = ""); });
+        toast("✓ " + items.length + " item" + (items.length > 1 ? "s" : "") + " queued at ₹" + price + " — listed at the next sync"); }
+      catch (e) { toast("⚠ Not saved: " + (e.message || e), true); } finally { go.classList.remove("busy"); }
+    }
+    go.onclick = add;
+    ta.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); add(); } }, true);
+    $("aaPrice").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); add(); } });
+    // rows waiting for a price
+    var list = $("aaList"); if (!list) return;
+    function mark() {
+      list.querySelectorAll("tr").forEach(function (tr) {
+        var pill = tr.querySelector(".pill"); if (!pill || pill.textContent.trim() !== "needs_price" || tr.querySelector("[data-aa-price]")) return;
+        pill.textContent = "Needs your price"; pill.className = "pill warn";
+        var del = tr.querySelector('[data-aa="del"]'), id = del && del.dataset.asin; if (!id) return;
+        del.insertAdjacentHTML("beforebegin", '<button class="aa-mini" data-aa-price="' + id + '">Set price</button>');
+      });
+    }
+    new MutationObserver(mark).observe(list, { childList: true, subtree: true }); mark();
+    list.addEventListener("click", async function (e) {
+      var b = e.target.closest("[data-aa-price]"); if (!b) return; e.stopPropagation();
+      var v = await askTextPrompt({ kicker: "Sale price", title: "Your price on Amazon", message: "Selling price for ONE Amazon unit (incl. GST). The robot lists it at the next sync if it still earns ₹15 or 10% per order.", confirmLabel: "Save & list" });
+      if (v == null) return; var n = Math.floor(parseFloat(String(v).replace(/[^0-9.]/g, "")));
+      if (!(n > 0)) return toast("Enter a price above 0", true);
+      try { await G.db().collection("spapiAddAsin").doc(b.dataset.aaPrice).set({ wantPrice: n, status: "pending", error: null, requestedAt: Date.now() }, { merge: true }); toast("✓ Queued at ₹" + n); }
+      catch (err) { toast("⚠ Not saved: " + (err.message || err), true); }
+    }, true);
   }
 
   /* ===== Mapping fix (owner, 24 Oct 2026: "when we map the product it is not getting saved, listing got stuck") =====

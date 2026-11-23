@@ -368,3 +368,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Before, every save re-matched ~1,000 listings against ~6,700 LOTS items while the window stayed open. Keep it.
   Inside the Self-Ship map frame (window.AIKM_EMBED) there is NO redraw after a save, and the frame's costOf() forgets only that ASIN
   (it used matchMemo.clear() -> 10-20 s before Self-Ship got the 'close' message, owner 21 Nov 2026). Close message sent 30 ms after the window hides.
+- **Add ASIN: sale price typed by hand** (owner 23 Nov 2026, "listing has been created in loss"): the robot (`applyAddAsinRequests`) no longer
+  picks a price — a request without `wantPrice` gets status `needs_price` (robot-made requests relist-gone / new-listing carry their own).
+  Page (`initManualPrice()` in `amazon-name-search.js`): required "Sale price ₹" box in the ASIN/barcode form (replaces the page's add()),
+  the name-search "List selected" refuses products without a ₹ price, and `needs_price` rows get a "Set price" button. The ₹15 / 10% rule still applies.

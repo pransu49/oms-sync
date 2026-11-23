@@ -2208,6 +2208,9 @@ async function applyAddAsinRequests(sellerId) {
         restricted = (rr.restrictions || []).flatMap((x) => (x.reasons || []).map((y) => y.message || y.reasonCode)).filter(Boolean).join(' | ') || null;
       } catch (e) { console.warn(`Add ASIN restriction check failed for ${asin}:`, e.message || e); }
       if (restricted) { await done({ status: 'blocked', name, img: img ? img.link : null, error: restricted.slice(0, 300) }); continue; }
+      // Owner 23 Nov 2026 ("listing has been created in loss"): the sale price must be typed by hand - no auto price for Add ASIN.
+      // Robot-made requests (relist-gone, new-listing) carry their own wantPrice.
+      if (!(Number(r.wantPrice) > 0)) { await done({ status: 'needs_price', name, img: img ? img.link : null, error: 'Type your sale price (Add ASIN -> Set price), then it is listed at the next sync. The robot no longer picks a price itself.' }); continue; }
       // 3) cost (typed on the page, or the ASIN's LOTS / vendor mapping) and MRP
       let sku = 'N-' + asin; for (let n = 2; SNAP.inventory[`${ACCOUNT_LABEL}_${sidSafe(sku)}`]; n++) sku = `N-${asin}-${n}`;
       // Relist: a time-based SKU, so it can never clash with an old SKU the listings report still shows.
