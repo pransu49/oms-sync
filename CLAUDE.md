@@ -372,3 +372,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   picks a price — a request without `wantPrice` gets status `needs_price` (robot-made requests relist-gone / new-listing carry their own).
   Page (`initManualPrice()` in `amazon-name-search.js`): required "Sale price ₹" box in the ASIN/barcode form (replaces the page's add()),
   the name-search "List selected" refuses products without a ₹ price, and `needs_price` rows get a "Set price" button. The ₹15 / 10% rule still applies.
+- **Listings in loss** (owner 23 Nov 2026, "check for loss and make visible"): `console/loss-listings.js`, loader block `aikmLossListJs` at the end
+  of `amazon-name-search.js` (keep it). Header button "📉 In loss · N" (live listings of the open account whose listingIndex `e` < 0 = robot profit
+  maths at today's price). Pop-up: chips Live / Robot listings (SKU N-...) / Out of stock / All, safe price `f` (₹15 or 10%) + target `t` (₹20),
+  per-row Push (page's spapiPushPriceToAmazon) and "Push safe price to N ticked" (spapiPriceUpdates, source loss-list).
+  Firebase: 1 read per account per page open (main listingIndex/<acct>, cached 5 min) + 1 write per price queued.
