@@ -110,7 +110,7 @@
       s.map(function (r) { var sug = !remapped[r.asin] && r.f && (!r.mrp || r.f <= r.mrp) ? r.f : null;
         return "<tr><td><input type=\"checkbox\" data-tk=\"" + esc(r.sku) + "\"" + (tick.has(r.sku) ? " checked" : "") + (sug ? "" : " disabled title=\"No price under MRP earns ₹15 - check the cost mapping\"") + "></td>" +
           '<td><div class="ll-pc"><a class="ll-im" href="https://www.amazon.in/dp/' + esc(r.asin) + '" target="_blank" rel="noopener">' + (r.img ? '<img loading="lazy" src="' + esc(String(r.img).replace(/\.([a-z]+)$/i, "._SL100_.$1")) + '" alt="">' : "") + "</a><div><div class=\"ll-nm\">" + esc(r.name || r.sku) + "</div>" +
-          '<div class="ll-s">' + esc(r.sku) + (r.robot ? '<span class="ll-tag">Robot listing</span>' : "") + " · " + esc(r.asin) + "</div></div></div></td>" +
+          '<div class="ll-s">' + esc(r.sku) + (r.robot ? '<span class="ll-tag">Robot listing</span>' : "") + " · " + (r.asin ? '<a href="https://www.amazon.in/dp/' + esc(r.asin) + '" target="_blank" rel="noopener" style="color:#1F4E8C" title="Open on Amazon">' + esc(r.asin) + " ↗</a>" : "") + "</div></div></div></td>" +
           (function () { var m = mapOf(r.asin); return '<td style="min-width:180px">' + (remapped[r.asin] ? '<div class="ll-s" style="color:#1E7A4B;font-weight:600">✓ Updated · new profit after next sync</div>' : "") +
           '<div class="ll-s" style="color:' + (m && m.saved ? "#14213D" : "#A86A12") + ';max-width:220px;line-height:1.35">' + (m ? esc(m.txt) : "Not mapped") + "</div>" +
           '<button type="button" class="ll-push" style="margin:4px 0 0" data-map="' + esc(r.asin) + '">Fix mapping</button></td>'; })() +
