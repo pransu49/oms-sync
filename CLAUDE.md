@@ -377,3 +377,6 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   maths at today's price). Pop-up: chips Live / Robot listings (SKU N-...) / Out of stock / All, safe price `f` (₹15 or 10%) + target `t` (₹20),
   per-row Push (page's spapiPushPriceToAmazon) + "Fix mapping" (page's openSpapiMatchModal; pop-up hides while it is open; remapped rows get no safe price until the next sync) and "Push safe price to N ticked" (spapiPriceUpdates, source loss-list).
   Firebase: 1 read per account per page open (main listingIndex/<acct>, cached 5 min) + 1 write per price queued.
+- **Premium console look** (owner 23 Nov 2026, "apply" the Self-Ship redesign): `console/premium-theme.js`, loader block `aikmPremThemeJs` at the end of
+  `console/refund-tab.js` (keep it). Design layer only (CSS vars + sidebar groups Ship/Money/Stock/Files + page header, cards, tabs, tables). Opt-in per browser:
+  `?theme=premium` / `?theme=classic` (localStorage `aikm_theme`); `AIKM_PREMIUM_DEFAULT` in the file switches it on for everyone once the owner approves. 0 Firebase.
