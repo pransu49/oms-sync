@@ -845,7 +845,7 @@
   (function watch(n) {
     var body = document.getElementById("omiBody");
     if (!body) return void (n < 90 && setTimeout(function () { watch(n + 1); }, 1000));
-    var fq = false; new MutationObserver(function () { if (fq) return; fq = true; setTimeout(function () { fq = false; fix(); }, 80); }).observe(body, { childList: true, subtree: true });
+    new MutationObserver(function () { fix(); }).observe(body, { childList: true, subtree: true });
     fix();
   })(0);
 } catch (e) {} })();
@@ -1374,36 +1374,3 @@
     .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
     .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
 } catch (e) {} })();
-
-/* ===== SPEED (owner 24 Nov 2026: "page unresponsive ... make this tool smooth, fast") =====
-   1. The KPI tiles (In stock / Out of stock / Duplicate / GST issues / Buy Box ...) were worked out again from ALL listings
-      (taxCheck of ~2,000 items on Sasta Store) on EVERY redraw - many times a second while you work. Now they are worked out
-      once per data load / mapping / GST change and reused.
-   2. Any step that still takes more than 2.5 s shows a small note, so a slow screen can be pointed out. ===== */
-(function () { try {
-  function hook(n) {
-    if (typeof window.computeSpapiKpis !== "function" || typeof spapiInventoryRaw === "undefined") return void (n < 120 && setTimeout(function () { hook(n + 1); }, 500));
-    if (window.computeSpapiKpis.__memo) return;
-    var orig = window.computeSpapiKpis, last = null, lastKey = null;
-    var keyNow = function () {
-      var m = 0; try { m = Object.keys(STORE.asinLotsMap || {}).length; } catch (e) {}
-      var tp = 0; try { tp = Object.keys(spTaxPending || {}).length; } catch (e) {}
-      return [spapiCurrentAccount, (spapiInventoryRaw || []).length, (spapiPricingRaw || []).length, m, tp, typeof matchMemo !== "undefined" ? matchMemo.size : 0, typeof allPrepped !== "undefined" ? allPrepped.length : 0, typeof __bbLoaded !== "undefined" && __bbLoaded ? 1 : 0];
-    };
-    var invRef = null, prRef = null;
-    var memo = function () {
-      var k = keyNow().join("|");
-      if (last && k === lastKey && invRef === spapiInventoryRaw && prRef === spapiPricingRaw) return last;
-      last = orig.apply(this, arguments); lastKey = k; invRef = spapiInventoryRaw; prRef = spapiPricingRaw; return last;
-    };
-    memo.__memo = true; window.computeSpapiKpis = memo;
-    // timing guard on the big redraws
-    ["spRender", "renderInventoryCards", "renderPricingCards", "drawOrders", "applySpapiData"].forEach(function (name) {
-      var f = window[name]; if (typeof f !== "function" || f.__timed) return;
-      var w = function () { var t = performance.now(); try { return f.apply(this, arguments); } finally { var d = performance.now() - t;
-        if (d > 2500) { console.warn("AIKM slow:", name, Math.round(d) + " ms"); try { spToast("Slow screen: " + name + " took " + (d / 1000).toFixed(1) + " s — tell Claude if this repeats", true); } catch (e) {} } } };
-      w.__timed = true; window[name] = w;
-    });
-  }
-  hook(0);
-} catch (e) { console.warn("speed block", e); } })();

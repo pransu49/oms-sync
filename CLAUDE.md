@@ -380,8 +380,3 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - **Premium console look** (owner 23 Nov 2026, "apply" the Self-Ship redesign): `console/premium-theme.js`, loader block `aikmPremThemeJs` at the end of
   `console/refund-tab.js` (keep it). Design layer only (CSS vars + sidebar groups Ship/Money/Stock/Files + page header, cards, tabs, tables). Opt-in per browser:
   `?theme=premium` / `?theme=classic` (localStorage `aikm_theme`); `AIKM_PREMIUM_DEFAULT` in the file switches it on for everyone once the owner approves. 0 Firebase.
-- **Speed** (owner 24 Nov 2026, "Page Unresponsive ... make this tool smooth, fast"): block "SPEED" at the end of `amazon-name-search.js` (keep it)
-  memoises the page's `computeSpapiKpis` (it ran taxCheck over every listing on EVERY spRender) - recomputed only when account / data arrays /
-  mapping count / pending GST / matchMemo size / Buy Box history change; and times spRender / renderInventoryCards / renderPricingCards /
-  drawOrders / applySpapiData (> 2.5 s -> console warning + "Slow screen" toast). `auto-more.js` no longer watches the whole page with a
-  MutationObserver (1.5 s timer instead, text test before layout, paused while any pop-up is open). Don't add page-wide unthrottled observers.

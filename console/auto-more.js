@@ -21,18 +21,12 @@
   }
   function path(el) { var a = []; for (var n = el; n && n !== document.body; n = n.parentElement) { var i = 0, s = n; while ((s = s.previousElementSibling)) i++; a.push(i); } return a; }
   function byPath(a) { var n = document.body; for (var i = a.length - 1; i >= 0 && n; i--) n = n.children[a[i]]; return n || null; }
-  // owner 24 Nov 2026 ("page unresponsive"): cheap text test FIRST (thousands of buttons on the page), layout only for the few matches;
-  // nothing is auto-loaded while a pop-up / confirm box is open
   function buttons() {
-    return [].slice.call(document.querySelectorAll("button.tbl-load-btn,[data-bbl-more],[data-omi-more],button")).filter(function (b) {
-      return RX.test(b.textContent || "") && !b.disabled && b.offsetParent !== null;
+    return [].slice.call(document.querySelectorAll("button")).filter(function (b) {
+      return b.offsetParent !== null && !b.disabled && RX.test(b.textContent || "");
     });
   }
-  function modalOpen() {
-    return [].some.call(document.querySelectorAll(".admin-modal-overlay,.ll-ov,.rl-ov,.aa-ov"), function (o) { return o.style.display && o.style.display !== "none"; });
-  }
   function check() {
-    if (document.hidden || modalOpen()) return;
     var bs = buttons(); if (!bs.length) return;
     for (var k = 0; k < bs.length; k++) {
       var b = bs[k], sc = scroller(b), r = b.getBoundingClientRect();
@@ -58,7 +52,6 @@
   function soon() { if (busy) return; busy = true; setTimeout(function () { busy = false; check(); }, 120); }
   document.addEventListener("scroll", soon, { capture: true, passive: true });
   window.addEventListener("resize", soon, { passive: true });
-  // no page-wide MutationObserver any more (it re-ran on every small change); a light check every 1.5 s instead
-  setInterval(function () { if (!document.hidden) soon(); }, 1500);
+  new MutationObserver(soon).observe(document.body, { childList: true, subtree: true });
   soon();
 } catch (e) { console.warn("auto-more", e); } })();
