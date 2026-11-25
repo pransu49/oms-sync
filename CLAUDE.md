@@ -380,3 +380,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - **Premium console look** (owner 23 Nov 2026, "apply" the Self-Ship redesign): `console/premium-theme.js`, loader block `aikmPremThemeJs` at the end of
   `console/refund-tab.js` (keep it). Design layer only (CSS vars + sidebar groups Ship/Money/Stock/Files + page header, cards, tabs, tables). Opt-in per browser:
   `?theme=premium` / `?theme=classic` (localStorage `aikm_theme`); `AIKM_PREMIUM_DEFAULT` in the file switches it on for everyone once the owner approves. 0 Firebase.
+- **Orders freeze fix** (owner 24-25 Nov 2026, "Page Unresponsive"): measured on the live Sasta page (21,000 orders) - every Orders redraw froze
+  the page ~22-29 s because `proshipFreight()` in `order-fees.js` re-averaged all ~6,500 proshipIndex AWBs for EACH order without its own AWB.
+  Now worked out once per index load + account (`avgFor`/`avgVal`): redraw 364 ms. Never loop over a whole index inside a per-order/per-row function.
+  (The 24 Nov "SPEED" block + auto-more interval change were rolled back - they did not help.)
