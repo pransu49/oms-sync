@@ -424,6 +424,8 @@ async function modeStat() {
     b.n++; const u = String(v.st || '').toUpperCase();
     if (v.s === 'cancelled' || /CANCEL/.test(u)) b.canc++; else if (/PICKUP_FAIL|NOT_PICKED/.test(u)) b.fail++; else if (/ORDER_PLACED|PICKUP_PENDING|OUT_FOR_PICKUP|AWB_REGISTERED|BOOKED|MANIFEST/.test(u) || !u) b.pend++; else b.moved++; });
   console.log('BY STATUS', JSON.stringify(bySt));
+  const fc = {}; Object.keys(idx).forEach((k) => { const v = idx[k]; if (/PICKUP_FAIL|NOT_PICKED/i.test(v.st || '') && v.s !== 'cancelled') { const day = v.t ? new Date(v.t + 5.5 * 3600e3).toISOString().slice(0, 10) : '?'; const key = (v.c || '?') + ' ' + day; fc[key] = (fc[key] || 0) + 1; } });
+  console.log('PICKUP FAILED BY COURIER+DAY', JSON.stringify(fc));
   Object.keys(byDay).sort().forEach((k) => { const b = byDay[k]; console.log(`DAY ${k}: booked ${b.n} · picked/moving ${b.moved} · pickup pending ${b.pend} · pickup failed ${b.fail} · cancelled ${b.canc}`); });
 }
 
