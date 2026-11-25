@@ -6,8 +6,13 @@ name: ProShip
 on:
   # status refresh (in transit / delivered / RTO) every 30 min, like NimbusPost (owner 13 Nov 2026).
   # Finishes in seconds with 0 ProShip calls when there are no live ProShip shipments.
+  # GitHub's own timer skips most runs (owner 25 Nov 2026: refresh came only every 4-6 h), so the MAIN trigger is the OMS sync,
+  # which cron-job.org starts every 10 min; the gate below lets only one refresh through per 30 min. The schedule stays as a backup.
   schedule:
     - cron: '7,37 * * * *'
+  workflow_run:
+    workflows: ['Sync OMS Guru Orders']
+    types: [completed]
   workflow_dispatch:
     inputs:
       mode:
@@ -30,7 +35,7 @@ on:
 # never two ship/cancel runs at once. The status refresh has its OWN queue, so a scheduled refresh can never
 # push a waiting ship job out of the queue (GitHub keeps only one waiting run per group). Index writes are transactions.
 concurrency:
-  group: proship-${{ (github.event_name == 'schedule' || inputs.mode == 'sync') && 'sync' || 'main' }}
+  group: proship-${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run' || inputs.mode == 'sync') && 'sync' || 'main' }}
   cancel-in-progress: false
 
 permissions:
@@ -38,7 +43,21 @@ permissions:
   actions: write   # to start "Push tracking to OMS Guru" after shipments are made
 
 jobs:
+  # after an OMS run, refresh only in the :00-:09 and :30-:39 slots (= every 30 min)
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - id: g
+        shell: bash
+        run: |
+          m=$(date -u +%M); m=$((10#$m))
+          if [ "${{ github.event_name }}" != "workflow_run" ] || [ $((m % 30)) -lt 10 ]; then echo "go=1" >> $GITHUB_OUTPUT; else echo "go=0" >> $GITHUB_OUTPUT; echo "skip: not a 30-min slot"; fi
+
   proship:
+    needs: gate
+    if: ${{ needs.gate.outputs.go == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120   # 1,500 orders ≈ 15–25 min; generous so a big job is never cut off
     steps:
@@ -59,7 +78,7 @@ jobs:
         shell: bash
         run: set -o pipefail; node proship.js 2>&1 | tee run.log
         env:
-          MODE: ${{ github.event_name == 'schedule' && 'sync' || inputs.mode || 'check' }}
+          MODE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && 'sync' || inputs.mode || 'check' }}
           JOB_ID: ${{ inputs.job_id }}
           AWBS: ${{ inputs.awbs }}
           FROM_PIN: ${{ inputs.from_pin }}
@@ -73,7 +92,7 @@ jobs:
 
       # ATS label "Ship Date" -> proshipIndex (owner 23 Nov 2026). Only after status refreshes; never fails the run.
       - name: Read ATS label ship dates
-        if: ${{ always() && (github.event_name == 'schedule' || inputs.mode == 'sync' || inputs.mode == 'ship') }}
+        if: ${{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_run' || inputs.mode == 'sync' || inputs.mode == 'ship') }}
         continue-on-error: true
         timeout-minutes: 20
         run: node tools/ats-shipdate.js

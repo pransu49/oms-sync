@@ -248,7 +248,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   (SHIP_PARALLEL), saves new AWBs to proshipIndex every 50 (a stopped run never loses AWBs -> no double shipping on re-run), job progress every 25;
   workflow timeout 120 min (nimbus-labels 60 min, ProShip label links fetched 8 at a time). proshipIndex is ONE doc (1 MB max, ~120 B per AWB):
   kept to the newest 6,500 AWBs / 15 days (MAX_IDX, KEEP_DAYS) — don't raise.
-  STATUS REFRESH every 30 min (owner 13 Nov 2026, like NimbusPost): `proship.yml` schedule `7,37 * * * *` runs mode `sync` (ProShip order list,
+  STATUS REFRESH every 30 min (owner 13 Nov 2026, like NimbusPost; 25 Nov 2026: GitHub's timer only fired every 4-6 h, so the MAIN trigger is now
+  workflow_run after 'Sync OMS Guru Orders' (cron-job.org, every 10 min) with a gate job letting only the :00-:09/:30-:39 slots through; schedule = backup.
+  Console re-connects its proshipIndex feed on error / after 60 min without an update. Read-only `stat` mode prints index age + counts):
+  `proship.yml` runs mode `sync` (ProShip order list,
   updated last 6 days, up to 20,000 rows, stops once all open AWBs are seen; 0 ProShip calls when nothing is live). Sync has its OWN concurrency
   queue (`proship-sync`) so it can never push a waiting ship job out. ALL index writes go through `mergeIndex()` (Firestore transaction on the
   fresh doc): ship adds only its own new AWBs, sync changes only statuses (never un-cancels), cancel marks only its AWBs — never write the

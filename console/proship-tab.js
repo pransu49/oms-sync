@@ -302,10 +302,21 @@
         if (n) fallbackIndex = fb;
       } catch (e) {}
     }
+    /* owner 25 Nov 2026: a page left open showed a 28-hour-old copy (the live feed had silently stopped). Now: on a feed error
+       re-connect after 30 s, and if no update came for 60 min while the page is visible (the robot writes every 30 min),
+       re-connect once (1 read). */
+    var idxUnsub = null, idxSnapAt = 0;
+    function rehookIdx(why) {
+      try { if (idxUnsub) idxUnsub(); } catch (e) {}
+      idxUnsub = null; idxRef = null; console.warn("ProShip index: re-connecting (" + why + ")"); hookIdx();
+    }
+    setInterval(function () { if (idxRef && !document.hidden && idxSnapAt && Date.now() - idxSnapAt > 60 * 60e3) { idxSnapAt = Date.now(); rehookIdx("no update for 60 min"); } }, 5 * 60e3);
     function hookIdx() {
       var d = db(); if (idxRef || !d) return;
       idxRef = d.collection("aikm_admin").doc("proshipIndex");
-      idxRef.onSnapshot(function (s) {
+      idxSnapAt = Date.now();
+      idxUnsub = idxRef.onSnapshot(function (s) {
+        idxSnapAt = Date.now();
         try { idx = s.exists && s.data().data ? JSON.parse(s.data().data) : {}; } catch (e) { idx = {}; }
         feedFallback(); frMedAt = 0;
         /* shared with Shipment Tracking (no extra Firebase read) */
@@ -313,7 +324,7 @@
         try { document.dispatchEvent(new CustomEvent("aikm-proship-idx")); } catch (e) {}
         if (isOpen()) { renderDates(); if (typeof buildPool === "function") setTimeout(buildPool, 0); }
         if (typeof window.__aikmCfRefresh === "function") window.__aikmCfRefresh();
-      }, function (e) { console.warn("ProShip index read error", e); });
+      }, function (e) { console.warn("ProShip index read error", e); setTimeout(function () { rehookIdx("read error"); }, 30000); });
     }
     var idxTimer = setInterval(function () { hookIdx(); if (idxRef) clearInterval(idxTimer); }, 3000);
     setInterval(feedFallback, 30000);
