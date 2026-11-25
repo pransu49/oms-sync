@@ -136,10 +136,17 @@
     function proshipFreight(id) {
       loadPix(); if (!PIX) return null; var v = PIX[id];
       if (v && v.r > 0 && v.s !== "cancelled") return { v: +v.r, src: "courier (ProShip charge)" };
-      var acct = typeof spapiCurrentAccount !== "undefined" ? String(spapiCurrentAccount) : "", l = [];
-      Object.keys(PIX).forEach(function (k) { var x = PIX[k]; if (x && x.r > 0 && x.s !== "cancelled" && String(x.ac || "").toLowerCase().replace(/[^a-z]/g, "").indexOf(acct.replace(/[^a-z]/g, "").slice(0, 5)) === 0) l.push(+x.r); });
-      return l.length >= 5 ? { v: Math.round(l.reduce(function (a, b) { return a + b; }, 0) / l.length * 100) / 100, src: "courier (ProShip average, " + l.length + " shipments)" } : null;
+      /* owner 25 Nov 2026 "page unresponsive": the account average was worked out again over all ~6,500 ProShip AWBs for EVERY order
+         without its own AWB (21,000 Sasta orders = ~29 s frozen per redraw). Now once per index load + account. */
+      var acct = typeof spapiCurrentAccount !== "undefined" ? String(spapiCurrentAccount) : "";
+      if (avgFor !== PIX || avgAcct !== acct) {
+        avgFor = PIX; avgAcct = acct; var l = [], pre = acct.replace(/[^a-z]/g, "").slice(0, 5);
+        Object.keys(PIX).forEach(function (k) { var x = PIX[k]; if (x && x.r > 0 && x.s !== "cancelled" && String(x.ac || "").toLowerCase().replace(/[^a-z]/g, "").indexOf(pre) === 0) l.push(+x.r); });
+        avgVal = l.length >= 5 ? { v: Math.round(l.reduce(function (a, b) { return a + b; }, 0) / l.length * 100) / 100, src: "courier (ProShip average, " + l.length + " shipments)" } : null;
+      }
+      return avgVal;
     }
+    var avgFor = null, avgAcct = null, avgVal = null;
     function courier(kg) { var n = Math.max(+kg || .5, .5); return n <= 1 ? 40 : 40 + 30 * Math.ceil(n - 1); }
     function net(e, r, x, f, est) {
       fixItems(e);
