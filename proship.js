@@ -412,6 +412,21 @@ async function modeSync() {
   Object.keys(fa).forEach((a) => console.log(`AVG FREIGHT ${a}: Rs ${r2(fa[a].reduce((x, y) => x + y, 0) / fa[a].length)} over ${fa[a].length} shipments (min ${Math.min(...fa[a])}, max ${Math.max(...fa[a])})`));
 }
 
+// read-only health check of the ONE index doc the console reads (1 read): age, size, counts by status and by booking day (IST)
+async function modeStat() {
+  fb();
+  const d = await idxRef().get(); const raw = (d.exists && d.get('data')) || '{}'; const idx = JSON.parse(raw);
+  const up = d.exists && d.get('updatedAt') && d.get('updatedAt').toDate ? d.get('updatedAt').toDate() : null;
+  console.log(`INDEX updatedAt ${up ? up.toISOString() : '-'} (${up ? Math.round((Date.now() - up) / 60000) + ' min ago' : '?'}), ${Object.keys(idx).length} AWBs, ${raw.length} bytes of 1,048,576`);
+  const bySt = {}, byDay = {};
+  Object.keys(idx).forEach((k) => { const v = idx[k]; const st = (v.s === 'cancelled' ? 'CANCELLED/' : '') + (v.st || '?'); bySt[st] = (bySt[st] || 0) + 1;
+    const day = v.t ? new Date(v.t + 5.5 * 3600e3).toISOString().slice(0, 10) : '?'; const b = byDay[day] = byDay[day] || { n: 0, pend: 0, fail: 0, moved: 0, canc: 0 };
+    b.n++; const u = String(v.st || '').toUpperCase();
+    if (v.s === 'cancelled' || /CANCEL/.test(u)) b.canc++; else if (/PICKUP_FAIL|NOT_PICKED/.test(u)) b.fail++; else if (/ORDER_PLACED|PICKUP_PENDING|OUT_FOR_PICKUP|AWB_REGISTERED|BOOKED|MANIFEST/.test(u) || !u) b.pend++; else b.moved++; });
+  console.log('BY STATUS', JSON.stringify(bySt));
+  Object.keys(byDay).sort().forEach((k) => { const b = byDay[k]; console.log(`DAY ${k}: booked ${b.n} · picked/moving ${b.moved} · pickup pending ${b.pend} · pickup failed ${b.fail} · cancelled ${b.canc}`); });
+}
+
 // read-only look at the newest console ship jobs (to see why a job did not start): 6 reads
 async function modeJobs() {
   fb();
@@ -478,7 +493,7 @@ if (require.main === module) {
   // the sandbox is for the practice run only: its fake AWBs must never reach the real index / OMS Guru / Amazon
   const prod = /^https:\/\/proship\.prozo\.com$/i.test(BASE), sandbox = /^https:\/\/proshipdev\.prozo\.com$/i.test(BASE);
   if (MODE === 'selftest' ? !sandbox : !prod) { console.error(`FAILED: mode "${MODE}" is not allowed on ${BASE}`); process.exit(1); }
-  ({ check: modeCheck, ship: modeShip, sync: modeSync, jobs: modeJobs, cancel: modeCancel, selftest: modeSelftest }[MODE] || (async () => { throw new Error('Unknown MODE ' + MODE); }))()
+  ({ check: modeCheck, ship: modeShip, sync: modeSync, jobs: modeJobs, cancel: modeCancel, stat: modeStat, selftest: modeSelftest }[MODE] || (async () => { throw new Error('Unknown MODE ' + MODE); }))()
     .then(() => process.exit(process.exitCode || 0))
     .catch((e) => { console.error('FAILED:', e.message); process.exit(1); });
 }
