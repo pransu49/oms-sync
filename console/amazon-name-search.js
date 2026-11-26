@@ -360,12 +360,35 @@
       '#aapBox .aap-n{font-weight:600;color:var(--navy,#14213D);max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
       '#aapBox .aap-s{font-size:11px;color:var(--muted,#8B909B);font-family:ui-monospace,monospace}' +
       "#aapBox input{width:86px;border:1px solid var(--line,#E6E1D6);border-radius:8px;padding:6px 8px;font:500 12.5px 'Inter',sans-serif;background:#fff;box-sizing:border-box}" +
-      '#aapBox input:focus{outline:none;border-color:var(--gold,#C9A24B);box-shadow:0 0 0 3px rgba(201,162,75,.15)}#aapBox input.need{border-color:#E9B949;background:#FFFBEA}' +
+      '#aapBox input:focus{outline:none;border-color:var(--gold,#C9A24B);box-shadow:0 0 0 3px rgba(201,162,75,.15)}#aapBox input.need{border-color:#E9B949;background:#FFFBEA}#aapBox input.pre{background:#F6F1E4;border-color:#D9C79A}' +
       '#aapBox .aap-tag{display:inline-block;font-size:11.5px;font-weight:600;border-radius:999px;padding:3px 9px;white-space:nowrap}' +
       '#aapBox .ok{background:#E7F4EC;color:#1E7A4B}#aapBox .warn{background:#FFF4DB;color:#A86A12}#aapBox .bad{background:#FDECEA;color:#B42318}#aapBox .na{background:#F1F2F4;color:#6B7280}' +
       '#aapBox .aap-x{all:unset;cursor:pointer;color:var(--muted,#8B909B);font-size:15px;padding:0 4px}#aapBox .aap-x:hover{color:#B42318}</style>');
     form.insertAdjacentHTML("afterend", '<div id="aapBox"></div>');
     var box = $("aapBox"), edits = {}, tmr = null;
+    /* Previous sale prices (owner 26 Nov 2026: "robot to prefill previous sale prices, we change if required"): our own price for the
+       ASIN from listingIndex/<acct> of every account (main Firebase, SKU -> a ASIN, p price, q stock). This account first (in-stock SKU
+       first), else the lowest in-stock price on our other accounts, else any. ~5 reads per Add ASIN use, cached 10 min. */
+    var prevIdx = null, prevAt = 0, prevBusy = false;
+    var ACCS = function () { var l = ["praso", "sastastore", "vishal", "munda", "aikm"]; try { (SPAPI_ACCOUNTS || []).forEach(function (a) { a && a.label && l.indexOf(a.label) < 0 && l.push(a.label); }); } catch (e) {} return l; };
+    var accName = function (l) { try { var f = (SPAPI_ACCOUNTS || []).find(function (a) { return a.label === l; }); if (f) return f.name; } catch (e) {} return ({ praso: "Praso", sastastore: "Sasta Store", vishal: "Vishal", munda: "Munda", aikm: "AIKM" })[l] || l; };
+    function loadPrev() {
+      if (prevBusy || (prevIdx && Date.now() - prevAt < 6e5) || typeof fbDb === "undefined" || !fbDb) return;
+      prevBusy = true;
+      Promise.all(ACCS().map(function (a) { return fbDb.collection("listingIndex").doc(a).get().then(function (d) { return [a, (d.exists && d.data().skus) || {}]; }).catch(function () { return [a, {}]; }); }))
+        .then(function (res) { var ix = {};
+          res.forEach(function (r) { Object.keys(r[1]).forEach(function (sku) { var v = r[1][sku] || {}, asin = String(v.a || "").toUpperCase(); if (!asin || !(v.p > 0)) return;
+            (ix[asin] = ix[asin] || []).push({ acct: r[0], p: +v.p, q: +v.q || 0 }); }); });
+          prevIdx = ix; prevAt = Date.now(); prevBusy = false; draw(); })
+        .catch(function () { prevBusy = false; });
+    }
+    function prevFor(asin) {
+      var l = asin && prevIdx && prevIdx[asin]; if (!l || !l.length) return null;
+      var me = acct(), pick = function (arr) { return arr.slice().sort(function (x, y) { return x.p - y.p; })[0]; };
+      var x = l.filter(function (v) { return v.acct === me && v.q > 0; }); if (x.length) return pick(x);
+      x = l.filter(function (v) { return v.acct === me; }); if (x.length) return pick(x);
+      x = l.filter(function (v) { return v.q > 0; }); return pick(x.length ? x : l);
+    }
     var esc2 = function (x) { return String(x == null ? "" : x).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
     var isBc = function (t) { return /^\d{8}$|^\d{12,14}$/.test(t); }, isId = function (t) { return isBc(t) || /^[A-Z0-9]{10}$/.test(t); },
       isPr = function (t) { return /^\d{1,6}(\.\d{1,2})?$/.test(t); };
@@ -382,11 +405,11 @@
       return { items: out, bad: bad };
     }
     function info(id) {   // purchase cost / MRP / GST from the ASIN mapping, else the LOTS item with this barcode / ASIN
-      var r = { name: "", cost: null, mrp: null, src: "" }, code = null;
+      var r = { name: "", cost: null, mrp: null, src: "", asin: isBc(id) ? "" : id }, code = null;
       try {
         var m = !isBc(id) && STORE.asinLotsMap && STORE.asinLotsMap[id];
         if (m) { var x = resolveSpapiLotsMatch(m.name || "", id); if (x) { code = x.code; r.name = x.name || m.name || ""; } }
-        if (!code && lotsVendor.products) { var q = lotsVendor.products.find(function (z) { return isBc(id) ? String(z.barcode || "") === id : String(z.asin || "").toUpperCase() === id; }); if (q) { code = q.code; r.name = q.name || ""; } }
+        if (!code && lotsVendor.products) { var q = lotsVendor.products.find(function (z) { return isBc(id) ? String(z.barcode || "") === id : String(z.asin || "").toUpperCase() === id; }); if (q) { code = q.code; r.name = q.name || ""; if (!r.asin && q.asin) r.asin = String(q.asin).toUpperCase(); } }
         var lp = code && lotsPriceByCode[code];
         if (lp) { var sl = bestSlabFor(lp.slabs); r.cost = sl ? sl.price : null; r.mrp = parseFloat(lp.mrp) || null; r.src = lp.vendorName || "LOTS"; }
       } catch (err) {}
@@ -394,8 +417,9 @@
     }
     function row(it) {
       var ed = edits[it.id] || {}, f = info(it.id);
+      var pv = prevFor(f.asin), own = ed.price != null ? ed.price : it.price;
       return { id: it.id, name: f.name, src: ed.cost != null ? "typed" : f.src, cost: ed.cost != null ? ed.cost : f.cost, mrp: ed.mrp != null ? ed.mrp : f.mrp,
-        price: ed.price != null ? ed.price : it.price, typedCost: ed.cost != null ? ed.cost : null, typedMrp: ed.mrp != null ? ed.mrp : null };
+        price: own != null ? own : (pv ? pv.p : null), prev: pv, prefilled: own == null && !!pv, typedCost: ed.cost != null ? ed.cost : null, typedMrp: ed.mrp != null ? ed.mrp : null };
     }
     // the robot's maths (spapi-sync.js orderProfit / minProfitAt / feeFor) for a new 0.5 kg listing
     var self = function () { return acct() === "sastastore"; }, shipChg = function () { return self() ? 74 : 80; }, shipCost = function () { return self() ? 40 : 55; };
@@ -414,16 +438,18 @@
     }
     function draw() {
       var p = parse(); if (!p.items.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+      loadPrev();
       var rows = p.items.map(row), ready = rows.filter(function (d) { var c = check(d)[0]; return d.cost != null && (c === "ok" || c === "warn"); }).length;
       box.style.display = "block";
-      box.innerHTML = '<div class="aap-h"><span><b>' + rows.length + " item" + (rows.length > 1 ? "s" : "") + "</b> · sale price for each · <b>" + ready + "</b> ready</span>" +
+      box.innerHTML = '<div class="aap-h"><span><b>' + rows.length + " item" + (rows.length > 1 ? "s" : "") + "</b> · sale price for each" + (prevIdx ? " (previous prices filled in — change if needed)" : " · loading previous prices…") + " · <b>" + ready + "</b> ready</span>" +
         '<span class="aap-all">Same price for all ₹<input type="number" min="1" step="1" id="aapAll" placeholder="optional"><button type="button" class="aa-mini" id="aapAllGo">Apply</button></span></div>' +
         '<div class="aap-scroll"><table><thead><tr><th>Product</th><th>Purchase cost ₹</th><th>MRP ₹</th><th>Sale price ₹</th><th>Profit check</th><th></th></tr></thead><tbody>' +
         rows.map(function (d) { var c = check(d);
           return '<tr data-id="' + esc2(d.id) + '"><td><div class="aap-n" title="' + esc2(d.name) + '">' + esc2(d.name || "Not mapped yet") + '</div><div class="aap-s">' + esc2(d.id) + (d.src ? " · cost: " + esc2(d.src) : "") + "</div></td>" +
             '<td><input type="number" step="0.01" min="0" data-f="cost" value="' + (d.cost != null ? d.cost : "") + '" placeholder="type cost"' + (d.cost == null ? ' class="need"' : "") + "></td>" +
             '<td><input type="number" step="0.01" min="0" data-f="mrp" value="' + (d.mrp != null ? d.mrp : "") + '" placeholder="LOTS / Amazon"></td>' +
-            '<td><input type="number" step="1" min="1" data-f="price" value="' + (d.price != null ? d.price : "") + '" placeholder="required"' + (d.price > 0 ? "" : ' class="need"') + "></td>" +
+            '<td><input type="number" step="1" min="1" data-f="price" value="' + (d.price > 0 ? d.price : "") + '" placeholder="required"' + (d.price > 0 ? (d.prefilled ? ' class="pre"' : "") : ' class="need"') + ">" +
+              (d.prev ? '<div class="aap-s" title="Our earlier sale price for this ASIN — change it if needed">prev ₹' + d.prev.p + " · " + esc2(accName(d.prev.acct)) + "</div>" : "") + "</td>" +
             '<td><span class="aap-tag ' + c[0] + '">' + esc2(c[1]) + '</span></td><td><button type="button" class="aap-x" data-rm title="Remove">×</button></td></tr>'; }).join("") +
         "</tbody></table></div>";
     }
@@ -454,9 +480,9 @@
     }
     box.addEventListener("input", function (e) {
       var tr = e.target.closest("tr[data-id]"), f = e.target.dataset.f; if (!tr || !f) return;
-      var v = parseFloat(e.target.value); (edits[tr.dataset.id] = edits[tr.dataset.id] || {})[f] = e.target.value !== "" && v >= 0 ? v : null;
+      var v = parseFloat(e.target.value); (edits[tr.dataset.id] = edits[tr.dataset.id] || {})[f] = e.target.value !== "" && v >= 0 ? v : (f === "price" ? 0 : null);
       var it = parse().items.find(function (x) { return x.id === tr.dataset.id; }) || { id: tr.dataset.id }, c = check(row(it)), tag = tr.querySelector(".aap-tag");
-      tag.className = "aap-tag " + c[0]; tag.textContent = c[1]; e.target.classList.toggle("need", e.target.value === "");
+      tag.className = "aap-tag " + c[0]; tag.textContent = c[1]; e.target.classList.toggle("need", e.target.value === ""); e.target.classList.remove("pre");
     });
     box.addEventListener("keydown", function (e) { if (e.key !== "Enter" || e.target.tagName !== "INPUT") return; e.preventDefault();
       if (e.target.id === "aapAll") return applyAll();

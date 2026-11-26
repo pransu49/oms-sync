@@ -380,7 +380,11 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   resolveSpapiLotsMatch -> lotsPriceByCode best slab, else LOTS item by barcode/ASIN; editable), MRP, own Sale price, profit check with the
   robot's orderProfit maths (100% buyer shipping, courier 40 self-ship / 55 Easy Ship, fees x1.18, no GST/return buffer). Red rows (below cost,
   above MRP, under ₹15/10%) can't be queued. "ASIN price" per line (or 2 Excel columns) fills prices; "Same price for all" box. Each doc gets
-  its own wantPrice + typed cost/mrp only. Do not put this in a Shopify snippet - it lives here (an aikm-aa-multiprice snippet was made by mistake, unused).
+  its own wantPrice + typed cost/mrp only.
+  PREVIOUS PRICE PREFILL (owner 26 Nov 2026, "prefill previous sale prices, we change if required"): empty price boxes are filled with our own
+  earlier price for that ASIN from main `listingIndex/<acct>` of all accounts (this account in-stock -> this account any -> lowest in-stock on
+  other accounts -> any); barcode rows use the LOTS item's ASIN. Shown as a tinted box + "prev ₹x · account"; typed / pasted prices win, a cleared
+  box stays empty. Firebase: ~5 reads per Add ASIN use (cached 10 min). Do not put this in a Shopify snippet - it lives here (an aikm-aa-multiprice snippet was made by mistake, unused).
 - **Listings in loss** (owner 23 Nov 2026, "check for loss and make visible"): `console/loss-listings.js`, loader block `aikmLossListJs` at the end
   of `amazon-name-search.js` (keep it). Header button "📉 In loss · N" (live listings of the open account whose listingIndex `e` < 0 = robot profit
   maths at today's price). Pop-up: chips Live / Robot listings (SKU N-...) / Out of stock / All, safe price `f` (₹15 or 10%) + target `t` (₹20),
