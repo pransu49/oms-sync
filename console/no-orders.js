@@ -66,10 +66,12 @@
         var g = by[asin] || (by[asin] = { asin: asin, name: "", img: "", lo: "", od: "", nd: "", stock: 0, ls: [] });
         g.ls.push({ acct: a, sku: sku, p: v.p, q: +v.q || 0, fba: v.fc === 1, od: v.od || "" });
         if (!g.name && v.n) g.name = v.n; if (!g.img && v.i) g.img = v.i;
-        if (v.lo && v.lo > g.lo) g.lo = v.lo; if (v.od && (!g.od || v.od < g.od)) g.od = v.od; if (v.od && v.od >= g.nd) { if (v.od > g.nd || isRel(sku)) g.rs = isRel(sku); g.nd = v.od; }
+        if (v.lo && v.lo > g.lo) g.lo = v.lo; if (v.od && (!g.od || v.od < g.od)) g.od = v.od; if (v.od) { var pa = g.pa || (g.pa = {}), A = pa[a] || (pa[a] = { lo: v.od, hi: v.od, rs: false }); if (v.od < A.lo) A.lo = v.od; if (v.od > A.hi) A.hi = v.od; if (isRel(sku)) A.rs = true; }
         g.stock += Math.max(0, +v.q || 0); });
     });
-    return Object.keys(by).map(function (k) { var g = by[k]; g.since = g.lo ? ago(g.lo) : null; g.age = g.od ? ago(g.od) : null; g.nage = g.nd ? ago(g.nd) : null; g.relisted = !!g.nd && (g.nd !== g.od || g.rs); return g; })
+    return Object.keys(by).map(function (k) { var g = by[k]; g.since = g.lo ? ago(g.lo) : null; g.age = g.od ? ago(g.od) : null; g.nd = ""; g.relisted = false;
+      Object.keys(g.pa || {}).forEach(function (k) { var A = g.pa[k]; if ((A.rs || A.hi !== A.lo) && A.hi > g.nd) { g.nd = A.hi; g.relisted = true; } });
+      g.nage = g.nd ? ago(g.nd) : null; return g; })
       .filter(function (g) { return g.stock > 0 && (g.since == null || g.since >= days); });
   }
   function rowsNow() {
@@ -130,7 +132,7 @@
           "<td>" + g.ls.sort(function (a, b) { return b.q - a.q; }).map(function (l) { return '<span class="no-ac' + (l.q > 0 ? "" : " oos") + '" title="SKU ' + esc(l.sku) + (l.od ? " · listed " + esc(l.od) : "") + '">' + esc(accName(l.acct)) + (l.fba ? " FBA" : "") + (l.p != null ? " · ₹" + l.p : "") + " · " + l.q + "</span>"; }).join("") + "</td>" +
           '<td class="r"><b>' + g.stock + "</b></td>" +
           "<td>" + (g.lo ? '<span class="no-last">' + g.since + " days ago</span><div class=\"no-s\">" + fmtDay(g.lo) + "</div>" : '<span class="no-last never">None in 90 days</span>') + "</td>" +
-          "<td>" + (g.relisted ? '<span class="no-rel">Relisted ' + (g.nage === 0 ? "today" : g.nage + " d ago") + '</span><div class="no-s">' + fmtDay(g.nd) + (g.od !== g.nd ? " · first listed " + fmtDay(g.od) : "") + "</div>"
+          "<td>" + (g.relisted ? '<span class="no-rel">Relisted ' + (g.nage === 0 ? "today" : g.nage + " d ago") + '</span><div class="no-s">' + fmtDay(g.nd) + (g.od && g.od < g.nd ? " · first listed " + fmtDay(g.od) : "") + "</div>"
             : g.od ? fmtDay(g.od) + '<div class="no-s">' + g.age + " days</div>" : "—") + "</td></tr>";
       }).join("") + "</tbody></table>" + (R.length > shown ? '<button type="button" class="no-more" id="noMore">Show 100 more (' + (R.length - shown) + " left)</button>" : "");
   }
