@@ -351,21 +351,31 @@
     form.style.gridTemplateColumns = "minmax(0,3fr) minmax(0,.7fr) minmax(0,.7fr) auto";
     ta.placeholder = "One per line. Add the price after it to paste prices too:\nB0081X6QFL  249\n8901030865278  120";
     if (!$("aapCss")) document.head.insertAdjacentHTML("beforeend", '<style id="aapCss">' +
-      '#aapBox{margin:0 18px 6px;border:1px solid var(--line,#E6E1D6);border-radius:12px;background:#fff;overflow:hidden;display:none}' +
-      '#aapBox .aap-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;background:var(--cream,#FBF8F1);border-bottom:1px solid var(--line,#E6E1D6);font-size:12px;color:var(--ink-2,#4A4F5C)}' +
-      '#aapBox .aap-h b{color:var(--navy,#14213D)}#aapBox .aap-all{display:flex;align-items:center;gap:6px;font-size:11.5px}' +
-      '#aapBox .aap-scroll{max-height:260px;overflow:auto}#aapBox table{width:100%;border-collapse:collapse;font-size:12.5px}' +
-      "#aapBox th{position:sticky;top:0;background:#fff;text-align:left;font:600 10.5px 'Inter',sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#8B909B);padding:8px 10px;border-bottom:1px solid var(--line,#E6E1D6);z-index:1}" +
-      '#aapBox td{padding:7px 10px;border-bottom:1px solid var(--line-2,#F0ECE3);vertical-align:middle}' +
-      '#aapBox .aap-n{font-weight:600;color:var(--navy,#14213D);max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
-      '#aapBox .aap-s{font-size:11px;color:var(--muted,#8B909B);font-family:ui-monospace,monospace}' +
-      "#aapBox input{width:86px;border:1px solid var(--line,#E6E1D6);border-radius:8px;padding:6px 8px;font:500 12.5px 'Inter',sans-serif;background:#fff;box-sizing:border-box}" +
+      /* review mode (owner 26 Nov 2026 "too compact, unable to review"): while ASINs are pasted the table takes the whole window */
+      '.aa-box.aap-on{width:min(1320px,98vw);height:94vh}.aa-box.aap-on>#aapBox~*{display:none!important}' +
+      '#aapBox{margin:0;border-top:1px solid var(--line,#E6E1D6);background:#fff;display:none;flex-direction:column;min-height:0}.aa-box.aap-on #aapBox{display:flex;flex:1}' +
+      '#aapBox .aap-h{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px 22px;background:var(--cream,#FBF8F1);border-bottom:1px solid var(--line,#E6E1D6)}' +
+      '#aapBox .aap-chips{display:flex;gap:8px;flex-wrap:wrap}' +
+      "#aapBox .aap-chip{all:unset;cursor:pointer;font:600 13px 'Inter',sans-serif;padding:7px 13px;border-radius:999px;border:1px solid var(--line,#E6E1D6);background:#fff;color:var(--ink-2,#4A4F5C)}" +
+      '#aapBox .aap-chip b{margin-left:5px}#aapBox .aap-chip.on{background:var(--navy,#14213D);color:#fff;border-color:var(--navy,#14213D)}' +
+      '#aapBox .aap-chip.c-bad b{color:#B42318}#aapBox .aap-chip.c-warn b{color:#A86A12}#aapBox .aap-chip.c-ok b{color:#1E7A4B}#aapBox .aap-chip.on b{color:#fff}' +
+      '#aapBox .aap-all{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2,#4A4F5C)}' +
+      '#aapBox .aap-note{padding:8px 22px;font-size:12.5px;color:var(--ink-2,#4A4F5C);border-bottom:1px solid var(--line-2,#F0ECE3)}' +
+      '#aapBox .aap-scroll{flex:1;overflow:auto;min-height:0}#aapBox table{width:100%;border-collapse:collapse;font-size:14px}' +
+      "#aapBox th{position:sticky;top:0;background:#fff;text-align:left;font:600 11.5px 'Inter',sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#8B909B);padding:11px 14px;border-bottom:1px solid var(--line,#E6E1D6);z-index:1;white-space:nowrap}" +
+      '#aapBox td{padding:13px 14px;border-bottom:1px solid var(--line-2,#F0ECE3);vertical-align:middle}#aapBox tbody tr:hover td{background:#FCFAF5}' +
+      '#aapBox tr.r-bad td{background:#FFF8F7}#aapBox td.num{color:var(--muted,#8B909B);font-size:12px;width:28px}' +
+      '#aapBox .aap-n{font-weight:600;color:var(--navy,#14213D);line-height:1.35;max-width:440px;white-space:normal}' +
+      '#aapBox .aap-s{font-size:12px;color:var(--muted,#8B909B);margin-top:3px;font-family:ui-monospace,monospace}#aapBox .aap-s a{color:inherit}' +
+      "#aapBox input{width:110px;height:38px;border:1px solid var(--line,#E6E1D6);border-radius:9px;padding:0 10px;font:600 14px 'Inter',sans-serif;background:#fff;box-sizing:border-box}" +
+      '#aapBox .aap-all input{width:96px;height:34px}' +
       '#aapBox input:focus{outline:none;border-color:var(--gold,#C9A24B);box-shadow:0 0 0 3px rgba(201,162,75,.15)}#aapBox input.need{border-color:#E9B949;background:#FFFBEA}#aapBox input.pre{background:#F6F1E4;border-color:#D9C79A}' +
-      '#aapBox .aap-tag{display:inline-block;font-size:11.5px;font-weight:600;border-radius:999px;padding:3px 9px;white-space:nowrap}' +
+      '#aapBox .aap-tag{display:inline-block;font-size:13px;font-weight:600;border-radius:999px;padding:6px 12px;white-space:nowrap}' +
       '#aapBox .ok{background:#E7F4EC;color:#1E7A4B}#aapBox .warn{background:#FFF4DB;color:#A86A12}#aapBox .bad{background:#FDECEA;color:#B42318}#aapBox .na{background:#F1F2F4;color:#6B7280}' +
-      '#aapBox .aap-x{all:unset;cursor:pointer;color:var(--muted,#8B909B);font-size:15px;padding:0 4px}#aapBox .aap-x:hover{color:#B42318}</style>');
+      '#aapBox .aap-x{all:unset;cursor:pointer;color:var(--muted,#8B909B);font-size:18px;padding:4px 8px;border-radius:8px}#aapBox .aap-x:hover{color:#B42318;background:#FDECEA}' +
+      '#aapBox .aap-empty{padding:40px;text-align:center;color:var(--muted,#8B909B)}</style>');
     form.insertAdjacentHTML("afterend", '<div id="aapBox"></div>');
-    var box = $("aapBox"), edits = {}, tmr = null;
+    var box = $("aapBox"), edits = {}, tmr = null, flt = "all";
     /* Previous sale prices (owner 26 Nov 2026: "robot to prefill previous sale prices, we change if required"): our own price for the
        ASIN from listingIndex/<acct> of every account (main Firebase, SKU -> a ASIN, p price, q stock). This account first (in-stock SKU
        first), else the lowest in-stock price on our other accounts, else any. ~5 reads per Add ASIN use, cached 10 min. */
@@ -419,7 +429,7 @@
       var ed = edits[it.id] || {}, f = info(it.id);
       var pv = prevFor(f.asin), own = ed.price != null ? ed.price : it.price;
       return { id: it.id, name: f.name, src: ed.cost != null ? "typed" : f.src, cost: ed.cost != null ? ed.cost : f.cost, mrp: ed.mrp != null ? ed.mrp : f.mrp,
-        price: own != null ? own : (pv ? pv.p : null), prev: pv, prefilled: own == null && !!pv, typedCost: ed.cost != null ? ed.cost : null, typedMrp: ed.mrp != null ? ed.mrp : null };
+        price: own != null ? own : (pv ? pv.p : null), prev: pv, asin: f.asin, prefilled: own == null && !!pv, typedCost: ed.cost != null ? ed.cost : null, typedMrp: ed.mrp != null ? ed.mrp : null };
     }
     // the robot's maths (spapi-sync.js orderProfit / minProfitAt / feeFor) for a new 0.5 kg listing
     var self = function () { return acct() === "sastastore"; }, shipChg = function () { return self() ? 74 : 80; }, shipCost = function () { return self() ? 40 : 55; };
@@ -436,21 +446,29 @@
       if (pf < minAt(d.price)) return ["bad", "Profit ₹" + pf + " · min price ₹" + (floorFor(d.cost) || "?")];
       return [pf < 20 ? "warn" : "ok", "Profit ₹" + pf + " / order"];
     }
+    function kind(d) { var c = check(d)[0]; return !(d.price > 0) ? "need" : c === "bad" ? "bad" : d.cost == null ? "nocost" : "ok"; }
     function draw() {
-      var p = parse(); if (!p.items.length) { box.style.display = "none"; box.innerHTML = ""; return; }
-      loadPrev();
-      var rows = p.items.map(row), ready = rows.filter(function (d) { var c = check(d)[0]; return d.cost != null && (c === "ok" || c === "warn"); }).length;
-      box.style.display = "block";
-      box.innerHTML = '<div class="aap-h"><span><b>' + rows.length + " item" + (rows.length > 1 ? "s" : "") + "</b> · sale price for each" + (prevIdx ? " (previous prices filled in — change if needed)" : " · loading previous prices…") + " · <b>" + ready + "</b> ready</span>" +
+      var p = parse(), bx = form.closest(".aa-box");
+      if (!p.items.length) { box.style.display = ""; box.innerHTML = ""; bx && bx.classList.remove("aap-on"); return; }
+      loadPrev(); bx && bx.classList.add("aap-on");
+      var rows = p.items.map(row), n = { all: rows.length, ok: 0, need: 0, bad: 0, nocost: 0 };
+      rows.forEach(function (d) { n[kind(d)]++; });
+      if (flt !== "all" && !n[flt]) flt = "all";
+      var chip = function (k, label, cls) { return k === "all" || n[k] ? '<button type="button" class="aap-chip ' + (cls || "") + (flt === k ? " on" : "") + '" data-flt="' + k + '">' + label + "<b>" + n[k] + "</b></button>" : ""; };
+      var shown = rows.map(function (d, i) { d.i = i + 1; return d; }).filter(function (d) { return flt === "all" || kind(d) === flt; });
+      box.innerHTML = '<div class="aap-h"><div class="aap-chips">' + chip("all", "All items") + chip("ok", "Ready", "c-ok") + chip("need", "Need price", "c-warn") + chip("nocost", "No cost", "c-warn") + chip("bad", "Fix (red)", "c-bad") + "</div>" +
         '<span class="aap-all">Same price for all ₹<input type="number" min="1" step="1" id="aapAll" placeholder="optional"><button type="button" class="aa-mini" id="aapAllGo">Apply</button></span></div>' +
-        '<div class="aap-scroll"><table><thead><tr><th>Product</th><th>Purchase cost ₹</th><th>MRP ₹</th><th>Sale price ₹</th><th>Profit check</th><th></th></tr></thead><tbody>' +
-        rows.map(function (d) { var c = check(d);
-          return '<tr data-id="' + esc2(d.id) + '"><td><div class="aap-n" title="' + esc2(d.name) + '">' + esc2(d.name || "Not mapped yet") + '</div><div class="aap-s">' + esc2(d.id) + (d.src ? " · cost: " + esc2(d.src) : "") + "</div></td>" +
+        '<div class="aap-note">' + (prevIdx ? "Gold boxes = our previous sale price — change any you want." : "Loading previous sale prices…") + " Profit uses the robot's maths (buyer shipping, courier, Amazon fees). Clear the box above to go back to search.</div>" +
+        '<div class="aap-scroll"><table><thead><tr><th>#</th><th>Product</th><th>Purchase cost ₹</th><th>MRP ₹</th><th>Sale price ₹</th><th>Profit check</th><th></th></tr></thead><tbody>' +
+        (shown.length ? shown.map(function (d) { var c = check(d), asin = d.asin || "";
+          return '<tr data-id="' + esc2(d.id) + '" class="' + (c[0] === "bad" ? "r-bad" : "") + '"><td class="num">' + d.i + "</td>" +
+            '<td><div class="aap-n">' + esc2(d.name || "Not mapped yet") + '</div><div class="aap-s">' + (asin ? '<a href="https://www.amazon.in/dp/' + esc2(asin) + '" target="_blank" rel="noopener">' + esc2(d.id) + "</a>" : esc2(d.id)) + (d.src ? " · cost from " + esc2(d.src) : "") + "</div></td>" +
             '<td><input type="number" step="0.01" min="0" data-f="cost" value="' + (d.cost != null ? d.cost : "") + '" placeholder="type cost"' + (d.cost == null ? ' class="need"' : "") + "></td>" +
-            '<td><input type="number" step="0.01" min="0" data-f="mrp" value="' + (d.mrp != null ? d.mrp : "") + '" placeholder="LOTS / Amazon"></td>' +
+            '<td><input type="number" step="0.01" min="0" data-f="mrp" value="' + (d.mrp != null ? d.mrp : "") + '" placeholder="MRP"></td>' +
             '<td><input type="number" step="1" min="1" data-f="price" value="' + (d.price > 0 ? d.price : "") + '" placeholder="required"' + (d.price > 0 ? (d.prefilled ? ' class="pre"' : "") : ' class="need"') + ">" +
-              (d.prev ? '<div class="aap-s" title="Our earlier sale price for this ASIN — change it if needed">prev ₹' + d.prev.p + " · " + esc2(accName(d.prev.acct)) + "</div>" : "") + "</td>" +
-            '<td><span class="aap-tag ' + c[0] + '">' + esc2(c[1]) + '</span></td><td><button type="button" class="aap-x" data-rm title="Remove">×</button></td></tr>'; }).join("") +
+              (d.prev ? '<div class="aap-s" title="Our earlier sale price for this ASIN">prev ₹' + d.prev.p + " · " + esc2(accName(d.prev.acct)) + "</div>" : "") + "</td>" +
+            '<td><span class="aap-tag ' + c[0] + '">' + esc2(c[1]) + '</span></td><td><button type="button" class="aap-x" data-rm title="Remove this item">×</button></td></tr>'; }).join("")
+          : '<tr><td colspan="7" class="aap-empty">Nothing in this filter.</td></tr>') +
         "</tbody></table></div>";
     }
     function applyAll() { var v = parseFloat(($("aapAll") || {}).value); if (!(v > 0)) return toast("Type a price first", true);
@@ -482,13 +500,14 @@
       var tr = e.target.closest("tr[data-id]"), f = e.target.dataset.f; if (!tr || !f) return;
       var v = parseFloat(e.target.value); (edits[tr.dataset.id] = edits[tr.dataset.id] || {})[f] = e.target.value !== "" && v >= 0 ? v : (f === "price" ? 0 : null);
       var it = parse().items.find(function (x) { return x.id === tr.dataset.id; }) || { id: tr.dataset.id }, c = check(row(it)), tag = tr.querySelector(".aap-tag");
-      tag.className = "aap-tag " + c[0]; tag.textContent = c[1]; e.target.classList.toggle("need", e.target.value === ""); e.target.classList.remove("pre");
+      tag.className = "aap-tag " + c[0]; tag.textContent = c[1]; tr.classList.toggle("r-bad", c[0] === "bad"); e.target.classList.toggle("need", e.target.value === ""); e.target.classList.remove("pre");
     });
     box.addEventListener("keydown", function (e) { if (e.key !== "Enter" || e.target.tagName !== "INPUT") return; e.preventDefault();
       if (e.target.id === "aapAll") return applyAll();
       var all = [].slice.call(box.querySelectorAll('input[data-f="price"]')), i = all.indexOf(e.target); if (i > -1 && i < all.length - 1) all[i + 1].focus(); else add(); });
     box.addEventListener("click", function (e) {
       if (e.target.closest("#aapAllGo")) return applyAll();
+      var ch = e.target.closest("[data-flt]"); if (ch) { flt = ch.dataset.flt; draw(); return; }
       if (!e.target.closest("[data-rm]")) return; var id = e.target.closest("tr").dataset.id;
       ta.value = ta.value.split(/\r?\n/).filter(function (l) { return l.toUpperCase().split(/[\s,;\t]+/).indexOf(id) < 0; }).join("\n"); delete edits[id]; draw(); });
     ta.addEventListener("input", function () { clearTimeout(tmr); tmr = setTimeout(draw, 180); });

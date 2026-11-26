@@ -384,7 +384,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   PREVIOUS PRICE PREFILL (owner 26 Nov 2026, "prefill previous sale prices, we change if required"): empty price boxes are filled with our own
   earlier price for that ASIN from main `listingIndex/<acct>` of all accounts (this account in-stock -> this account any -> lowest in-stock on
   other accounts -> any); barcode rows use the LOTS item's ASIN. Shown as a tinted box + "prev ₹x · account"; typed / pasted prices win, a cleared
-  box stays empty. Firebase: ~5 reads per Add ASIN use (cached 10 min). Do not put this in a Shopify snippet - it lives here (an aikm-aa-multiprice snippet was made by mistake, unused).
+  box stays empty. Firebase: ~5 reads per Add ASIN use (cached 10 min).
+  REVIEW MODE (owner 26 Nov 2026 "too compact, unable to review"): while ASINs are pasted, `.aa-box.aap-on` widens the window (1320 px, 94vh)
+  and hides everything below #aapBox (name search, rule text, request list) so the table fills the window; filter chips All / Ready /
+  Need price / No cost / Fix (red); 14 px rows, wrapped names, ASIN links to Amazon. Emptying the paste box brings the normal window back. Do not put this in a Shopify snippet - it lives here (an aikm-aa-multiprice snippet was made by mistake, unused).
 - **Listings in loss** (owner 23 Nov 2026, "check for loss and make visible"): `console/loss-listings.js`, loader block `aikmLossListJs` at the end
   of `amazon-name-search.js` (keep it). Header button "📉 In loss · N" (live listings of the open account whose listingIndex `e` < 0 = robot profit
   maths at today's price). Pop-up: chips Live / Robot listings (SKU N-...) / Out of stock / All, safe price `f` (₹15 or 10%) + target `t` (₹20),
