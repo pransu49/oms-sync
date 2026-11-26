@@ -79,12 +79,18 @@
     return build().filter(function (g) { return !rel || (g.relisted && g.nage != null && g.nage <= rel); }).filter(function (g) { return !s || (g.name + " " + g.asin + " " + g.ls.map(function (l) { return l.sku; }).join(" ")).toLowerCase().indexOf(s) >= 0; })
       .sort(function (a, b) { return b.stock - a.stock || (b.since == null ? 999 : b.since) - (a.since == null ? 999 : a.since); });
   }
+  /* owner 26 Nov 2026 "that was here": the header menu block moves its buttons into .ap-act after load; a button made before that
+     stayed behind in the old (hidden) row. place() keeps it right after "In loss" (or the last header button) wherever they end up. */
+  function place(b) {
+    var ref = $("llOpen") || $("rlOpen") || $("psOpen") || $("cfOpen") || $("atOpen") || $("aaOpen");
+    if (b && ref && ref.parentNode && (b.parentNode !== ref.parentNode || b.previousSibling !== ref)) ref.parentNode.insertBefore(b, ref.nextSibling);
+  }
   function btn() {
-    var b = $("noOpen"); if (b) return b;
+    var b = $("noOpen"); if (b) { place(b); return b; }
     var ref = $("llOpen") || $("psOpen") || $("rlOpen") || $("aaOpen"); if (!ref || !ref.parentNode) return null;
     b = document.createElement("button"); b.type = "button"; b.id = "noOpen"; b.className = ref.className || "aa-open";
     b.title = "In-stock ASINs with no order in the last 15 days, on all our Amazon accounts";
-    b.onclick = open; ref.parentNode.insertBefore(b, ref.nextSibling); return b;
+    b.onclick = open; ref.parentNode.insertBefore(b, ref.nextSibling); place(b); return b;
   }
   function paint() { var b = btn(); if (!b) return; var n = DATA ? build().length : 0; b.innerHTML = "💤 No orders " + days + "d" + (DATA ? "<b>" + n + "</b>" : ""); }
   function overlay() {
@@ -158,5 +164,6 @@
     if (!btn()) { if (n < 60) setTimeout(function () { start(n + 1); }, 1000); return; }
     paint();
     setTimeout(function () { load(false).then(paint).catch(function () {}); }, 6000);
+    var k = 0, keep = setInterval(function () { place($("noOpen")); if (++k > 200) { clearInterval(keep); setInterval(function () { place($("noOpen")); }, 10000); } }, 1500);
   })(0);
 })();
