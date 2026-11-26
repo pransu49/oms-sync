@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       acct: { description: 'Account: sastastore / praso / vishal / munda / aikm', required: false, default: 'sastastore' }
+      asins: { description: 'Optional: ASINs to look up in the saved mappings (space/comma separated)', required: false, default: '' }
 permissions:
   contents: read
 jobs:
@@ -17,4 +18,6 @@ jobs:
       - run: node tools/inv-diag.js
         env:
           ACCT: ${{ inputs.acct }}
+          ASINS: ${{ inputs.asins }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
           FIREBASE_SERVICE_ACCOUNT_SPAPI: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_SPAPI }}

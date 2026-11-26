@@ -4,6 +4,19 @@ const admin = require('firebase-admin');
 const ACCT = (process.env.ACCT || 'sastastore').trim();
 const db = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_SPAPI)) }).firestore();
 (async () => {
+  // owner 26 Nov 2026 "mapped but not getting saved": look up given ASINs in the saved mappings (main + overflow record) + this plan
+  const LOOK = String(process.env.ASINS || '').toUpperCase().split(/[^A-Z0-9]+/).filter((x) => /^[A-Z0-9]{10}$/.test(x));
+  if (LOOK.length && process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const M = admin.initializeApp({ credential: admin.credential.cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT)) }, 'main').firestore().collection('aikm_admin');
+    const [m1, m2, pl] = await Promise.all([M.doc('spapiAsinLotsMap').get(), M.doc('spapiAsinLotsMap2').get(), db.collection('spapiSnapshots').doc(`${ACCT}_invPlan`).get()]);
+    const a = (m1.exists && m1.data().map) || {}, b = (m2.exists && m2.data().map) || {}, rows = pl.exists ? JSON.parse(pl.data().rows || '[]') : [];
+    const age = pl.exists ? Math.round((Date.now() - (pl.data().at || 0)) / 60000) : null;
+    console.log(`== MAPPING LOOKUP (${LOOK.length} ASINs) · main record ${Object.keys(a).length}, overflow ${Object.keys(b).length} · ${ACCT} plan ${age} min old`);
+    const sum = (r) => !r ? '-' : typeof r !== 'object' ? `DELETED (${JSON.stringify(r)})` : `${r.vendorName || 'LOTS'} ${r.code || ''}${Array.isArray(r.parts) ? ' parts ' + r.parts.map((x) => `${x.code}x${x.qty || 1}${x.lotsPack ? '/' + x.lotsPack : ''}`).join('+') : ''} saved ${r.savedAt || '?'}`;
+    LOOK.forEach((x) => { const pr = rows.filter((r) => r[1] === x);
+      console.log(`${x}  main: ${sum(a[x])}  |  overflow: ${sum(b[x])}  |  plan: ${pr.length ? pr.map((r) => `${r[0]} ${r[5]}`).join(', ') : 'no self-ship listing'}`); });
+    console.log('');
+  }
   const d = await db.collection('spapiSnapshots').doc(`${ACCT}_invPlan`).get();
   if (!d.exists) return console.log(`No central inventory plan for ${ACCT}.`);
   const P = d.data(), rows = JSON.parse(P.rows || '[]'), keys = JSON.parse(P.keys || '{}');
