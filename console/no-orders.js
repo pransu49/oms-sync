@@ -45,7 +45,11 @@
     if (!force && DATA && Date.now() - at < 5 * 60e3) return Promise.resolve(DATA);
     if (busy) return busy;
     var db = typeof fbDb !== "undefined" ? fbDb : null; if (!db) return Promise.reject(new Error("Not connected"));
-    busy = Promise.all(ACC.map(function (a) { return db.collection("listingIndex").doc(a[0]).get().then(function (d) { return [a[0], (d.exists && d.data().skus) || {}]; }).catch(function () { return [a[0], {}]; }); }))
+    busy = Promise.all(ACC.map(function (a) { return db.collection("listingIndex").doc(a[0]).get().then(function (d) {
+      var x = d.exists ? d.data() : {}, sk = x.skus || {}, nx = {}; try { nx = x.nx ? JSON.parse(x.nx) : {}; } catch (e) {}
+      // last order / listing date / title / FBA come packed in `nx` {sku:[lo,od,n,fc]} (26 Nov 2026, Firestore index limit)
+      Object.keys(nx).forEach(function (k) { var v = sk[k], r = nx[k]; if (v && r) { v.lo = r[0]; v.od = r[1]; v.n = r[2]; v.fc = r[3]; } });
+      return [a[0], sk]; }).catch(function () { return [a[0], {}]; }); }))
       .then(function (res) { DATA = res; at = Date.now(); busy = null; return res; }, function (e) { busy = null; throw e; });
     return busy;
   }

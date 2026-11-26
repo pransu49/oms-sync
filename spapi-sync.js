@@ -2950,7 +2950,7 @@ async function publishDeliverByIndex() {
 // Amazon selling price and MRP, plus open order id -> Amazon SKUs. One small document,
 // written only when something changed.
 async function publishListingIndex() {
-  const skus = {}, orders = {};
+  const skus = {}, orders = {}, nx = {};
   // owner 26 Nov 2026 "see ASINs with no orders in the last 15 days, all accounts": lo = last order day of the ASIN on THIS account
   // (from the 90-day order snapshot; '' = none in 90 days), od = listing date, n = short title (other accounts' names for the page).
   const lastOrd = {};
@@ -2958,9 +2958,11 @@ async function publishListingIndex() {
     (o.items || []).forEach((it) => { if (it && it.asin && (!lastOrd[it.asin] || d > lastOrd[it.asin])) lastOrd[it.asin] = d; }); });
   Object.values(SNAP.inventory).forEach((i) => {
     if (!i || i.account !== ACCOUNT_LABEL || !i.sku) return;
-    skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null, i: i.img || '',
-      lo: (i.asin && lastOrd[i.asin]) || '', od: String(i.openDate || '').slice(0, 10), n: String(i.name || '').slice(0, 70),
-      fc: (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' ? 0 : 1 };
+    skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null, i: i.img || '' };
+    // packed in ONE string field `nx` (JSON {sku:[lo,od,n,fc]}): as map fields they pushed Sasta (~1,500 SKUs) over Firestore's
+    // 40,000 index entries per document ("too many index entries", 26 Nov 2026) and the whole index stopped updating.
+    nx[i.sku] = [(i.asin && lastOrd[i.asin]) || '', String(i.openDate || '').slice(0, 10), String(i.name || '').slice(0, 70),
+      (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' ? 0 : 1];
   });
   // f = lowest price that meets the rule (Rs 15 or 10%), t = price that earns TARGET_PROFIT (same maths as the robot)
   try {
@@ -2983,9 +2985,10 @@ async function publishListingIndex() {
   });
   const ref = dbMain.collection('listingIndex').doc(ACCOUNT_LABEL);
   const prev = await ref.get();
-  const same = prev.exists && JSON.stringify(prev.data().skus || {}) === JSON.stringify(skus) && JSON.stringify(prev.data().orders || {}) === JSON.stringify(orders);
+  const nxs = JSON.stringify(nx);
+  const same = prev.exists && JSON.stringify(prev.data().skus || {}) === JSON.stringify(skus) && JSON.stringify(prev.data().orders || {}) === JSON.stringify(orders) && prev.data().nx === nxs;
   if (same) { console.log(`Listing index unchanged (${Object.keys(skus).length} SKUs).`); return; }
-  await ref.set({ account: ACCOUNT_LABEL, skus, orders, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
+  await ref.set({ account: ACCOUNT_LABEL, skus, orders, nx: nxs, updatedAt: admin.firestore.FieldValue.serverTimestamp() });
   console.log(`Listing index published: ${Object.keys(skus).length} SKUs, ${Object.keys(orders).length} open orders.`);
 }
 
