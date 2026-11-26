@@ -184,7 +184,12 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
 - **AIKM dashboard summary** (owner 13 Nov 2026 — OMS Guru will be switched off): every SP-API sync run writes ONE small doc
   `spapiSnapshots/<acct>_dash` (`writeDashSummary()` in `spapi-sync.js`, right after `writeSnapshot`): last 31 days per IST day
   { o orders, r revenue, u units, c cancelled, s status groups, p top-40 ASINs [units, revenue] } + `names` + `open` { toShip, late, pending }.
-  1 write per run (~384 writes/day for 4 accounts). The dashboard (`/pages/aikm`, Shopify template `page.aikm.liquid`) reads only these
+  1 write per run (~384 writes/day for 4 accounts).
+  NET PROFIT (owner 26 Nov 2026, dashboard "Net profit · Amazon" KPI + "Net profit breakdown" waterfall + "Profit by account"): each day also has
+  `f` {n orders counted, m orders without cost, rv, cost, ref, close, es Easy Ship fee, sf other Amazon shipping fees, cour courier, oth, rf refunds,
+  gst (18% on ESTIMATED fees only), net} - same maths as order-fees.js (real Finance fees when posted, else feeParts() estimate; Easy Ship estimate
+  easyShipFee(kg); self-ship courier = account's average ProShip charge, proshipIndex read on FULL runs only -> `<acct>_meta.shipAvg`).
+  Orders without a mapped cost are NOT in profit (only counted in m). Firebase: +1 main read + 1 SP-API write per full run (~60 + 60/day, 5 accounts). The dashboard (`/pages/aikm`, Shopify template `page.aikm.liquid`) reads only these
   4 docs for Amazon (4 reads per open); non-Amazon channels still come from OMS until it is off. Keep the doc small (top 40 products/day).
 
 - **ProShip (Prozo) courier for Amazon self-ship** (owner 13 Nov 2026): robot `proship.js`, workflow `proship.yml` (on command only, modes

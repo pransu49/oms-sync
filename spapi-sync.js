@@ -207,6 +207,7 @@ async function writeSnapshot() {
     fullSyncedAt: SYNC_MODE === 'full' ? Date.now() : ((prevSnapMeta && prevSnapMeta.fullSyncedAt) || null),
     mrpCheckedAt: mrpCheckedAt || (prevSnapMeta && prevSnapMeta.mrpCheckedAt) || null,
     feesPostedAt: feesPostedAt || (prevSnapMeta && prevSnapMeta.feesPostedAt) || null,
+    shipAvg: (prevSnapMeta && prevSnapMeta.shipAvg) || null,
   });
   // Remove the previous run's chunks (a little later, so an open page can finish reading).
   if (prevSnapMeta && prevSnapMeta.run && prevSnapMeta.run !== run) {
@@ -259,6 +260,42 @@ async function writeDashSummary() {
   const from = dk(now - 31 * 864e5), days = {}, names = {}, open = { toShip: 0, late: 0, pending: 0 };
   const grp = (st) => /cancel/i.test(st) ? 'Cancelled' : /^shipped$/i.test(st) ? 'Shipped' : /unshipped|partially/i.test(st) ? 'To ship'
     : /pending|invoiceunconfirmed/i.test(st) ? 'Pending' : 'Other';
+  // NET PROFIT per day (owner 26 Nov 2026, dashboard "Net profit" card + breakdown). Same maths as the Orders tab (order-fees.js):
+  // order total - refund - product cost - referral - closing - other Amazon fees - Easy Ship fee / Amazon shipping fees - courier
+  // - 18% GST on ESTIMATED Amazon fees (real Finance fees already include it). Orders without a known cost are only counted (m).
+  // Courier for self-ship = this account's average ProShip charge (proshipIndex, read on FULL runs only, kept in <acct>_meta.shipAvg).
+  let shipAvg = (prevSnapMeta && prevSnapMeta.shipAvg) || null;
+  if (SYNC_MODE === 'full') try {
+    const d = await dbMain.collection('aikm_admin').doc('proshipIndex').get();
+    const idx = d.exists ? JSON.parse(d.data().data || '{}') : {}, norm = (x) => String(x || '').toLowerCase().replace(/[^a-z]/g, '');
+    const pres = [norm(ACCOUNT_LABEL).slice(0, 5), norm(process.env.ACCOUNT_NAME).slice(0, 5)].filter(Boolean), l = [];
+    Object.values(idx).forEach((x) => { const ac = norm(x && x.ac); if (x && x.r > 0 && x.s !== 'cancelled' && pres.some((p) => ac.startsWith(p) || ac.includes(p))) l.push(+x.r); });
+    if (l.length >= 5) shipAvg = { v: r2(l.reduce((a, b) => a + b, 0) / l.length), n: l.length, at: now };
+    await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_meta`).set({ shipAvg }, { merge: true });
+  } catch (e) { console.warn('ProShip average not read:', e.message || e); }
+  const inv = {}; Object.values(SNAP.inventory).forEach((i) => { if (i && i.account === ACCOUNT_LABEL && i.sku) inv[i.sku] = i; });
+  try { await loadCostData(); } catch (e) { console.warn('Costs not loaded for the dashboard:', e.message || e); }
+  const F0 = () => ({ n: 0, m: 0, rv: 0, cost: 0, ref: 0, close: 0, es: 0, sf: 0, cour: 0, oth: 0, rf: 0, gst: 0, net: 0 });
+  async function profitOf(o) {
+    const items = Array.isArray(o.items) ? o.items : []; if (!items.length) return null;
+    let cost = 0, kg = 0, eRef = 0, eClose = 0;
+    for (const it of items) {
+      const q = Number(it.qty) || 1, i = inv[it.sku] || { sku: it.sku, asin: it.asin, weightKg: 0.5 };
+      const kc = costData ? await knownCost({ sku: it.sku, asin: it.asin || i.asin }).catch(() => null) : null;
+      if (!kc) return null;
+      cost += kc.cost * q; kg += (Number(i.weightKg) || 0.5) * q;
+      const unit = (Number(it.price) || 0) / q, fp = feeParts(i, unit); eRef += fp.ref * q; eClose += fp.close * q;
+    }
+    const total = parseFloat(o.total) || items.reduce((a, it) => a + (Number(it.price) || 0), 0);
+    const ev = o.fees && o.fees.ev && Object.keys(o.fees.ev).length ? orderFeesFrom(o.fees.ev) : null;
+    const x = { rv: total, cost, ref: 0, close: 0, es: 0, sf: 0, cour: 0, oth: 0, rf: 0, gst: 0 };
+    if (ev) { x.ref = ev.ref; x.close = ev.close; x.oth = ev.other; x.rf = ev.refundAmt; if (o.isEasyShip) x.es = ev.ship; else x.sf = ev.ship; }
+    else { x.ref = eRef; x.close = eClose; x.gst = (eRef + eClose) * 0.18; }
+    if (o.isEasyShip) { if (!(ev && ev.ship)) { const f = easyShipFee(kg); x.es = f; x.gst += f * 0.18; } }
+    else if (o.fulfillmentChannel !== 'AFN') x.cour = shipAvg && shipAvg.v > 0 ? shipAvg.v : courierCost(kg);
+    x.net = x.rv - x.rf - x.cost - x.ref - x.close - x.oth - x.es - x.sf - x.cour - x.gst - RETURN_BUF;
+    return x;
+  }
   for (const o of Object.values(SNAP.orders)) {
     const t = Date.parse(o.purchaseDate); if (isNaN(t)) continue;
     const st = String(o.status || ''), g = o.isCanceled ? 'Cancelled' : grp(st);
@@ -272,6 +309,8 @@ async function writeDashSummary() {
     const itemSum = items.reduce((a, it) => a + (Number(it.price) || 0), 0);
     const rev = parseFloat(o.total) || itemSum;
     d.o++; d.r += rev;
+    const f = d.f || (d.f = F0()), pr = await profitOf(o).catch(() => null);
+    if (!pr) f.m++; else { f.n++; Object.keys(pr).forEach((k) => { f[k] += pr[k]; }); }
     items.forEach((it) => {
       const key = it.asin || it.sku || it.title; if (!key) return;
       const q = Number(it.qty) || 1; d.u += q;
@@ -281,6 +320,7 @@ async function writeDashSummary() {
   }
   Object.values(days).forEach((d) => {   // keep the doc small: top 40 products per day
     d.r = Math.round(d.r);
+    if (d.f) Object.keys(d.f).forEach((k) => { d.f[k] = Math.round(d.f[k]); });
     const keep = Object.entries(d.p).sort((a, b) => b[1][0] - a[1][0]).slice(0, 40);
     d.p = {}; keep.forEach(([k, v]) => { d.p[k] = [v[0], Math.round(v[1])]; });
   });
@@ -289,7 +329,7 @@ async function writeDashSummary() {
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_dash`).set({
     account: ACCOUNT_LABEL, name: process.env.ACCOUNT_NAME || ACCOUNT_LABEL, at: now,
     ordersSyncedAt: ordersSyncedOk ? RUN_STARTED : ((prevSnapMeta && prevSnapMeta.ordersSyncedAt) || null),
-    days, names, open,
+    days, names, open, shipAvg: shipAvg ? shipAvg.v : null,
   });
   console.log(`Dashboard summary written: ${Object.keys(days).length} days, ${used.size} products, open ${JSON.stringify(open)}`);
 }
@@ -1381,7 +1421,9 @@ function myShipCharge(i) { const m = (relistFresh.get(i.asin) || []).find((o) =>
 // fee under Rs 1000 covers most categories but not all, and closing fees changed on 7 Sep 2026.
 // FEES[sku] = { p: price estimated at, r: referral %, c: closing fee, at }
 let FEES = {};
-function feeFor(i, price) {
+function feeFor(i, price) { const x = feeParts(i, price); return (x.ref + x.close) * 1.18; }
+// Same fee maths split in referral / closing (before 18% GST) - used by the dashboard profit summary.
+function feeParts(i, price) {
   const f = FEES[i.sku];
   const slab = (x) => (x <= 300 ? 0 : x <= 500 ? 1 : x <= 1000 ? 2 : 3);
   const ref = f && f.r != null ? price * f.r / 100 : (price > 1000 ? price * (REF_FEE[i.amazonProductType] || REF_FEE.DEFAULT) / 100 : 0);
@@ -1391,7 +1433,7 @@ function feeFor(i, price) {
   // (owner 13 Nov 2026: that GST is NOT claimed back - a real cost).
   const card = SELF_SHIP_ACCOUNTS.has(ACCOUNT_LABEL) ? selfShipClosing(price) : closingFee(price);
   const est = f && f.c != null && slab(f.p) === slab(price) ? f.c : 0;
-  return (ref + Math.max(est, card)) * 1.18;
+  return { ref, close: Math.max(est, card) };
 }
 // Self-ship (MFN, not Easy Ship) closing fee per unit - matches what Amazon charges in the Finance API (before GST).
 function selfShipClosing(p) { return p <= 250 ? 20 : p <= 500 ? 26 : p <= 1000 ? 51 : 61; }
