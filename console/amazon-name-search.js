@@ -342,30 +342,133 @@
   function initManualPrice(ov, form) {
     if (window.__aaManualPrice || !form) return; window.__aaManualPrice = true;
     var go = $("aaGo"), ta = $("aaAsin"); if (!go || !ta) return;
-    var gstL = $("aaGst") && $("aaGst").closest("label");
-    (gstL || go).insertAdjacentHTML(gstL ? "afterend" : "beforebegin", '<label>Sale price ₹<input id="aaPrice" type="number" step="1" min="1" placeholder="required" title="Your selling price on Amazon (the robot no longer picks a price)"></label>');
-    form.style.gridTemplateColumns = "minmax(0,2.2fr) minmax(0,.6fr) minmax(0,.8fr) minmax(0,.8fr) minmax(0,.6fr) minmax(0,.8fr) auto";
-    async function add() {
-      var toks = Array.from(new Set(ta.value.toUpperCase().split(/[\s,;]+/).map(function (x) { return x.trim(); }).filter(Boolean)));
-      var bc = function (t) { return /^\d{8}$|^\d{12,14}$/.test(t); }, items = toks.filter(function (t) { return bc(t) || /^[A-Z0-9]{10}$/.test(t); }), bad = toks.filter(function (t) { return items.indexOf(t) < 0; });
-      if (bad.length) return toast("Not an ASIN or barcode: " + bad.slice(0, 3).join(", "), true);
-      if (!items.length) return toast("Enter an ASIN (10 characters) or a barcode (8, 12, 13 or 14 digits)", true);
-      var num = function (id) { var v = parseFloat(($(id) || {}).value); return v > 0 ? v : null; }, price = num("aaPrice");
-      if (!price) { $("aaPrice").focus(); return toast("Type the sale price first — the robot no longer sets the price itself", true); }
-      var qty = Math.max(1, parseInt($("aaQty").value) || 10), cost = num("aaCost"), mrp = num("aaMrp"), gr = ($("aaGst").value || "").trim(), gst = gr === "" ? null : parseFloat(gr);
-      if (items.length > 1 && cost) return toast("Cost applies to one ASIN at a time — add them one by one, or leave cost empty to use the mapping", true);
-      if (mrp && price > mrp) return toast("Sale price ₹" + price + " is above the MRP ₹" + mrp, true);
-      var db = G.db(); if (!db) return toast("Not connected — reload the page", true);
-      go.classList.add("busy");
-      try { var b = db.batch(); items.forEach(function (a) { b.set(db.collection("spapiAddAsin").doc(acct() + "_" + (bc(a) ? "bc_" : "") + a), { account: acct(), asin: bc(a) ? "" : a, barcode: bc(a) ? a : null,
-          qty: qty, cost: cost, mrp: mrp, gst: gst, wantPrice: price, status: "pending", requestedAt: Date.now(), error: null, price: null, profit: null }); });
-        await b.commit(); ta.value = ""; ["aaCost", "aaMrp", "aaGst", "aaPrice"].forEach(function (id) { $(id) && ($(id).value = ""); });
-        toast("✓ " + items.length + " item" + (items.length > 1 ? "s" : "") + " queued at ₹" + price + " — listed at the next sync"); }
-      catch (e) { toast("⚠ Not saved: " + (e.message || e), true); } finally { go.classList.remove("busy"); }
+    /* Owner 26 Nov 2026: "we submit multiple ASINs - deploy sale price per ASIN with checking purchase cost".
+       The single Sale price / Cost / MRP boxes are replaced by a table under the form: one row per pasted ASIN / barcode with
+       purchase cost (mapping / LOTS, editable), MRP, its own Sale price and a profit check with the ROBOT's maths (orderProfit in
+       spapi-sync.js: price + buyer shipping - cost - courier/Easy Ship - fees x1.18; GST_CASH off, RETURN_BUF 0). Red rows can't be queued.
+       Paste "ASIN price" per line (or two Excel columns) to fill prices too. Each row saves its own wantPrice (+ typed cost / MRP). */
+    ["aaCost", "aaMrp"].forEach(function (id) { var l = $(id) && $(id).closest("label"); l && (l.style.display = "none"); });
+    form.style.gridTemplateColumns = "minmax(0,3fr) minmax(0,.7fr) minmax(0,.7fr) auto";
+    ta.placeholder = "One per line. Add the price after it to paste prices too:\nB0081X6QFL  249\n8901030865278  120";
+    if (!$("aapCss")) document.head.insertAdjacentHTML("beforeend", '<style id="aapCss">' +
+      '#aapBox{margin:0 18px 6px;border:1px solid var(--line,#E6E1D6);border-radius:12px;background:#fff;overflow:hidden;display:none}' +
+      '#aapBox .aap-h{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 12px;background:var(--cream,#FBF8F1);border-bottom:1px solid var(--line,#E6E1D6);font-size:12px;color:var(--ink-2,#4A4F5C)}' +
+      '#aapBox .aap-h b{color:var(--navy,#14213D)}#aapBox .aap-all{display:flex;align-items:center;gap:6px;font-size:11.5px}' +
+      '#aapBox .aap-scroll{max-height:260px;overflow:auto}#aapBox table{width:100%;border-collapse:collapse;font-size:12.5px}' +
+      "#aapBox th{position:sticky;top:0;background:#fff;text-align:left;font:600 10.5px 'Inter',sans-serif;letter-spacing:.06em;text-transform:uppercase;color:var(--muted,#8B909B);padding:8px 10px;border-bottom:1px solid var(--line,#E6E1D6);z-index:1}" +
+      '#aapBox td{padding:7px 10px;border-bottom:1px solid var(--line-2,#F0ECE3);vertical-align:middle}' +
+      '#aapBox .aap-n{font-weight:600;color:var(--navy,#14213D);max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+      '#aapBox .aap-s{font-size:11px;color:var(--muted,#8B909B);font-family:ui-monospace,monospace}' +
+      "#aapBox input{width:86px;border:1px solid var(--line,#E6E1D6);border-radius:8px;padding:6px 8px;font:500 12.5px 'Inter',sans-serif;background:#fff;box-sizing:border-box}" +
+      '#aapBox input:focus{outline:none;border-color:var(--gold,#C9A24B);box-shadow:0 0 0 3px rgba(201,162,75,.15)}#aapBox input.need{border-color:#E9B949;background:#FFFBEA}' +
+      '#aapBox .aap-tag{display:inline-block;font-size:11.5px;font-weight:600;border-radius:999px;padding:3px 9px;white-space:nowrap}' +
+      '#aapBox .ok{background:#E7F4EC;color:#1E7A4B}#aapBox .warn{background:#FFF4DB;color:#A86A12}#aapBox .bad{background:#FDECEA;color:#B42318}#aapBox .na{background:#F1F2F4;color:#6B7280}' +
+      '#aapBox .aap-x{all:unset;cursor:pointer;color:var(--muted,#8B909B);font-size:15px;padding:0 4px}#aapBox .aap-x:hover{color:#B42318}</style>');
+    form.insertAdjacentHTML("afterend", '<div id="aapBox"></div>');
+    var box = $("aapBox"), edits = {}, tmr = null;
+    var esc2 = function (x) { return String(x == null ? "" : x).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+    var isBc = function (t) { return /^\d{8}$|^\d{12,14}$/.test(t); }, isId = function (t) { return isBc(t) || /^[A-Z0-9]{10}$/.test(t); },
+      isPr = function (t) { return /^\d{1,6}(\.\d{1,2})?$/.test(t); };
+    function parse() {
+      var out = [], seen = {}, bad = [];
+      String(ta.value || "").toUpperCase().split(/\r?\n/).forEach(function (line) {
+        var last = null;
+        line.replace(/₹|\bRS\b\.?/g, " ").split(/[\s,;\t]+/).filter(Boolean).forEach(function (t) {
+          if (isId(t)) { if (!seen[t]) { seen[t] = { id: t, price: null }; out.push(seen[t]); } last = seen[t]; }
+          else if (isPr(t) && last && last.price == null) last.price = parseFloat(t);
+          else bad.push(t);
+        });
+      });
+      return { items: out, bad: bad };
     }
+    function info(id) {   // purchase cost / MRP / GST from the ASIN mapping, else the LOTS item with this barcode / ASIN
+      var r = { name: "", cost: null, mrp: null, src: "" }, code = null;
+      try {
+        var m = !isBc(id) && STORE.asinLotsMap && STORE.asinLotsMap[id];
+        if (m) { var x = resolveSpapiLotsMatch(m.name || "", id); if (x) { code = x.code; r.name = x.name || m.name || ""; } }
+        if (!code && lotsVendor.products) { var q = lotsVendor.products.find(function (z) { return isBc(id) ? String(z.barcode || "") === id : String(z.asin || "").toUpperCase() === id; }); if (q) { code = q.code; r.name = q.name || ""; } }
+        var lp = code && lotsPriceByCode[code];
+        if (lp) { var sl = bestSlabFor(lp.slabs); r.cost = sl ? sl.price : null; r.mrp = parseFloat(lp.mrp) || null; r.src = lp.vendorName || "LOTS"; }
+      } catch (err) {}
+      return r;
+    }
+    function row(it) {
+      var ed = edits[it.id] || {}, f = info(it.id);
+      return { id: it.id, name: f.name, src: ed.cost != null ? "typed" : f.src, cost: ed.cost != null ? ed.cost : f.cost, mrp: ed.mrp != null ? ed.mrp : f.mrp,
+        price: ed.price != null ? ed.price : it.price, typedCost: ed.cost != null ? ed.cost : null, typedMrp: ed.mrp != null ? ed.mrp : null };
+    }
+    // the robot's maths (spapi-sync.js orderProfit / minProfitAt / feeFor) for a new 0.5 kg listing
+    var self = function () { return acct() === "sastastore"; }, shipChg = function () { return self() ? 74 : 80; }, shipCost = function () { return self() ? 40 : 55; };
+    var fee = function (p) { return ((p > 1000 ? p * 0.08 : 0) + (self() ? (p <= 250 ? 20 : p <= 500 ? 26 : p <= 1000 ? 51 : 61) : (p <= 300 ? 2 : p <= 500 ? 23 : p <= 1000 ? 48 : 79))) * 1.18; };
+    var profitAt = function (c, p) { return Math.round(p + shipChg() - c - shipCost() - fee(p)); };
+    var minAt = function (p) { return Math.min(15, 0.10 * (p + shipChg())); };
+    var floorFor = function (c) { for (var p = Math.max(1, Math.ceil(c)); p < c * 4 + 500; p++) if (profitAt(c, p) >= minAt(p)) return p; return null; };
+    function check(d) {
+      if (!(d.price > 0)) return ["na", "Enter price"];
+      if (d.mrp && d.price > d.mrp) return ["bad", "Above MRP ₹" + d.mrp];
+      if (d.cost == null) return ["warn", "No cost — type it"];
+      if (d.price < d.cost) return ["bad", "Below cost ₹" + d.cost];
+      var pf = profitAt(d.cost, d.price);
+      if (pf < minAt(d.price)) return ["bad", "Profit ₹" + pf + " · min price ₹" + (floorFor(d.cost) || "?")];
+      return [pf < 20 ? "warn" : "ok", "Profit ₹" + pf + " / order"];
+    }
+    function draw() {
+      var p = parse(); if (!p.items.length) { box.style.display = "none"; box.innerHTML = ""; return; }
+      var rows = p.items.map(row), ready = rows.filter(function (d) { var c = check(d)[0]; return d.cost != null && (c === "ok" || c === "warn"); }).length;
+      box.style.display = "block";
+      box.innerHTML = '<div class="aap-h"><span><b>' + rows.length + " item" + (rows.length > 1 ? "s" : "") + "</b> · sale price for each · <b>" + ready + "</b> ready</span>" +
+        '<span class="aap-all">Same price for all ₹<input type="number" min="1" step="1" id="aapAll" placeholder="optional"><button type="button" class="aa-mini" id="aapAllGo">Apply</button></span></div>' +
+        '<div class="aap-scroll"><table><thead><tr><th>Product</th><th>Purchase cost ₹</th><th>MRP ₹</th><th>Sale price ₹</th><th>Profit check</th><th></th></tr></thead><tbody>' +
+        rows.map(function (d) { var c = check(d);
+          return '<tr data-id="' + esc2(d.id) + '"><td><div class="aap-n" title="' + esc2(d.name) + '">' + esc2(d.name || "Not mapped yet") + '</div><div class="aap-s">' + esc2(d.id) + (d.src ? " · cost: " + esc2(d.src) : "") + "</div></td>" +
+            '<td><input type="number" step="0.01" min="0" data-f="cost" value="' + (d.cost != null ? d.cost : "") + '" placeholder="type cost"' + (d.cost == null ? ' class="need"' : "") + "></td>" +
+            '<td><input type="number" step="0.01" min="0" data-f="mrp" value="' + (d.mrp != null ? d.mrp : "") + '" placeholder="LOTS / Amazon"></td>' +
+            '<td><input type="number" step="1" min="1" data-f="price" value="' + (d.price != null ? d.price : "") + '" placeholder="required"' + (d.price > 0 ? "" : ' class="need"') + "></td>" +
+            '<td><span class="aap-tag ' + c[0] + '">' + esc2(c[1]) + '</span></td><td><button type="button" class="aap-x" data-rm title="Remove">×</button></td></tr>'; }).join("") +
+        "</tbody></table></div>";
+    }
+    function applyAll() { var v = parseFloat(($("aapAll") || {}).value); if (!(v > 0)) return toast("Type a price first", true);
+      parse().items.forEach(function (it) { (edits[it.id] = edits[it.id] || {}).price = v; }); draw(); }
+    async function add() {
+      var p = parse();
+      if (p.bad.length) return toast("Not an ASIN, barcode or price: " + p.bad.slice(0, 3).join(", "), true);
+      if (!p.items.length) return toast("Enter an ASIN (10 characters) or a barcode (8, 12, 13 or 14 digits)", true);
+      var rows = p.items.map(row), miss = rows.filter(function (d) { return !(d.price > 0); });
+      if (miss.length) return toast("Type the sale price for " + miss.length + " item" + (miss.length > 1 ? "s" : "") + " (" + miss.slice(0, 3).map(function (d) { return d.id; }).join(", ") + ")", true);
+      var bad = rows.filter(function (d) { return check(d)[0] === "bad"; });
+      if (bad.length) return toast("Fix " + bad.length + " red item" + (bad.length > 1 ? "s" : "") + " first — " + bad[0].id + ": " + check(bad[0])[1], true);
+      var noCost = rows.filter(function (d) { return d.cost == null; });
+      if (noCost.length && !confirm(noCost.length + " item" + (noCost.length > 1 ? "s have" : " has") + " no purchase cost, so the loss check can't run.\nThe robot will ask for the cost before listing.\n\nQueue anyway?")) return;
+      var db = G.db(); if (!db) return toast("Not connected — reload the page", true);
+      var qty = Math.max(1, parseInt($("aaQty").value) || 10), gr = ($("aaGst").value || "").trim(), gst = gr === "" ? null : parseFloat(gr);
+      go.classList.add("busy");
+      try {
+        for (var i = 0; i < rows.length; i += 400) { var b = db.batch();
+          rows.slice(i, i + 400).forEach(function (d) { var bc = isBc(d.id);
+            b.set(db.collection("spapiAddAsin").doc(acct() + "_" + (bc ? "bc_" : "") + d.id), { account: acct(), asin: bc ? "" : d.id, barcode: bc ? d.id : null,
+              qty: qty, cost: d.typedCost, mrp: d.typedMrp, gst: gst, wantPrice: d.price, status: "pending", requestedAt: Date.now(), error: null, price: null, profit: null }); });
+          await b.commit(); }
+        ta.value = ""; edits = {}; $("aaGst").value = ""; draw();
+        toast("✓ " + rows.length + " item" + (rows.length > 1 ? "s" : "") + " queued, each at its own price — listed at the next sync");
+      } catch (e) { toast("⚠ Not saved: " + (e.message || e), true); } finally { go.classList.remove("busy"); }
+    }
+    box.addEventListener("input", function (e) {
+      var tr = e.target.closest("tr[data-id]"), f = e.target.dataset.f; if (!tr || !f) return;
+      var v = parseFloat(e.target.value); (edits[tr.dataset.id] = edits[tr.dataset.id] || {})[f] = e.target.value !== "" && v >= 0 ? v : null;
+      var it = parse().items.find(function (x) { return x.id === tr.dataset.id; }) || { id: tr.dataset.id }, c = check(row(it)), tag = tr.querySelector(".aap-tag");
+      tag.className = "aap-tag " + c[0]; tag.textContent = c[1]; e.target.classList.toggle("need", e.target.value === "");
+    });
+    box.addEventListener("keydown", function (e) { if (e.key !== "Enter" || e.target.tagName !== "INPUT") return; e.preventDefault();
+      if (e.target.id === "aapAll") return applyAll();
+      var all = [].slice.call(box.querySelectorAll('input[data-f="price"]')), i = all.indexOf(e.target); if (i > -1 && i < all.length - 1) all[i + 1].focus(); else add(); });
+    box.addEventListener("click", function (e) {
+      if (e.target.closest("#aapAllGo")) return applyAll();
+      if (!e.target.closest("[data-rm]")) return; var id = e.target.closest("tr").dataset.id;
+      ta.value = ta.value.split(/\r?\n/).filter(function (l) { return l.toUpperCase().split(/[\s,;\t]+/).indexOf(id) < 0; }).join("\n"); delete edits[id]; draw(); });
+    ta.addEventListener("input", function () { clearTimeout(tmr); tmr = setTimeout(draw, 180); });
+    var op = $("aaOpen"); op && op.addEventListener("click", function () { setTimeout(draw, 60); });
     go.onclick = add;
     ta.addEventListener("keydown", function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopImmediatePropagation(); add(); } }, true);
-    $("aaPrice").addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); add(); } });
     // rows waiting for a price
     var list = $("aaList"); if (!list) return;
     function mark() {
