@@ -67,7 +67,7 @@ jobs:
           node-version: '20'
       - run: npm install firebase-admin
       - name: Restore saved OMS orders copy
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         continue-on-error: true
         with:
           path: .cache/oms-chunks.json
@@ -104,7 +104,7 @@ jobs:
       # new AWBs -> OMS Guru right away (Amazon is confirmed after the next OMS sync), same as NimbusPost / Zippy
       - name: Keep OMS orders copy for the next run
         if: always() && hashFiles('.cache/oms-chunks.json') != ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         continue-on-error: true
         with:
           path: .cache/oms-chunks.json
