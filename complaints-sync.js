@@ -22,11 +22,14 @@ const DRY = String(process.env.DRY_RUN || '').toLowerCase() === 'true';
 const ACCOUNTS = [
   { key: 'SASTA STORE', token: process.env.SPAPI_REFRESH_TOKEN_SASTASTORE },
   { key: 'PRASO ENTERPRISES', token: process.env.SPAPI_REFRESH_TOKEN_PRASO },
+  { key: 'VISHAL E-COMMERCE', token: process.env.SPAPI_REFRESH_TOKEN_VISHAL },
+  { key: 'ECOMMERCE MUNDA', token: process.env.SPAPI_REFRESH_TOKEN_MUNDA },
+  { key: 'AIKM PHARMA', token: process.env.SPAPI_REFRESH_TOKEN_AIKM },
 ].filter((a) => a.token);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const get = (url) => new Promise((res, rej) => https.get(url, (r) => { const c = []; r.on('data', (d) => c.push(d)); r.on('end', () => res(Buffer.concat(c))); r.on('error', rej); }).on('error', rej));
 const base = (v) => String(v || '').replace(/^`+/, '').replace(/^#/, '').trim().replace(/_\d+$/, '');
-const short = (a) => /praso/i.test(a) ? 'Praso' : /sasta/i.test(a) ? 'Sasta Store' : a;
+const short = (a) => /praso/i.test(a) ? 'Praso' : /sasta/i.test(a) ? 'Sasta Store' : /vishal/i.test(a) ? 'Vishal E-Commerce' : /munda/i.test(a) ? 'Ecommerce Munda' : /aikm/i.test(a) ? 'AIKM Pharma' : a;
 
 async function call(sp, args) {
   for (let t = 0; t < 5; t++) {

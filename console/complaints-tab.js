@@ -49,7 +49,7 @@
   var S = { items: [], health: {}, errors: {}, at: null, loaded: false, loading: null, view: "neg", acc: "", q: "", done: {}, msgs: null, msgLoading: false, unsub: null };
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
-  function short(a) { return /praso/i.test(a || "") ? "Praso" : /sasta/i.test(a || "") ? "Sasta Store" : (a || ""); }
+  function short(a) { a = a || ""; return /praso/i.test(a) ? "Praso" : /sasta/i.test(a) ? "Sasta Store" : /vishal/i.test(a) ? "Vishal E-Commerce" : /munda/i.test(a) ? "Ecommerce Munda" : /aikm/i.test(a) ? "AIKM Pharma" : a; }
   function dd(s) { if (!s) return ""; var d = new Date(String(s).slice(0, 10) + "T00:00:00"); return isNaN(d) ? s : d.toLocaleDateString("en-IN", { day: "numeric", month: "short" }); }
   function pct(r) { return r == null ? "—" : (Math.round(r * 10000) / 100) + "%"; }
   function toast(msg, warn) {

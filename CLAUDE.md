@@ -171,6 +171,8 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   (robot done / `refundChecks` / main `refundUpload`) or ticked "Mark refunded" (OMS `aikm_admin/refundFailedDone`). ~4 reads per open/page load.
 - The Complaints tab (`console/complaints-tab.js`) is loaded by the block at the end of `console/refund-tab.js` (`aikmComplaintsJs`) — keep it.
   Feedback + account health come from `complaints-sync.js` (SP-API reports, 6 runs/day) -> OMS Firebase `aikm_admin/complaintsIndex`.
+  All 5 accounts (owner 26 Nov 2026): Sasta Store, Praso, Vishal E-Commerce, Ecommerce Munda, AIKM Pharma — each skipped quietly if its
+  `SPAPI_REFRESH_TOKEN_<ACCT>` secret is missing. Names via `short()` in BOTH complaints-sync.js and console/complaints-tab.js. 0 extra Firebase reads per account.
   Buyer messages are NOT in any Amazon API: they come from the per-account Gmail robots (main Firebase collection `amazon_complaints`).
 - **LOTS-GN bill check** (`lots-bill-check.js`, workflow `lots-bill-check.yml`, owner 28 Oct 2026): every 10 min 10 AM–8 PM IST (started after "Sync OMS Guru Orders", which cron-job.org runs; GitHub schedule = backup) it reads
   today's (and missed last-3-days) LOTS-GN tax invoice from LOTS' invoice storage (same source as the Purchase Bills page auto-fetch — no login/OTP), matches it to
