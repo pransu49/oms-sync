@@ -27,7 +27,7 @@ jobs:
       contents: read
       actions: write        # to start the other accounts' syncs (step below)
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Owner 20 Nov 2026 (Munda GST/HSN pushes waited hours): GitHub's own timer skips most runs, and only Praso + Sasta are
       # started by cron-job.org. This Praso run therefore also starts Munda, Vishal and AIKM when their last run is 12+ min old
