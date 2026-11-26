@@ -25,7 +25,7 @@
     ".no-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 22px;border-top:1px solid #F0ECE2;border-bottom:1px solid #F0ECE2;background:#FBF9F4}" +
     ".no-chip{all:unset;cursor:pointer;font:600 12.5px Inter,sans-serif;padding:7px 12px;border-radius:999px;border:1px solid #E7E1D3;background:#fff;color:#4A5468}.no-chip.on{background:#0F1E35;border-color:#0F1E35;color:#fff}" +
     ".no-chip b{margin-left:5px;color:#A86A12}.no-chip.on b{color:#fff}.no-sep{width:1px;height:22px;background:#E7E1D3;margin:0 4px}" +
-    ".no-q{height:34px;border:1px solid #E7E1D3;border-radius:9px;padding:0 12px;font:13px Inter,sans-serif;width:230px;outline:none}.no-q:focus{border-color:#C9A24B}" +
+    ".no-q{height:34px;border:1px solid #E7E1D3;border-radius:9px;padding:0 12px;font:13px Inter,sans-serif;width:190px;outline:none}.no-q:focus{border-color:#C9A24B}" +
     ".no-dl{all:unset;cursor:pointer;margin-left:auto;font:600 12.5px Inter,sans-serif;padding:8px 14px;border-radius:9px;background:#0F1E35;color:#fff}" +
     ".no-note{padding:8px 22px;font-size:12px;color:#A86A12;background:#FFF8E8;border-bottom:1px solid #F3E3BC}" +
     ".no-scroll{flex:1;overflow:auto}.no-t{width:100%;border-collapse:separate;border-spacing:0;font-size:13.5px}" +
@@ -35,6 +35,8 @@
     ".no-nm{font-weight:600;max-width:420px;line-height:1.35}.no-s{font-size:11.5px;color:#8B909B;margin-top:3px}.no-s a{color:inherit}" +
     ".no-ac{display:inline-block;font-size:11.5px;border:1px solid #E7E1D3;border-radius:7px;padding:3px 8px;margin:2px 4px 2px 0;white-space:nowrap;background:#fff}.no-ac.oos{opacity:.5}" +
     ".no-last{font-weight:600;color:#B42318}.no-last.never{color:#6B7280}.no-new{display:inline-block;font-size:10.5px;font-weight:700;background:#E7F0FB;color:#1F4E8C;border-radius:5px;padding:1px 6px;margin-left:6px}" +
+    ".no-cp{all:unset;cursor:pointer;margin-left:6px;font:600 11px Inter,sans-serif;color:#B08A36;border:1px solid #E7D7AE;background:#FBF6EA;border-radius:6px;padding:1px 7px}.no-cp:hover{background:#C9A24B;color:#fff;border-color:#C9A24B}.no-cp.ok{background:#E7F4EC;color:#1E7A4B;border-color:#B7DEC5}" +
+    ".no-cpall{all:unset;cursor:pointer;font:600 12.5px Inter,sans-serif;padding:8px 14px;border-radius:9px;border:1px solid #C9A24B;color:#14213D;background:#fff}.no-cpall:hover{background:#FBF6EA}" +
     ".no-empty{padding:70px 20px;text-align:center;color:#8B909B}.no-more{all:unset;cursor:pointer;display:block;margin:14px auto;font:600 12.5px Inter,sans-serif;padding:8px 16px;border-radius:9px;border:1px solid #E7E1D3}";
   document.head.appendChild(css);
 
@@ -92,6 +94,9 @@
       c = e.target.closest("[data-a]"); if (c) { accF = c.dataset.a; shown = 100; draw(); return; }
       if (e.target.closest("#noMore")) { shown += 100; draw(); return; }
       if (e.target.closest("#noDl")) dl();
+      var cp = e.target.closest("[data-cp]"); if (cp) { copy(cp.dataset.cp, function () { cp.classList.add("ok"); cp.textContent = "✓ Copied"; setTimeout(function () { cp.classList.remove("ok"); cp.textContent = "⧉ Copy"; }, 1500); }); return; }
+      if (e.target.closest("#noCpAll")) { var all = rowsNow().map(function (g) { return g.asin; }); if (!all.length) return toast("Nothing to copy", true);
+        copy(all.join("\n"), function () { toast("✓ " + all.length + " ASIN" + (all.length > 1 ? "s" : "") + " copied"); }); }
     });
     o.addEventListener("input", function (e) { if (e.target.id === "noQ") { q = e.target.value; shown = 100; drawBody(); } });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape" && o.style.display === "flex") o.style.display = "none"; });
@@ -104,6 +109,7 @@
       '<span class="no-sep"></span><button type="button" class="no-chip' + (accF === "all" ? " on" : "") + '" data-a="all">All accounts<b>' + counts.all + "</b></button>" +
       ACC.map(function (a) { return counts[a[0]] ? '<button type="button" class="no-chip' + (accF === a[0] ? " on" : "") + '" data-a="' + a[0] + '">' + esc(a[1]) + "<b>" + counts[a[0]] + "</b></button>" : ""; }).join("") +
       '<input class="no-q" id="noQ" placeholder="Search product, ASIN or SKU…" value="' + esc(q) + '"><button type="button" class="no-dl" id="noDl">⬇ Download CSV</button>';
+    $("noBar").querySelector(".no-dl").insertAdjacentHTML("beforebegin", '<button type="button" class="no-cpall" id="noCpAll" title="Copy every ASIN in this list, one per line">⧉ Copy all ASINs</button>');
     $("noNote").innerHTML = waitAcc.length ? '<div class="no-note">' + esc(waitAcc.join(", ")) + ": last-order data arrives with the next sync of " + (waitAcc.length > 1 ? "those accounts" : "that account") + " (about 15 min) — not counted yet.</div>" : "";
     drawBody();
   }
@@ -114,12 +120,18 @@
       part.map(function (g) {
         var img = g.img ? '<img loading="lazy" alt="" src="' + esc(String(g.img).replace(/\.([a-z]+)$/i, "._SL120_.$1")) + '" onerror="this.remove()">' : "—";
         return "<tr><td><div class=\"no-pc\"><a class=\"no-im\" href=\"https://www.amazon.in/dp/" + esc(g.asin) + '" target="_blank" rel="noopener">' + img + '</a><div><div class="no-nm">' + esc(g.name || "Title loads with the next sync") +
-          (g.age != null && g.age < days ? '<span class="no-new" title="Listed less than ' + days + ' days ago">New · ' + g.age + " d</span>" : "") + '</div><div class="no-s"><a href="https://www.amazon.in/dp/' + esc(g.asin) + '" target="_blank" rel="noopener">' + esc(g.asin) + "</a></div></div></div></td>" +
+          (g.age != null && g.age < days ? '<span class="no-new" title="Listed less than ' + days + ' days ago">New · ' + g.age + " d</span>" : "") + '</div><div class="no-s"><a href="https://www.amazon.in/dp/' + esc(g.asin) + '" target="_blank" rel="noopener">' + esc(g.asin) + '</a><button type="button" class="no-cp" data-cp="' + esc(g.asin) + '" title="Copy ASIN">⧉ Copy</button></div></div></div></td>' +
           "<td>" + g.ls.sort(function (a, b) { return b.q - a.q; }).map(function (l) { return '<span class="no-ac' + (l.q > 0 ? "" : " oos") + '" title="SKU ' + esc(l.sku) + '">' + esc(accName(l.acct)) + (l.fba ? " FBA" : "") + (l.p != null ? " · ₹" + l.p : "") + " · " + l.q + "</span>"; }).join("") + "</td>" +
           '<td class="r"><b>' + g.stock + "</b></td>" +
           "<td>" + (g.lo ? '<span class="no-last">' + g.since + " days ago</span><div class=\"no-s\">" + fmtDay(g.lo) + "</div>" : '<span class="no-last never">None in 90 days</span>') + "</td>" +
           "<td>" + (g.od ? fmtDay(g.od) + '<div class="no-s">' + g.age + " days</div>" : "—") + "</td></tr>";
       }).join("") + "</tbody></table>" + (R.length > shown ? '<button type="button" class="no-more" id="noMore">Show 100 more (' + (R.length - shown) + " left)</button>" : "");
+  }
+  /* owner 26 Nov 2026 "deploy option for copy asin" */
+  function copy(t, ok) {
+    var done = function () { ok && ok(); }, fall = function () { var a = document.createElement("textarea"); a.value = t; a.style.position = "fixed"; a.style.opacity = "0"; document.body.appendChild(a); a.select();
+      try { document.execCommand("copy"); done(); } catch (e) { toast("Copy failed — select and copy by hand", true); } a.remove(); };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(t).then(done, fall); else fall();
   }
   function dl() {
     var R = rowsNow(), cell = function (v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
