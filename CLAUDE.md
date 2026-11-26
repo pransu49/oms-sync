@@ -398,6 +398,12 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   maths at today's price). Pop-up: chips Live / Robot listings (SKU N-...) / Out of stock / All, safe price `f` (₹15 or 10%) + target `t` (₹20),
   per-row Push (page's spapiPushPriceToAmazon) + "Fix mapping" (page's openSpapiMatchModal; pop-up hides while it is open; remapped rows get no safe price until the next sync) and "Push safe price to N ticked" (spapiPriceUpdates, source loss-list).
   Firebase: 1 read per account per page open (main listingIndex/<acct>, cached 5 min) + 1 write per price queued.
+- **No orders view** (owner 26 Nov 2026, "see ASINs with no orders in the last 15 days, on all accounts"): `console/no-orders.js`, loader block
+  `aikmNoOrdersJs` at the end of `amazon-name-search.js` (keep it). Header button "💤 No orders 15d · N" (next to In loss). Pop-up: in-stock ASINs
+  (stock > 0 on any chosen account) with no order in 7/15/30/60 days, all accounts together (newest order across them) or one account; most stock
+  first; "New · N d" tag for listings younger than the window; CSV download. Data: `publishListingIndex()` adds per SKU `lo` (last order day of
+  the ASIN on that account from the 90-day snapshot, '' = none), `od` (listing date), `n` (70-char title), `fc` (1 = FBA). Biggest index (Sasta,
+  ~1,500 SKUs) stays well under 1 MB. Firebase: 5 reads per page open (main listingIndex x5, cached 5 min), 0 extra robot reads/writes.
 - **Premium console look** (owner 23 Nov 2026, "apply" the Self-Ship redesign): `console/premium-theme.js`, loader block `aikmPremThemeJs` at the end of
   `console/refund-tab.js` (keep it). Design layer only (CSS vars + sidebar groups Ship/Money/Stock/Files + page header, cards, tabs, tables). Opt-in per browser:
   `?theme=premium` / `?theme=classic` (localStorage `aikm_theme`); `AIKM_PREMIUM_DEFAULT` in the file switches it on for everyone once the owner approves. 0 Firebase.

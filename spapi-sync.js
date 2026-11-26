@@ -2909,9 +2909,16 @@ async function publishDeliverByIndex() {
 // written only when something changed.
 async function publishListingIndex() {
   const skus = {}, orders = {};
+  // owner 26 Nov 2026 "see ASINs with no orders in the last 15 days, all accounts": lo = last order day of the ASIN on THIS account
+  // (from the 90-day order snapshot; '' = none in 90 days), od = listing date, n = short title (other accounts' names for the page).
+  const lastOrd = {};
+  myOrders().forEach((o) => { const d = String(o.purchaseDate || '').slice(0, 10); if (!d) return;
+    (o.items || []).forEach((it) => { if (it && it.asin && (!lastOrd[it.asin] || d > lastOrd[it.asin])) lastOrd[it.asin] = d; }); });
   Object.values(SNAP.inventory).forEach((i) => {
     if (!i || i.account !== ACCOUNT_LABEL || !i.sku) return;
-    skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null, i: i.img || '' };
+    skus[i.sku] = { a: i.asin || '', p: i.price ?? null, m: i.mrp ?? null, q: i.quantity ?? null, i: i.img || '',
+      lo: (i.asin && lastOrd[i.asin]) || '', od: String(i.openDate || '').slice(0, 10), n: String(i.name || '').slice(0, 70),
+      fc: (i.fulfillmentChannel || 'DEFAULT') === 'DEFAULT' ? 0 : 1 };
   });
   // f = lowest price that meets the rule (Rs 15 or 10%), t = price that earns TARGET_PROFIT (same maths as the robot)
   try {

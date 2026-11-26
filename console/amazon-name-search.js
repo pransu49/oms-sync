@@ -1522,3 +1522,15 @@
     .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
     .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
 } catch (e) {} })();
+
+/* ===== DO NOT REMOVE — loads the "No orders" view (console/no-orders.js, owner 26 Nov 2026: "ASINs with no orders in 15 days,
+   all accounts"). Keep this block when replacing amazon-name-search.js. ===== */
+(function () { try { if (document.getElementById("aikmNoOrdersJs")) return;
+  function add(ref) { if (document.getElementById("aikmNoOrdersJs")) return; var s = document.createElement("script"); s.id = "aikmNoOrdersJs"; s.defer = true;
+    var __u = "https://cdn.jsdelivr.net/gh/pransu49/oms-sync@" + ref + "/console/no-orders.js" + (ref === "main" ? "?v=" + Math.floor(Date.now() / 6e5) : ""); if (ref === "main") { /* jsDelivr @main can lag hours behind (owner 20 Nov 2026): take the file straight from GitHub (5-min cache), CDN if that fails */ fetch("https://raw.githubusercontent.com/pransu49/oms-sync/main/console/no-orders.js?t=" + Math.floor(Date.now() / 6e4)).then(function (r) { if (!r.ok) throw 0; return r.text(); }).then(function (t) { s.src = URL.createObjectURL(new Blob([t], { type: "text/javascript" })); }).catch(function () { s.src = __u; }); } else s.src = __u; s.onerror = function () { if (ref !== "main") { s.remove(); add("main"); } }; /* brand-new version not on the CDN yet -> latest saved copy */ document.head.appendChild(s); }
+  var done = false, t = setTimeout(function () { if (!done) { done = true; add("main"); } }, 4000);
+  fetch("https://api.github.com/repos/pransu49/oms-sync/commits?path=console/no-orders.js&per_page=1")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
+    .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
+} catch (e) {} })();
