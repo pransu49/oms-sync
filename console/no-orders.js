@@ -12,7 +12,7 @@
   var ACC = [["praso", "Praso"], ["sastastore", "Sasta Store"], ["vishal", "Vishal"], ["munda", "Munda"], ["aikm", "AIKM"]];
   try { (SPAPI_ACCOUNTS || []).forEach(function (a) { if (a && a.label && !ACC.some(function (x) { return x[0] === a.label; })) ACC.push([a.label, a.name || a.label]); }); } catch (e) {}
   var accName = function (l) { var f = ACC.find(function (x) { return x[0] === l; }); return f ? f[1] : l; };
-  var DATA = null, at = 0, busy = null, days = 15, accF = "all", q = "", shown = 100, waitAcc = [];
+  var DATA = null, at = 0, busy = null, days = 15, accF = "all", q = "", shown = 100, waitAcc = [], rel = 0;  // rel = relisted within N days (0 = any)
 
   var css = document.createElement("style");
   css.textContent =
@@ -37,6 +37,7 @@
     ".no-last{font-weight:600;color:#B42318}.no-last.never{color:#6B7280}.no-new{display:inline-block;font-size:10.5px;font-weight:700;background:#E7F0FB;color:#1F4E8C;border-radius:5px;padding:1px 6px;margin-left:6px}" +
     ".no-cp{all:unset;cursor:pointer;margin-left:6px;font:600 11px Inter,sans-serif;color:#B08A36;border:1px solid #E7D7AE;background:#FBF6EA;border-radius:6px;padding:1px 7px}.no-cp:hover{background:#C9A24B;color:#fff;border-color:#C9A24B}.no-cp.ok{background:#E7F4EC;color:#1E7A4B;border-color:#B7DEC5}" +
     ".no-cpall{all:unset;cursor:pointer;font:600 12.5px Inter,sans-serif;padding:8px 14px;border-radius:9px;border:1px solid #C9A24B;color:#14213D;background:#fff}.no-cpall:hover{background:#FBF6EA}" +
+    ".no-rel{display:inline-block;font-size:12px;font-weight:700;background:#F6EEDB;color:#8A6A1F;border-radius:6px;padding:2px 8px}" +
     ".no-empty{padding:70px 20px;text-align:center;color:#8B909B}.no-more{all:unset;cursor:pointer;display:block;margin:14px auto;font:600 12.5px Inter,sans-serif;padding:8px 16px;border-radius:9px;border:1px solid #E7E1D3}";
   document.head.appendChild(css);
 
@@ -53,6 +54,8 @@
   function fmtDay(d) { var t = new Date(d + "T12:00:00+05:30"); return isNaN(t) ? d : t.getDate() + " " + t.toLocaleString("en-US", { month: "short" }); }
 
   /* one row per ASIN: listings of the chosen accounts, last order = newest across them */
+  // robot relists get a new SKU ending -R1, -R2 ... or -R<time> (spapi-sync relistNewSku / Add ASIN relist)
+  var isRel = function (sku) { return /-R[0-9A-Z]{1,9}$/.test(String(sku || "")); };
   function build() {
     var by = {}; waitAcc = [];
     (DATA || []).forEach(function (r) {
@@ -60,18 +63,18 @@
       if (keys.length && !keys.some(function (k) { return sk[k] && sk[k].lo !== undefined; })) waitAcc.push(accName(a));
       if (accF !== "all" && a !== accF) return;
       keys.forEach(function (sku) { var v = sk[sku] || {}, asin = String(v.a || "").toUpperCase(); if (!asin || v.lo === undefined) return;
-        var g = by[asin] || (by[asin] = { asin: asin, name: "", img: "", lo: "", od: "", stock: 0, ls: [] });
-        g.ls.push({ acct: a, sku: sku, p: v.p, q: +v.q || 0, fba: v.fc === 1 });
+        var g = by[asin] || (by[asin] = { asin: asin, name: "", img: "", lo: "", od: "", nd: "", stock: 0, ls: [] });
+        g.ls.push({ acct: a, sku: sku, p: v.p, q: +v.q || 0, fba: v.fc === 1, od: v.od || "" });
         if (!g.name && v.n) g.name = v.n; if (!g.img && v.i) g.img = v.i;
-        if (v.lo && v.lo > g.lo) g.lo = v.lo; if (v.od && (!g.od || v.od < g.od)) g.od = v.od;
+        if (v.lo && v.lo > g.lo) g.lo = v.lo; if (v.od && (!g.od || v.od < g.od)) g.od = v.od; if (v.od && v.od >= g.nd) { if (v.od > g.nd || isRel(sku)) g.rs = isRel(sku); g.nd = v.od; }
         g.stock += Math.max(0, +v.q || 0); });
     });
-    return Object.keys(by).map(function (k) { var g = by[k]; g.since = g.lo ? ago(g.lo) : null; g.age = g.od ? ago(g.od) : null; return g; })
+    return Object.keys(by).map(function (k) { var g = by[k]; g.since = g.lo ? ago(g.lo) : null; g.age = g.od ? ago(g.od) : null; g.nage = g.nd ? ago(g.nd) : null; g.relisted = !!g.nd && (g.nd !== g.od || g.rs); return g; })
       .filter(function (g) { return g.stock > 0 && (g.since == null || g.since >= days); });
   }
   function rowsNow() {
     var s = q.trim().toLowerCase();
-    return build().filter(function (g) { return !s || (g.name + " " + g.asin + " " + g.ls.map(function (l) { return l.sku; }).join(" ")).toLowerCase().indexOf(s) >= 0; })
+    return build().filter(function (g) { return !rel || (g.relisted && g.nage != null && g.nage <= rel); }).filter(function (g) { return !s || (g.name + " " + g.asin + " " + g.ls.map(function (l) { return l.sku; }).join(" ")).toLowerCase().indexOf(s) >= 0; })
       .sort(function (a, b) { return b.stock - a.stock || (b.since == null ? 999 : b.since) - (a.since == null ? 999 : a.since); });
   }
   function btn() {
@@ -91,6 +94,7 @@
     o.addEventListener("click", function (e) {
       if (e.target === o || e.target.closest("#noX")) { o.style.display = "none"; return; }
       var c = e.target.closest("[data-d]"); if (c) { days = +c.dataset.d; shown = 100; draw(); paint(); return; }
+      c = e.target.closest("[data-rel]"); if (c) { rel = +c.dataset.rel; shown = 100; draw(); return; }
       c = e.target.closest("[data-a]"); if (c) { accF = c.dataset.a; shown = 100; draw(); return; }
       if (e.target.closest("#noMore")) { shown += 100; draw(); return; }
       if (e.target.closest("#noDl")) dl();
@@ -108,6 +112,8 @@
     $("noBar").innerHTML = [7, 15, 30, 60].map(function (d) { return '<button type="button" class="no-chip' + (d === days ? " on" : "") + '" data-d="' + d + '">' + d + " days</button>"; }).join("") +
       '<span class="no-sep"></span><button type="button" class="no-chip' + (accF === "all" ? " on" : "") + '" data-a="all">All accounts<b>' + counts.all + "</b></button>" +
       ACC.map(function (a) { return counts[a[0]] ? '<button type="button" class="no-chip' + (accF === a[0] ? " on" : "") + '" data-a="' + a[0] + '">' + esc(a[1]) + "<b>" + counts[a[0]] + "</b></button>" : ""; }).join("") +
+      '<span class="no-sep"></span><span style="font:600 12px Inter,sans-serif;color:#6B7280">Relisted</span>' +
+      [0, 1, 2, 3, 5, 10].map(function (d) { return '<button type="button" class="no-chip' + (d === rel ? " on" : "") + '" data-rel="' + d + '" title="' + (d ? "Newest listing created in the last " + d + " day" + (d > 1 ? "s" : "") : "Any listing date") + '">' + (d ? d + "d" : "Any") + "</button>"; }).join("") +
       '<input class="no-q" id="noQ" placeholder="Search product, ASIN or SKU…" value="' + esc(q) + '"><button type="button" class="no-dl" id="noDl">⬇ Download CSV</button>';
     $("noBar").querySelector(".no-dl").insertAdjacentHTML("beforebegin", '<button type="button" class="no-cpall" id="noCpAll" title="Copy every ASIN in this list, one per line">⧉ Copy all ASINs</button>');
     $("noNote").innerHTML = waitAcc.length ? '<div class="no-note">' + esc(waitAcc.join(", ")) + ": last-order data arrives with the next sync of " + (waitAcc.length > 1 ? "those accounts" : "that account") + " (about 15 min) — not counted yet.</div>" : "";
@@ -115,16 +121,17 @@
   }
   function drawBody() {
     var R = rowsNow(), part = R.slice(0, shown);
-    $("noBody").innerHTML = !R.length ? '<div class="no-empty">' + (DATA ? "Every in-stock ASIN got an order in the last " + days + " days." : "Loading…") + "</div>" :
-      '<table class="no-t"><thead><tr><th>Product</th><th>Listed on (price · stock)</th><th class="r">Total stock</th><th>Last order</th><th>Listed since</th></tr></thead><tbody>' +
+    $("noBody").innerHTML = !R.length ? '<div class="no-empty">' + (DATA ? (rel ? "No ASIN relisted in the last " + rel + " day" + (rel > 1 ? "s" : "") + " is without orders." : "Every in-stock ASIN got an order in the last " + days + " days.") : "Loading…") + "</div>" :
+      '<table class="no-t"><thead><tr><th>Product</th><th>Listed on (price · stock)</th><th class="r">Total stock</th><th>Last order</th><th>Listed / relisted</th></tr></thead><tbody>' +
       part.map(function (g) {
         var img = g.img ? '<img loading="lazy" alt="" src="' + esc(String(g.img).replace(/\.([a-z]+)$/i, "._SL120_.$1")) + '" onerror="this.remove()">' : "—";
         return "<tr><td><div class=\"no-pc\"><a class=\"no-im\" href=\"https://www.amazon.in/dp/" + esc(g.asin) + '" target="_blank" rel="noopener">' + img + '</a><div><div class="no-nm">' + esc(g.name || "Title loads with the next sync") +
-          (g.age != null && g.age < days ? '<span class="no-new" title="Listed less than ' + days + ' days ago">New · ' + g.age + " d</span>" : "") + '</div><div class="no-s"><a href="https://www.amazon.in/dp/' + esc(g.asin) + '" target="_blank" rel="noopener">' + esc(g.asin) + '</a><button type="button" class="no-cp" data-cp="' + esc(g.asin) + '" title="Copy ASIN">⧉ Copy</button></div></div></div></td>' +
-          "<td>" + g.ls.sort(function (a, b) { return b.q - a.q; }).map(function (l) { return '<span class="no-ac' + (l.q > 0 ? "" : " oos") + '" title="SKU ' + esc(l.sku) + '">' + esc(accName(l.acct)) + (l.fba ? " FBA" : "") + (l.p != null ? " · ₹" + l.p : "") + " · " + l.q + "</span>"; }).join("") + "</td>" +
+          (!g.relisted && g.age != null && g.age < days ? '<span class="no-new" title="Listed less than ' + days + ' days ago">New · ' + g.age + " d</span>" : "") + '</div><div class="no-s"><a href="https://www.amazon.in/dp/' + esc(g.asin) + '" target="_blank" rel="noopener">' + esc(g.asin) + '</a><button type="button" class="no-cp" data-cp="' + esc(g.asin) + '" title="Copy ASIN">⧉ Copy</button></div></div></div></td>' +
+          "<td>" + g.ls.sort(function (a, b) { return b.q - a.q; }).map(function (l) { return '<span class="no-ac' + (l.q > 0 ? "" : " oos") + '" title="SKU ' + esc(l.sku) + (l.od ? " · listed " + esc(l.od) : "") + '">' + esc(accName(l.acct)) + (l.fba ? " FBA" : "") + (l.p != null ? " · ₹" + l.p : "") + " · " + l.q + "</span>"; }).join("") + "</td>" +
           '<td class="r"><b>' + g.stock + "</b></td>" +
           "<td>" + (g.lo ? '<span class="no-last">' + g.since + " days ago</span><div class=\"no-s\">" + fmtDay(g.lo) + "</div>" : '<span class="no-last never">None in 90 days</span>') + "</td>" +
-          "<td>" + (g.od ? fmtDay(g.od) + '<div class="no-s">' + g.age + " days</div>" : "—") + "</td></tr>";
+          "<td>" + (g.relisted ? '<span class="no-rel">Relisted ' + (g.nage === 0 ? "today" : g.nage + " d ago") + '</span><div class="no-s">' + fmtDay(g.nd) + (g.od !== g.nd ? " · first listed " + fmtDay(g.od) : "") + "</div>"
+            : g.od ? fmtDay(g.od) + '<div class="no-s">' + g.age + " days</div>" : "—") + "</td></tr>";
       }).join("") + "</tbody></table>" + (R.length > shown ? '<button type="button" class="no-more" id="noMore">Show 100 more (' + (R.length - shown) + " left)</button>" : "");
   }
   /* owner 26 Nov 2026 "deploy option for copy asin" */
@@ -135,8 +142,8 @@
   }
   function dl() {
     var R = rowsNow(), cell = function (v) { v = String(v == null ? "" : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
-    var lines = [["ASIN", "Product", "Total stock", "Last order", "Days since last order", "Listed since", "Listings (account · SKU · price · stock)"].join(",")]
-      .concat(R.map(function (g) { return [g.asin, g.name, g.stock, g.lo || "none in 90 days", g.since == null ? "" : g.since, g.od || "",
+    var lines = [["ASIN", "Product", "Total stock", "Last order", "Days since last order", "First listed", "Last relisted", "Listings (account · SKU · price · stock)"].join(",")]
+      .concat(R.map(function (g) { return [g.asin, g.name, g.stock, g.lo || "none in 90 days", g.since == null ? "" : g.since, g.od || "", g.relisted ? g.nd : "",
         g.ls.map(function (l) { return accName(l.acct) + " · " + l.sku + " · " + (l.p != null ? l.p : "") + " · " + l.q; }).join(" | ")].map(cell).join(","); }));
     var a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(["﻿" + lines.join("\n")], { type: "text/csv" }));
     a.download = "No orders " + days + " days " + (accF === "all" ? "all accounts" : accName(accF)) + ".csv"; document.body.appendChild(a); a.click(); a.remove();
