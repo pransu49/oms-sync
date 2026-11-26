@@ -82,7 +82,14 @@
       var mp = e.target.closest("[data-map]"); if (mp && typeof openSpapiMatchModal === "function") { openSpapiMatchModal(mp.dataset.map);
         var nm = mp.dataset.name || ""; if (nm) setTimeout(function () { var t = $("spapiMatchModalTitle"); if (t && /^ASIN:/.test(t.textContent)) t.textContent = nm;
           var i = $("spapiMatchModalInput"); if (i && !i.value) { i.value = nm.split(/[|,(]/)[0].trim().slice(0, 60); i.dispatchEvent(new Event("input", { bubbles: true })); } }, 150);
-        toast("Map it to the LOTS product and Save — the next sync picks it up"); }
+        toast("Map it to the LOTS product and press Save mapping — the next sync picks it up");
+        // redraw when the map window closes: the row turns green at once if the mapping was saved
+        var asin = mp.dataset.map, before = ""; try { before = JSON.stringify(STORE.asinLotsMap[asin] || null); } catch (x) {}
+        var n = 0, seen = false, tw = setInterval(function () { var mm = $("spapiMatchModal"); if (!mm) { if (++n > 20) clearInterval(tw); return; }
+          if (getComputedStyle(mm).display !== "none") { seen = true; return; } if (!seen) { if (++n > 20) clearInterval(tw); return; } clearInterval(tw);
+          setTimeout(function () { var after = ""; try { after = JSON.stringify(STORE.asinLotsMap[asin] || null); } catch (x) {}
+            if (after === before || after === "null") toast("Not saved — open Map again and press Save mapping", true);
+            draw(); }, 700); }, 400); }
     });
     $("ivCard").addEventListener("click", function (e) { var b = e.target.closest("[data-own-k]"); if (!b) return;
       var i = document.createElement("input"); i.className = "iv-own-in"; i.type = "number"; i.min = "0"; i.step = "1"; i.dataset.k = b.dataset.ownK; i.dataset.v = "0"; i.value = ""; i.placeholder = "0";
@@ -194,7 +201,16 @@
     return '<a class="iv-pic" href="https://www.amazon.in/dp/' + esc(u.asin) + '" target="_blank" rel="noopener"><img loading="lazy" alt="" src="' + esc(String(u.img).replace(/\.([a-z]+)$/i, "._SL120_.$1")) + '" onerror="this.parentNode.classList.add(\'empty\');this.remove()"></a>'; }
   function unlHtml(u) { return '<tr><td><div class="iv-pc">' + pic(u) + '<div><div class="iv-nm">' + (u.name ? esc(u.name) : '<span class="iv-sub">Title loads with the next sync (about 15 min)</span>') + '</div>' +
       '<div class="iv-sub"><span class="iv-acct">' + esc(u.acct) + '</span> · SKU <span style="font-family:ui-monospace,Menlo,monospace">' + esc(u.sku) + '</span> · ASIN <a href="https://www.amazon.in/dp/' + esc(u.asin) + '" target="_blank" rel="noopener">' + esc(u.asin) + "</a></div></div></div></td>" +
-      '<td class="r">' + nf(u.amz) + "</td><td>" + (u.why === "unlinked" ? "Not mapped to LOTS / a vendor - stock not managed" : "Not in LOTS - type its own stock in the table to manage it") + "</td><td>" + (u.asin ? '<button type="button" class="iv-btn gold" data-map="' + esc(u.asin) + '" data-name="' + esc(u.name || "") + '"><i class="ti ti-link"></i>Map</button>' : "") + "</td></tr>"; }
+      '<td class="r">' + nf(u.amz) + "</td><td>" + whyHtml(u) + "</td><td>" + (u.asin ? '<button type="button" class="iv-btn gold" data-map="' + esc(u.asin) + '" data-name="' + esc(u.name || "") + '"><i class="ti ti-link"></i>' + (freshMap(u) ? "Change" : "Map") + "</button>" : "") + "</td></tr>"; }
+  /* owner 26 Nov 2026 "mapped but not getting saved": the list comes from the robot's plan (rebuilt every ~15 min), so a row mapped a
+     minute ago still said "Not mapped". A mapping saved AFTER the plan was built (page's STORE.asinLotsMap) now shows at once. */
+  function freshMap(u) { try { var m = STORE.asinLotsMap[u.asin]; if (!m || typeof m !== "object") return null; var t = Date.parse(m.savedAt || ""); return t && t > (u.at || 0) ? m : null; } catch (e) { return null; } }
+  function whyHtml(u) {
+    var m = freshMap(u);
+    if (m) { var vend = m.vendorName && String(m.vendorName).toUpperCase() !== "LOTS";
+      var what = vend ? esc(m.vendorName) : "LOTS " + esc((Array.isArray(m.parts) && m.parts.length ? m.parts.map(function (x) { return x.code + (x.qty > 1 ? " x" + x.qty : ""); }).join(" + ") : m.code) || "");
+      return '<span style="color:#1E7A4B;font-weight:600">✓ Saved · mapped to ' + what + "</span>" + '<div class="iv-sub">' + (vend ? "Vendor product: type its own stock to manage it. " : "") + "Stock updates at the next sync (about 15 min)</div>"; }
+    return u.why === "unlinked" ? "Not mapped to LOTS / a vendor - stock not managed" : "Not in LOTS - type its own stock in the table to manage it"; }
   /* next 100 rows are added at the bottom while scrolling - no "Show more" button */
   function more() {
     var tb = $("ivBody"); if (!tb) return;
@@ -219,7 +235,7 @@
       return { k: k, K: K, L: L, oosAt: oosAt, sasta: sasta, name: nameOf(k), free: free, freeGN: freeGN, oos: oos, diff: diff, own: (K.own || 0) > 0, pend: (K.pd || 0) > 0,
         v: { name: nameOf(k), gn: vend ? null : K.gn, s62: vend ? null : K.s62, own: K.own || 0, pd: K.pd || 0, fin: Math.max(0, Math.floor(freeGN)), st: sasta ? "Live on Sasta only (LOTS-62)" : oos ? "Out of stock" : "In stock",
           amz: !L.length ? "No Amazon listing" : diff ? "Amazon differs - fixed at next push" : "Matches Amazon" } }; });
-    var unl = []; ACC.forEach(function (a) { var P = PLAN[a[0]]; if (P) P.rows.forEach(function (r) { if (r[5] === "unlinked" || r[5] === "nostock") unl.push({ ac: a[0], acct: a[1], sku: r[0], asin: r[1], amz: r[4], why: r[5], name: r[6] || "", img: r[7] || "" }); }); });
+    var unl = []; ACC.forEach(function (a) { var P = PLAN[a[0]]; if (P) P.rows.forEach(function (r) { if (r[5] === "unlinked" || r[5] === "nostock") unl.push({ ac: a[0], acct: a[1], sku: r[0], asin: r[1], amz: r[4], why: r[5], name: r[6] || "", img: r[7] || "", at: P.at || 0 }); }); });
     unl.forEach(function (u) { if (!u.name || !u.img) { var f = (typeof spapiInventoryRaw !== "undefined" ? spapiInventoryRaw || [] : []).find(function (i) { return i.asin === u.asin && (i.name || i.img); }); if (f) { u.name = u.name || f.name || ""; u.img = u.img || f.img || ""; } } });
     var unlAll = unl.slice();
     var rowsAll = rows;

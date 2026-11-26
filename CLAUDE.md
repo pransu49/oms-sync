@@ -315,7 +315,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Own stock + switches: main `aikm_admin/invCentral` {own:{k:{q,n,at}}, live:{acct:true}}. It PUSHES to Amazon only for accounts switched to
   "AIKM tool" (max 300 per run, zeros first; stops if 60%+ in-stock would go 0); for those `runStockGuard` (OOS rule + restocks) is skipped.
   Owner must also switch OFF OMS Guru's inventory sync for that channel. Screen: `console/inventory-tool.js` — since 20 Nov 2026 a TAB "Central inventory" on the Amazon page (owner: no separate tool); data loads only when the tab is opened. `/pages/amazon?app=inventory` opens the page on that tab
-  (loader block `aikmInventoryJs` at the end of `amazon-name-search.js` — keep it). Plan row [8] = time the robot set the listing to 0 on Amazon (lastStockPush / push loop); the tab sorts the newest OOS first (All + Out of stock views) and shows "OOS on Amazon · x ago" (owner 20 Nov 2026). Firebase: ~4 reads + 2 writes per sync run (~1,500 reads, ~770 writes/day all accounts); screen 5 reads per open.
+  (loader block `aikmInventoryJs` at the end of `amazon-name-search.js` — keep it). Not-linked list (owner 26 Nov 2026 "mapped but not getting saved" - the save WAS fine, the list is the robot's plan, ~15 min old):
+  a mapping saved after the plan time (page's STORE.asinLotsMap savedAt) shows at once as "✓ Saved · mapped to ..." + "Change" button; after the
+  map window closes the tab redraws, and warns "Not saved" if nothing changed. `inv-diag.yml` input `asins` = read-only lookup of ASINs in
+  the saved mappings (main + overflow) + plan status. Plan row [8] = time the robot set the listing to 0 on Amazon (lastStockPush / push loop); the tab sorts the newest OOS first (All + Out of stock views) and shows "OOS on Amazon · x ago" (owner 20 Nov 2026). Firebase: ~4 reads + 2 writes per sync run (~1,500 reads, ~770 writes/day all accounts); screen 5 reads per open.
 - **Amazon PII (restricted role "Direct-to-Consumer Shipping", applied 17 Nov 2026, retention declared 31-90 days)**: buyer name / address / phone
   may be kept at most 90 days after shipment. Today: OMS live orders 15 days (replaced each sync), proshipIndex 15 days, rtoIndex rebuilt from
   90-day reports, omsArchive has NO buyer fields. Any new store of buyer details MUST drop them within 90 days of shipment, never go into
