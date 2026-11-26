@@ -48,7 +48,7 @@ jobs:
             gh api -X POST "repos/${{ github.repository }}/actions/workflows/$w/dispatches" -f ref=main -f 'inputs[mode]=fast' && echo "$w: started (last run ${age}s ago)"
           done
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '20'
 
