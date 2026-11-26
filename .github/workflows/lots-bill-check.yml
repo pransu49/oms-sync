@@ -33,7 +33,7 @@ jobs:
           H=$(TZ=Asia/Kolkata date +%H)
           if [ "${{ github.event_name }}" = "push" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "$H" -ge 10 ] && [ "$H" -lt 20 ]; }; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "Outside 10 AM–8 PM IST - skipping."; fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         if: steps.gate.outputs.go == 'true'
 
       - uses: actions/setup-node@v4
