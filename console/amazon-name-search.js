@@ -372,6 +372,9 @@
       '#aapBox input:focus{outline:none;border-color:var(--gold,#C9A24B);box-shadow:0 0 0 3px rgba(201,162,75,.15)}#aapBox input.need{border-color:#E9B949;background:#FFFBEA}#aapBox input.pre{background:#F6F1E4;border-color:#D9C79A}' +
       '#aapBox .aap-tag{display:inline-block;font-size:13px;font-weight:600;border-radius:999px;padding:6px 12px;white-space:nowrap}' +
       '#aapBox .ok{background:#E7F4EC;color:#1E7A4B}#aapBox .warn{background:#FFF4DB;color:#A86A12}#aapBox .bad{background:#FDECEA;color:#B42318}#aapBox .na{background:#F1F2F4;color:#6B7280}' +
+      '#aapBox .aap-p{display:flex;gap:10px;align-items:flex-start}#aapBox .aap-img{width:44px;height:44px;flex:0 0 44px;border-radius:8px;object-fit:contain;background:#fff;border:1px solid #E6E1D3}#aapBox .aap-img.e{display:flex;align-items:center;justify-content:center;color:#B8A06A;font-weight:700;background:#FBF8F0}' +
+      '#aapBox .aap-pi{min-width:0}#aapBox .aap-mp{font-size:12.5px;margin-top:3px;line-height:1.45}#aapBox .aap-mp.m-ok{color:#1F6F43}#aapBox .aap-mp.m-no{color:#B54708}' +
+      '#aapBox .aap-map{all:unset;cursor:pointer;margin-left:6px;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600;background:#0F1E3D;color:#F5E6C4}#aapBox .aap-mp.m-ok .aap-map{background:#fff;color:#0F1E3D;border:1px solid #D8CFB8}#aapBox .aap-map:hover{filter:brightness(1.15)}' +
       '#aapBox .aap-x{all:unset;cursor:pointer;color:var(--muted,#8B909B);font-size:18px;padding:4px 8px;border-radius:8px}#aapBox .aap-x:hover{color:#B42318;background:#FDECEA}' +
       '#aapBox .aap-empty{padding:40px;text-align:center;color:var(--muted,#8B909B)}' +
       '#aapBox .aap-sug{display:inline-flex;align-items:center;gap:6px}#aapBox .aap-sug input{width:64px}#aapBox .aap-sep{width:1px;height:22px;background:var(--line,#E6E1D6);margin:0 6px}' +
@@ -383,15 +386,22 @@
     /* Previous sale prices (owner 26 Nov 2026: "robot to prefill previous sale prices, we change if required"): our own price for the
        ASIN from listingIndex/<acct> of every account (main Firebase, SKU -> a ASIN, p price, q stock). This account first (in-stock SKU
        first), else the lowest in-stock price on our other accounts, else any. ~5 reads per Add ASIN use, cached 10 min. */
-    var prevIdx = null, prevAt = 0, prevBusy = false;
+    var prevIdx = null, prevAt = 0, prevBusy = false, titleIdx = {};
+    /* Product title (owner 27 Nov 2026 "option for product title and mapping"): Amazon title from this account's listings (full name), else our
+       listing on any account (listingIndex nx, 70 chars). Unknown = ASIN not listed by us yet. */
+    function amzInfo(asin) { var r = { t: "", img: "" }; if (!asin) return r;
+      try { (spapiInventoryRaw || []).some(function (i) { if (String(i.asin || "").toUpperCase() !== asin) return false; r.t = r.t || i.name || ""; r.img = r.img || i.img || ""; return r.t && r.img; }); } catch (e) {}
+      if (!r.t) r.t = titleIdx[asin] || ""; return r; }
     var ACCS = function () { var l = ["praso", "sastastore", "vishal", "munda", "aikm"]; try { (SPAPI_ACCOUNTS || []).forEach(function (a) { a && a.label && l.indexOf(a.label) < 0 && l.push(a.label); }); } catch (e) {} return l; };
     var accName = function (l) { try { var f = (SPAPI_ACCOUNTS || []).find(function (a) { return a.label === l; }); if (f) return f.name; } catch (e) {} return ({ praso: "Praso", sastastore: "Sasta Store", vishal: "Vishal", munda: "Munda", aikm: "AIKM" })[l] || l; };
     function loadPrev() {
       if (prevBusy || (prevIdx && Date.now() - prevAt < 6e5) || typeof fbDb === "undefined" || !fbDb) return;
       prevBusy = true;
-      Promise.all(ACCS().map(function (a) { return fbDb.collection("listingIndex").doc(a).get().then(function (d) { return [a, (d.exists && d.data().skus) || {}]; }).catch(function () { return [a, {}]; }); }))
+      Promise.all(ACCS().map(function (a) { return fbDb.collection("listingIndex").doc(a).get().then(function (d) { var x = d.exists ? d.data() : {}, nx = {}; try { nx = JSON.parse(x.nx || "{}") || {}; } catch (e) {} return [a, x.skus || {}, nx]; }).catch(function () { return [a, {}, {}]; }); }))
         .then(function (res) { var ix = {};
-          res.forEach(function (r) { Object.keys(r[1]).forEach(function (sku) { var v = r[1][sku] || {}, asin = String(v.a || "").toUpperCase(); if (!asin || !(v.p > 0)) return;
+          res.forEach(function (r) { Object.keys(r[1]).forEach(function (sku) { var v = r[1][sku] || {}, asin = String(v.a || "").toUpperCase(); if (!asin) return;
+            var t = r[2][sku] && r[2][sku][2]; if (t && (!titleIdx[asin] || (r[0] === acct() && v.q > 0))) titleIdx[asin] = String(t);
+            if (!(v.p > 0)) return;
             (ix[asin] = ix[asin] || []).push({ acct: r[0], p: +v.p, q: +v.q || 0 }); }); });
           prevIdx = ix; prevAt = Date.now(); prevBusy = false; draw(); })
         .catch(function () { prevBusy = false; });
@@ -432,7 +442,8 @@
     function row(it) {
       var ed = edits[it.id] || {}, f = info(it.id);
       var pv = prevFor(f.asin), own = ed.price != null ? ed.price : it.price;
-      return { id: it.id, name: f.name, src: ed.cost != null ? "typed" : f.src, cost: ed.cost != null ? ed.cost : f.cost, mrp: ed.mrp != null ? ed.mrp : f.mrp,
+      var am = amzInfo(f.asin);
+      return { id: it.id, name: f.name, title: am.t, img: am.img, mapped: !!(f.asin && STORE.asinLotsMap && STORE.asinLotsMap[f.asin]), src: ed.cost != null ? "typed" : f.src, cost: ed.cost != null ? ed.cost : f.cost, mrp: ed.mrp != null ? ed.mrp : f.mrp,
         price: own != null ? own : (pv ? pv.p : null), prev: pv, asin: f.asin, prefilled: own == null && !!pv, typedCost: ed.cost != null ? ed.cost : null, typedMrp: ed.mrp != null ? ed.mrp : null };
     }
     // the robot's maths (spapi-sync.js orderProfit / minProfitAt / feeFor) for a new 0.5 kg listing
@@ -485,7 +496,11 @@
         '<div class="aap-scroll"><table><thead><tr><th>#</th><th>Product</th><th>Purchase cost ₹</th><th>MRP ₹</th><th>Sale price ₹</th><th>Profit check</th><th></th></tr></thead><tbody>' +
         (shown.length ? shown.map(function (d) { var c = check(d), asin = d.asin || "";
           return '<tr data-id="' + esc2(d.id) + '" class="' + (c[0] === "bad" ? "r-bad" : "") + '"><td class="num">' + d.i + "</td>" +
-            '<td><div class="aap-n">' + esc2(d.name || "Not mapped yet") + '</div><div class="aap-s">' + (asin ? '<a href="https://www.amazon.in/dp/' + esc2(asin) + '" target="_blank" rel="noopener">' + esc2(d.id) + "</a>" : esc2(d.id)) + (d.src ? " · cost from " + esc2(d.src) : "") + "</div></td>" +
+            '<td><div class="aap-p">' + (d.img ? '<img class="aap-img" src="' + esc2(d.img.replace(/\.([a-z]+)$/i, "._SL96_.$1")) + '" alt="" loading="lazy" onerror="this.remove()">' : '<span class="aap-img e"><i class="ti ti-photo"></i></span>') + '<div class="aap-pi">' +
+              '<div class="aap-n"' + (d.title ? ' title="' + esc2(d.title) + '">' + esc2(d.title) : ' style="color:#8B909B;font-weight:500">' + (asin ? "Amazon title not known — not listed by us yet" : "Barcode — no product found")) + "</div>" +
+              '<div class="aap-s">' + (asin ? '<a href="https://www.amazon.in/dp/' + esc2(asin) + '" target="_blank" rel="noopener">' + esc2(d.id) + "</a>" : esc2(d.id)) + "</div>" +
+              '<div class="aap-mp ' + (d.name ? "m-ok" : "m-no") + '">' + (d.name ? "<b>" + (d.mapped ? "Mapped" : "Found") + ":</b> " + esc2(d.name) + (d.src ? " · cost from " + esc2(d.src) : "") : "<b>Not mapped</b> — no purchase cost") +
+              (asin ? ' <button type="button" class="aap-map" data-map="' + esc2(asin) + '">' + (d.name ? "Change" : "Map product") + "</button>" : "") + "</div></div></div></td>" +
             '<td><input type="number" step="0.01" min="0" data-f="cost" value="' + (d.cost != null ? d.cost : "") + '" placeholder="type cost"' + (d.cost == null ? ' class="need"' : "") + "></td>" +
             '<td><input type="number" step="0.01" min="0" data-f="mrp" value="' + (d.mrp != null ? d.mrp : "") + '" placeholder="MRP"></td>' +
             '<td><input type="number" step="1" min="1" data-f="price" value="' + (d.price > 0 ? d.price : "") + '" placeholder="required"' + (d.price > 0 ? (d.prefilled ? ' class="pre"' : "") : ' class="need"') + ">" +
@@ -493,6 +508,20 @@
             '<td><span class="aap-tag ' + c[0] + '">' + esc2(c[1]) + '</span>' + sugHtml(d) + '</td><td><button type="button" class="aap-x" data-rm title="Remove this item">×</button></td></tr>'; }).join("")
           : '<tr><td colspan="7" class="aap-empty">Nothing in this filter.</td></tr>') +
         "</tbody></table></div>";
+    }
+    /* Map button: the page's own mapping window (LOTS / vendor, photos, packs), shown ABOVE this window; the row refreshes when it closes */
+    function openMap(asin) {
+      if (typeof openSpapiMatchModal !== "function") return toast("Mapping window not ready — reload the page", true);
+      var t = amzInfo(asin).t, before = ""; try { before = JSON.stringify(STORE.asinLotsMap[asin] || null); } catch (x) {}
+      openSpapiMatchModal(asin);
+      var mm = $("spapiMatchModal"); if (mm) mm.style.zIndex = "1700";
+      setTimeout(function () { var tt = $("spapiMatchModalTitle"); if (tt && t && /^ASIN:/.test(tt.textContent)) tt.textContent = t;
+        var i = $("spapiMatchModalInput"); if (i && !i.value && t && !(STORE.asinLotsMap || {})[asin]) { i.value = t.split(/[|,(]/)[0].trim().slice(0, 60); i.dispatchEvent(new Event("input", { bubbles: true })); } }, 150);
+      var n = 0, seen = false, tw = setInterval(function () { var m2 = $("spapiMatchModal"); if (!m2) { if (++n > 20) clearInterval(tw); return; }
+        if (getComputedStyle(m2).display !== "none") { seen = true; return; } if (!seen) { if (++n > 20) clearInterval(tw); return; } clearInterval(tw); m2.style.zIndex = "";
+        setTimeout(function () { var after = ""; try { after = JSON.stringify(STORE.asinLotsMap[asin] || null); } catch (x) {}
+          if (after === before || after === "null") toast("Mapping not saved — press Map again and then Save mapping", true); else toast("✓ Mapping saved — cost updated");
+          draw(); }, 400); }, 300);
     }
     function applyAll() { var v = parseFloat(($("aapAll") || {}).value); if (!(v > 0)) return toast("Type a price first", true);
       parse().items.forEach(function (it) { (edits[it.id] = edits[it.id] || {}).price = v; }); draw(); }
@@ -538,6 +567,7 @@
       if (sa) { var n0 = 0, skip = 0; parse().items.forEach(function (it) { var d = row(it); if (sa.dataset.sugall === "red" && check(d)[0] !== "bad" && d.price > 0) return; var g = suggest(d); if (!g) { skip++; return; } (edits[it.id] = edits[it.id] || {}).price = g.p; n0++; });
         draw(); toast("✓ Suggested price set on " + n0 + " item" + (n0 === 1 ? "" : "s") + (skip ? " · " + skip + " skipped (no cost, or no profitable price under MRP)" : ""), !!skip && !n0); return; }
       var ch = e.target.closest("[data-flt]"); if (ch) { flt = ch.dataset.flt; draw(); return; }
+      var mp = e.target.closest("[data-map]"); if (mp) { openMap(mp.dataset.map); return; }
       if (!e.target.closest("[data-rm]")) return; var id = e.target.closest("tr").dataset.id;
       ta.value = ta.value.split(/\r?\n/).filter(function (l) { return l.toUpperCase().split(/[\s,;\t]+/).indexOf(id) < 0; }).join("\n"); delete edits[id]; draw(); });
     ta.addEventListener("input", function () { clearTimeout(tmr); tmr = setTimeout(draw, 180); });

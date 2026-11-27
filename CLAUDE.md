@@ -399,6 +399,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   (saved per browser, localStorage aikm_aa_sugp) + "Use for red / empty" + "Use for all"; each row shows "Suggested Rs X · Rs Y profit [Use]" =
   lowest price >= cost earning the chosen profit (never under the Rs 15/10% rule), capped at MRP; if the target can't be reached under MRP the
   lowest SAFE price is shown "(max)"; none -> "No profitable price under MRP". Same maths as check(). 0 Firebase.
+  TITLE + MAP (owner 27 Nov 2026 "option for product title and mapping"): each row shows the Amazon title + photo (this account's
+  spapiInventoryRaw, else listingIndex `nx` title of any account, read in the same 5 prev-price reads; unknown = not listed by us yet), then
+  "Mapped: <LOTS/vendor item> · cost from X" or "Not mapped" + "Map product"/"Change" button = the page's openSpapiMatchModal(asin) raised
+  to z-index 1700 above the Add ASIN window (search pre-filled with the title); the row redraws when it closes (cost fills in). 0 extra Firebase.
   REVIEW MODE (owner 26 Nov 2026 "too compact, unable to review"): while ASINs are pasted, `.aa-box.aap-on` widens the window (1320 px, 94vh)
   and hides everything below #aapBox (name search, rule text, request list) so the table fills the window; filter chips All / Ready /
   Need price / No cost / Fix (red); 14 px rows, wrapped names, ASIN links to Amazon. Emptying the paste box brings the normal window back. Do not put this in a Shopify snippet - it lives here (an aikm-aa-multiprice snippet was made by mistake, unused).
