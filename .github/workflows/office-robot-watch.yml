@@ -1,0 +1,52 @@
+name: Office Robot Watch
+# Every 30 min: are LOTS jobs (cart upload, price syncs, heartbeat) waiting for the office
+# computer for more than 20 min? Then the office robot is offline -> Telegram alert.
+# Alerts once when it goes offline, then a reminder every ~3 hours while it stays offline.
+on:
+  schedule:
+    - cron: '12,42 * * * *'
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check waiting office jobs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          REPO=pransu49/lots-price-sync
+          API=https://api.github.com/repos/$REPO/actions
+          H=(-s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json")
+          now=$(date -u +%s)
+          ist_hour=$(TZ=Asia/Kolkata date +%-H)
+          ids=$( (curl "${H[@]}" "$API/runs?status=queued&per_page=50"; curl "${H[@]}" "$API/runs?status=in_progress&per_page=50") | jq -r '.workflow_runs[]?.id' | sort -u)
+          oldest=0; count=0
+          for id in $ids; do
+            while IFS=$'\t' read -r name created; do
+              [ -z "$name" ] && continue
+              # the heartbeat only counts in working hours (the computer may be off at night)
+              if [ "$name" = "alive" ] && [ "$ist_hour" -lt 9 ]; then continue; fi
+              age=$(( (now - $(date -u -d "$created" +%s)) / 60 ))
+              [ "$age" -lt 20 ] && continue
+              count=$((count+1))
+              [ "$age" -gt "$oldest" ] && oldest=$age
+            done < <(curl "${H[@]}" "$API/runs/$id/jobs" | jq -r '.jobs[]? | select(.status=="queued" and ((.labels // []) | index("lots-office"))) | [.name, .created_at] | @tsv')
+          done
+          echo "Office jobs waiting > 20 min: $count (oldest $oldest min)"
+          [ "$count" -eq 0 ] && exit 0
+          # first alert when 20-49 min old, then a reminder every 3 hours
+          if [ "$oldest" -ge 50 ] && [ $(( (oldest - 20) % 180 )) -ge 30 ]; then echo "Already alerted"; exit 0; fi
+          [ -n "$TELEGRAM_BOT_TOKEN" ] || { echo "Telegram not set"; exit 0; }
+          msg="🔴 AIKM office robot is OFFLINE
+          ${count} LOTS job(s) waiting for ${oldest} min (cart upload / picking list / price sync).
+
+          Fix: check the office computer - internet on? If yes, restart it (Start > Power > Restart). Waiting jobs run by themselves once it is back.
+          https://github.com/$REPO/actions"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" --data-urlencode "text=${msg}" > /dev/null
+          echo "Alert sent"
