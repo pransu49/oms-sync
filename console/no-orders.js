@@ -12,7 +12,7 @@
   var ACC = [["praso", "Praso"], ["sastastore", "Sasta Store"], ["vishal", "Vishal"], ["munda", "Munda"], ["aikm", "AIKM"]];
   try { (SPAPI_ACCOUNTS || []).forEach(function (a) { if (a && a.label && !ACC.some(function (x) { return x[0] === a.label; })) ACC.push([a.label, a.name || a.label]); }); } catch (e) {}
   var accName = function (l) { var f = ACC.find(function (x) { return x[0] === l; }); return f ? f[1] : l; };
-  var DATA = null, at = 0, busy = null, days = 15, accF = "all", q = "", shown = 100, waitAcc = [], rel = 0;  // rel = relisted within N days (0 = any)
+  var DATA = null, at = 0, busy = null, days = 15, accF = "all", q = "", shown = 100, waitAcc = [], relM = "", relN = 3;  // owner 27 Nov 2026: relisted "" any / "le" within N days / "gt" more than N days ago (N typed)
 
   var css = document.createElement("style");
   css.textContent =
@@ -37,6 +37,7 @@
     ".no-last{font-weight:600;color:#B42318}.no-last.never{color:#6B7280}.no-new{display:inline-block;font-size:10.5px;font-weight:700;background:#E7F0FB;color:#1F4E8C;border-radius:5px;padding:1px 6px;margin-left:6px}" +
     ".no-cp{all:unset;cursor:pointer;margin-left:6px;font:600 11px Inter,sans-serif;color:#B08A36;border:1px solid #E7D7AE;background:#FBF6EA;border-radius:6px;padding:1px 7px}.no-cp:hover{background:#C9A24B;color:#fff;border-color:#C9A24B}.no-cp.ok{background:#E7F4EC;color:#1E7A4B;border-color:#B7DEC5}" +
     ".no-cpall{all:unset;cursor:pointer;font:600 12.5px Inter,sans-serif;padding:8px 14px;border-radius:9px;border:1px solid #C9A24B;color:#14213D;background:#fff}.no-cpall:hover{background:#FBF6EA}" +
+    ".no-rl{display:inline-flex;align-items:center;gap:6px;font:600 12.5px Inter,sans-serif;color:#4A5468}.no-rl select,.no-rl input{height:32px;border:1px solid #E7E1D3;border-radius:8px;padding:0 8px;font:600 12.5px Inter,sans-serif;color:#14213D;background:#fff;outline:none}.no-rl input{width:58px}.no-rl input:disabled{background:#F4F2EC;color:#9AA0AA}.no-rl select:focus,.no-rl input:focus{border-color:#C9A24B}" +
     ".no-rel{display:inline-block;font-size:12px;font-weight:700;background:#F6EEDB;color:#8A6A1F;border-radius:6px;padding:2px 8px}" +
     ".no-empty{padding:70px 20px;text-align:center;color:#8B909B}.no-more{all:unset;cursor:pointer;display:block;margin:14px auto;font:600 12.5px Inter,sans-serif;padding:8px 16px;border-radius:9px;border:1px solid #E7E1D3}";
   document.head.appendChild(css);
@@ -80,7 +81,7 @@
   }
   function rowsNow() {
     var s = q.trim().toLowerCase();
-    return build().filter(function (g) { return !rel || (g.relisted && g.nage != null && g.nage <= rel); }).filter(function (g) { return !s || (g.name + " " + g.asin + " " + g.ls.map(function (l) { return l.sku; }).join(" ")).toLowerCase().indexOf(s) >= 0; })
+    return build().filter(function (g) { return !relM || (g.relisted && g.nage != null && (relM === "le" ? g.nage <= relN : g.nage > relN)); }).filter(function (g) { return !s || (g.name + " " + g.asin + " " + g.ls.map(function (l) { return l.sku; }).join(" ")).toLowerCase().indexOf(s) >= 0; })
       .sort(function (a, b) { return b.stock - a.stock || (b.since == null ? 999 : b.since) - (a.since == null ? 999 : a.since); });
   }
   /* owner 26 Nov 2026 "that was here": the header menu block moves its buttons into .ap-act after load; a button made before that
@@ -106,7 +107,6 @@
     o.addEventListener("click", function (e) {
       if (e.target === o || e.target.closest("#noX")) { o.style.display = "none"; return; }
       var c = e.target.closest("[data-d]"); if (c) { days = +c.dataset.d; shown = 100; draw(); paint(); return; }
-      c = e.target.closest("[data-rel]"); if (c) { rel = +c.dataset.rel; shown = 100; draw(); return; }
       c = e.target.closest("[data-a]"); if (c) { accF = c.dataset.a; shown = 100; draw(); return; }
       if (e.target.closest("#noMore")) { shown += 100; draw(); return; }
       if (e.target.closest("#noDl")) dl();
@@ -114,7 +114,10 @@
       if (e.target.closest("#noCpAll")) { var all = rowsNow().map(function (g) { return g.asin; }); if (!all.length) return toast("Nothing to copy", true);
         copy(all.join("\n"), function () { toast("✓ " + all.length + " ASIN" + (all.length > 1 ? "s" : "") + " copied"); }); }
     });
-    o.addEventListener("input", function (e) { if (e.target.id === "noQ") { q = e.target.value; shown = 100; drawBody(); } });
+    o.addEventListener("input", function (e) {
+      if (e.target.id === "noQ") { q = e.target.value; shown = 100; drawBody(); return; }
+      if (e.target.id === "noRelN") { var v = parseInt(e.target.value, 10); if (v >= 0) { relN = v; shown = 100; drawBody(); } } });
+    o.addEventListener("change", function (e) { if (e.target.id === "noRelM") { relM = e.target.value; $("noRelN").disabled = !relM; shown = 100; drawBody(); if (relM) $("noRelN").focus(); } });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape" && o.style.display === "flex") o.style.display = "none"; });
     return o;
   }
@@ -124,8 +127,9 @@
     $("noBar").innerHTML = [7, 15, 30, 60].map(function (d) { return '<button type="button" class="no-chip' + (d === days ? " on" : "") + '" data-d="' + d + '">' + d + " days</button>"; }).join("") +
       '<span class="no-sep"></span><button type="button" class="no-chip' + (accF === "all" ? " on" : "") + '" data-a="all">All accounts<b>' + counts.all + "</b></button>" +
       ACC.map(function (a) { return counts[a[0]] ? '<button type="button" class="no-chip' + (accF === a[0] ? " on" : "") + '" data-a="' + a[0] + '">' + esc(a[1]) + "<b>" + counts[a[0]] + "</b></button>" : ""; }).join("") +
-      '<span class="no-sep"></span><span style="font:600 12px Inter,sans-serif;color:#6B7280">Relisted</span>' +
-      [0, 1, 2, 3, 5, 10].map(function (d) { return '<button type="button" class="no-chip' + (d === rel ? " on" : "") + '" data-rel="' + d + '" title="' + (d ? "Newest listing created in the last " + d + " day" + (d > 1 ? "s" : "") : "Any listing date") + '">' + (d ? d + "d" : "Any") + "</button>"; }).join("") +
+      '<span class="no-sep"></span><span class="no-rl">Relisted <select id="noRelM" title="Show products relisted within / more than N days ago">' +
+        [["", "Any"], ["le", "Within"], ["gt", "More than"]].map(function (o) { return '<option value="' + o[0] + '"' + (o[0] === relM ? " selected" : "") + ">" + o[1] + "</option>"; }).join("") +
+        '</select><input type="number" id="noRelN" min="0" max="365" step="1" value="' + relN + '"' + (relM ? "" : " disabled") + '> days ago</span>' +
       '<input class="no-q" id="noQ" placeholder="Search product, ASIN or SKU…" value="' + esc(q) + '"><button type="button" class="no-dl" id="noDl">⬇ Download CSV</button>';
     $("noBar").querySelector(".no-dl").insertAdjacentHTML("beforebegin", '<button type="button" class="no-cpall" id="noCpAll" title="Copy every ASIN in this list, one per line">⧉ Copy all ASINs</button>');
     $("noNote").innerHTML = waitAcc.length ? '<div class="no-note">' + esc(waitAcc.join(", ")) + ": last-order data arrives with the next sync of " + (waitAcc.length > 1 ? "those accounts" : "that account") + " (about 15 min) — not counted yet.</div>" : "";
@@ -133,7 +137,7 @@
   }
   function drawBody() {
     var R = rowsNow(), part = R.slice(0, shown);
-    $("noBody").innerHTML = !R.length ? '<div class="no-empty">' + (DATA ? (rel ? "No ASIN relisted in the last " + rel + " day" + (rel > 1 ? "s" : "") + " is without orders." : "Every in-stock ASIN got an order in the last " + days + " days.") : "Loading…") + "</div>" :
+    $("noBody").innerHTML = !R.length ? '<div class="no-empty">' + (DATA ? (relM ? "No relisted ASIN " + (relM === "le" ? "within " : "more than ") + relN + " days ago is without orders." : "Every in-stock ASIN got an order in the last " + days + " days.") : "Loading…") + "</div>" :
       '<table class="no-t"><thead><tr><th>Product</th><th>Listed on (price · stock)</th><th class="r">Total stock</th><th>Last order</th><th>Listed / relisted</th></tr></thead><tbody>' +
       part.map(function (g) {
         var img = g.img ? '<img loading="lazy" alt="" src="' + esc(String(g.img).replace(/\.([a-z]+)$/i, "._SL120_.$1")) + '" onerror="this.remove()">' : "—";
