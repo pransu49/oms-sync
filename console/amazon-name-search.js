@@ -373,7 +373,11 @@
       '#aapBox .aap-tag{display:inline-block;font-size:13px;font-weight:600;border-radius:999px;padding:6px 12px;white-space:nowrap}' +
       '#aapBox .ok{background:#E7F4EC;color:#1E7A4B}#aapBox .warn{background:#FFF4DB;color:#A86A12}#aapBox .bad{background:#FDECEA;color:#B42318}#aapBox .na{background:#F1F2F4;color:#6B7280}' +
       '#aapBox .aap-x{all:unset;cursor:pointer;color:var(--muted,#8B909B);font-size:18px;padding:4px 8px;border-radius:8px}#aapBox .aap-x:hover{color:#B42318;background:#FDECEA}' +
-      '#aapBox .aap-empty{padding:40px;text-align:center;color:var(--muted,#8B909B)}</style>');
+      '#aapBox .aap-empty{padding:40px;text-align:center;color:var(--muted,#8B909B)}' +
+      '#aapBox .aap-sug{display:inline-flex;align-items:center;gap:6px}#aapBox .aap-sug input{width:64px}#aapBox .aap-sep{width:1px;height:22px;background:var(--line,#E6E1D6);margin:0 6px}' +
+      '#aapBox .aa-mini.gold{background:#FBF6EA;border-color:#E2CF9F;color:#7A5B12}#aapBox .aa-mini.gold:hover{background:var(--gold,#C9A24B);color:#fff;border-color:var(--gold,#C9A24B)}' +
+      '#aapBox .aap-sg{margin-top:6px;font-size:12px;color:#4A5468;white-space:nowrap}#aapBox .aap-sg b{color:var(--navy,#14213D)}#aapBox .aap-sg.low b{color:#A86A12}#aapBox .aap-sg.no{color:#B42318}#aapBox .aap-sg.is{color:#1E7A4B;font-weight:600}' +
+      "#aapBox .aap-use{all:unset;cursor:pointer;margin-left:4px;font:700 11px 'Inter',sans-serif;color:#7A5B12;border:1px solid #E2CF9F;background:#FBF6EA;border-radius:6px;padding:1px 8px}#aapBox .aap-use:hover{background:var(--gold,#C9A24B);color:#fff}" + '</style>');
     form.insertAdjacentHTML("afterend", '<div id="aapBox"></div>');
     var box = $("aapBox"), edits = {}, tmr = null, flt = "all";
     /* Previous sale prices (owner 26 Nov 2026: "robot to prefill previous sale prices, we change if required"): our own price for the
@@ -437,6 +441,17 @@
     var profitAt = function (c, p) { return Math.round(p + shipChg() - c - shipCost() - fee(p)); };
     var minAt = function (p) { return Math.min(15, 0.10 * (p + shipChg())); };
     var floorFor = function (c) { for (var p = Math.max(1, Math.ceil(c)); p < c * 4 + 500; p++) if (profitAt(c, p) >= minAt(p)) return p; return null; };
+    /* Suggested price (owner 27 Nov 2026 "suggested price including profit for listing, so we can do it in bulk"): lowest price >= cost that
+       earns the chosen profit per order (box, default Rs 20; never under the Rs 15 / 10% rule), capped at MRP. If the target can't be reached
+       under MRP, the lowest SAFE price is suggested instead (flag low:true); none at all = null. */
+    var sugP = 20; try { var sv = localStorage.getItem("aikm_aa_sugp"); if (sv !== null && sv !== "" && +sv >= 0) sugP = +sv; } catch (e) {}
+    function suggest(d) {
+      if (d.cost == null) return null;
+      var top = d.mrp ? Math.floor(d.mrp) : Math.ceil(d.cost * 4 + 500), safe = null;
+      for (var p = Math.max(1, Math.ceil(d.cost)); p <= top; p++) { var pf = profitAt(d.cost, p);
+        if (pf >= minAt(p)) { if (safe == null) safe = p; if (pf >= sugP) return { p: p, pf: pf }; } }
+      return safe != null ? { p: safe, pf: profitAt(d.cost, safe), low: true } : null;
+    }
     function check(d) {
       if (!(d.price > 0)) return ["na", "Enter price"];
       if (d.mrp && d.price > d.mrp) return ["bad", "Above MRP ₹" + d.mrp];
@@ -445,6 +460,13 @@
       var pf = profitAt(d.cost, d.price);
       if (pf < minAt(d.price)) return ["bad", "Profit ₹" + pf + " · min price ₹" + (floorFor(d.cost) || "?")];
       return [pf < 20 ? "warn" : "ok", "Profit ₹" + pf + " / order"];
+    }
+    function sugHtml(d) {
+      var g = suggest(d);
+      if (!g) return d.cost == null ? "" : '<div class="aap-sg no">No profitable price under MRP' + (d.mrp ? " ₹" + d.mrp : "") + "</div>";
+      if (d.price === g.p) return '<div class="aap-sg is">✓ Suggested price</div>';
+      return '<div class="aap-sg' + (g.low ? " low" : "") + '" title="' + (g.low ? "₹" + sugP + " profit is not possible under MRP - this is the lowest safe price" : "Lowest price that earns ₹" + sugP + "+ per order") + '">Suggested <b>₹' + g.p + "</b> · ₹" + g.pf + " profit" + (g.low ? " (max)" : "") +
+        ' <button type="button" class="aap-use" data-sug="' + esc2(d.id) + '">Use</button></div>';
     }
     function kind(d) { var c = check(d)[0]; return !(d.price > 0) ? "need" : c === "bad" ? "bad" : d.cost == null ? "nocost" : "ok"; }
     function draw() {
@@ -457,7 +479,8 @@
       var chip = function (k, label, cls) { return k === "all" || n[k] ? '<button type="button" class="aap-chip ' + (cls || "") + (flt === k ? " on" : "") + '" data-flt="' + k + '">' + label + "<b>" + n[k] + "</b></button>" : ""; };
       var shown = rows.map(function (d, i) { d.i = i + 1; return d; }).filter(function (d) { return flt === "all" || kind(d) === flt; });
       box.innerHTML = '<div class="aap-h"><div class="aap-chips">' + chip("all", "All items") + chip("ok", "Ready", "c-ok") + chip("need", "Need price", "c-warn") + chip("nocost", "No cost", "c-warn") + chip("bad", "Fix (red)", "c-bad") + "</div>" +
-        '<span class="aap-all">Same price for all ₹<input type="number" min="1" step="1" id="aapAll" placeholder="optional"><button type="button" class="aa-mini" id="aapAllGo">Apply</button></span></div>' +
+        '<span class="aap-all"><span class="aap-sug">Suggested price for ₹<input type="number" min="0" step="1" id="aapSugP" value="' + sugP + '" title="Profit per order you want"> profit · <button type="button" class="aa-mini gold" data-sugall="red" title="Rows that are red or have no price">Use for red / empty</button><button type="button" class="aa-mini gold" data-sugall="all" title="Every row, also ones with your own or previous price">Use for all</button></span>' +
+        '<span class="aap-sep"></span>Same price for all ₹<input type="number" min="1" step="1" id="aapAll" placeholder="optional"><button type="button" class="aa-mini" id="aapAllGo">Apply</button></span></div>' +
         '<div class="aap-note">' + (prevIdx ? "Gold boxes = our previous sale price — change any you want." : "Loading previous sale prices…") + " Profit uses the robot's maths (buyer shipping, courier, Amazon fees). Clear the box above to go back to search.</div>" +
         '<div class="aap-scroll"><table><thead><tr><th>#</th><th>Product</th><th>Purchase cost ₹</th><th>MRP ₹</th><th>Sale price ₹</th><th>Profit check</th><th></th></tr></thead><tbody>' +
         (shown.length ? shown.map(function (d) { var c = check(d), asin = d.asin || "";
@@ -467,7 +490,7 @@
             '<td><input type="number" step="0.01" min="0" data-f="mrp" value="' + (d.mrp != null ? d.mrp : "") + '" placeholder="MRP"></td>' +
             '<td><input type="number" step="1" min="1" data-f="price" value="' + (d.price > 0 ? d.price : "") + '" placeholder="required"' + (d.price > 0 ? (d.prefilled ? ' class="pre"' : "") : ' class="need"') + ">" +
               (d.prev ? '<div class="aap-s" title="Our earlier sale price for this ASIN">prev ₹' + d.prev.p + " · " + esc2(accName(d.prev.acct)) + "</div>" : "") + "</td>" +
-            '<td><span class="aap-tag ' + c[0] + '">' + esc2(c[1]) + '</span></td><td><button type="button" class="aap-x" data-rm title="Remove this item">×</button></td></tr>'; }).join("")
+            '<td><span class="aap-tag ' + c[0] + '">' + esc2(c[1]) + '</span>' + sugHtml(d) + '</td><td><button type="button" class="aap-x" data-rm title="Remove this item">×</button></td></tr>'; }).join("")
           : '<tr><td colspan="7" class="aap-empty">Nothing in this filter.</td></tr>') +
         "</tbody></table></div>";
     }
@@ -497,6 +520,8 @@
       } catch (e) { toast("⚠ Not saved: " + (e.message || e), true); } finally { go.classList.remove("busy"); }
     }
     box.addEventListener("input", function (e) {
+      if (e.target.id === "aapSugP") { var v0 = parseFloat(e.target.value); if (v0 >= 0) { sugP = v0; try { localStorage.setItem("aikm_aa_sugp", v0); } catch (x) {}
+          clearTimeout(tmr); tmr = setTimeout(function () { var el = $("aapSugP"), pos = el && el.selectionStart; draw(); var n2 = $("aapSugP"); if (n2) { n2.focus(); try { n2.setSelectionRange(pos, pos); } catch (x) {} } }, 450); } return; }
       var tr = e.target.closest("tr[data-id]"), f = e.target.dataset.f; if (!tr || !f) return;
       var v = parseFloat(e.target.value); (edits[tr.dataset.id] = edits[tr.dataset.id] || {})[f] = e.target.value !== "" && v >= 0 ? v : (f === "price" ? 0 : null);
       var it = parse().items.find(function (x) { return x.id === tr.dataset.id; }) || { id: tr.dataset.id }, c = check(row(it)), tag = tr.querySelector(".aap-tag");
@@ -507,6 +532,11 @@
       var all = [].slice.call(box.querySelectorAll('input[data-f="price"]')), i = all.indexOf(e.target); if (i > -1 && i < all.length - 1) all[i + 1].focus(); else add(); });
     box.addEventListener("click", function (e) {
       if (e.target.closest("#aapAllGo")) return applyAll();
+      var su = e.target.closest("[data-sug]");
+      if (su) { var it0 = parse().items.find(function (x) { return x.id === su.dataset.sug; }), g0 = it0 && suggest(row(it0)); if (g0) { (edits[it0.id] = edits[it0.id] || {}).price = g0.p; draw(); } return; }
+      var sa = e.target.closest("[data-sugall]");
+      if (sa) { var n0 = 0, skip = 0; parse().items.forEach(function (it) { var d = row(it); if (sa.dataset.sugall === "red" && check(d)[0] !== "bad" && d.price > 0) return; var g = suggest(d); if (!g) { skip++; return; } (edits[it.id] = edits[it.id] || {}).price = g.p; n0++; });
+        draw(); toast("✓ Suggested price set on " + n0 + " item" + (n0 === 1 ? "" : "s") + (skip ? " · " + skip + " skipped (no cost, or no profitable price under MRP)" : ""), !!skip && !n0); return; }
       var ch = e.target.closest("[data-flt]"); if (ch) { flt = ch.dataset.flt; draw(); return; }
       if (!e.target.closest("[data-rm]")) return; var id = e.target.closest("tr").dataset.id;
       ta.value = ta.value.split(/\r?\n/).filter(function (l) { return l.toUpperCase().split(/[\s,;\t]+/).indexOf(id) < 0; }).join("\n"); delete edits[id]; draw(); });

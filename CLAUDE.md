@@ -395,6 +395,10 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   earlier price for that ASIN from main `listingIndex/<acct>` of all accounts (this account in-stock -> this account any -> lowest in-stock on
   other accounts -> any); barcode rows use the LOTS item's ASIN. Shown as a tinted box + "prev ₹x · account"; typed / pasted prices win, a cleared
   box stays empty. Firebase: ~5 reads per Add ASIN use (cached 10 min).
+  SUGGESTED PRICE (owner 27 Nov 2026 "suggested price including profit, so we can do it in bulk"): header box "Suggested price for Rs [20] profit"
+  (saved per browser, localStorage aikm_aa_sugp) + "Use for red / empty" + "Use for all"; each row shows "Suggested Rs X · Rs Y profit [Use]" =
+  lowest price >= cost earning the chosen profit (never under the Rs 15/10% rule), capped at MRP; if the target can't be reached under MRP the
+  lowest SAFE price is shown "(max)"; none -> "No profitable price under MRP". Same maths as check(). 0 Firebase.
   REVIEW MODE (owner 26 Nov 2026 "too compact, unable to review"): while ASINs are pasted, `.aa-box.aap-on` widens the window (1320 px, 94vh)
   and hides everything below #aapBox (name search, rule text, request list) so the table fills the window; filter chips All / Ready /
   Need price / No cost / Fix (red); 14 px rows, wrapped names, ASIN links to Amazon. Emptying the paste box brings the normal window back. Do not put this in a Shopify snippet - it lives here (an aikm-aa-multiprice snippet was made by mistake, unused).
