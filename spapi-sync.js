@@ -129,7 +129,7 @@ async function loadSnapshot() {
     // (GitHub cache, see workflows); it is used only when its run id equals the meta doc's run id (= identical data).
     try {
       const c = JSON.parse(require('fs').readFileSync(SNAP_CACHE_FILE, 'utf8'));
-      if (c && c.run === prevSnapMeta.run && c.account === ACCOUNT_LABEL && c.snap) {
+      if (c && c.run === (prevSnapMeta.rev || prevSnapMeta.run) && c.account === ACCOUNT_LABEL && c.snap) {
         SNAP_KINDS.forEach((k) => { Object.assign(SNAP[k], c.snap[k] || {}); });
         console.log(`Snapshot loaded from saved copy (1 read, 0 chunk downloads): inventory ${Object.keys(SNAP.inventory).length}, pricing ${Object.keys(SNAP.pricing).length}, orders ${Object.keys(SNAP.orders).length}`);
         return;
@@ -185,23 +185,37 @@ async function writeSnapshot() {
   for (const [id, o] of Object.entries(SNAP.orders)) {
     if (!o.purchaseDate || o.purchaseDate < cutoff) delete SNAP.orders[id];
   }
-  const run = Date.now().toString(36);
-  const chunks = {}, counts = {};
+  // Download saver #3 (27 Nov 2026): chunk documents now keep the SAME names every run (run id 's') and a chunk is only rewritten when its
+  // content changed, so a page / robot that keeps a copy (Firestore cache) downloads only the changed chunks instead of the whole snapshot
+  // (Sasta Store alone is ~20 MB; every Amazon page open used to download all of it because every run created brand-new documents).
+  // Orders sit in a fixed slot per purchase DAY (day number mod 90) so a new order only changes its own day's chunk. `rev` = unique id of this run.
+  const run = 's', rev = Date.now().toString(36);
+  const crypto = require('crypto');
+  const prevHashes = (prevSnapMeta && prevSnapMeta.run === run && prevSnapMeta.hashes) || {};
+  const chunks = {}, counts = {}, hashes = {}, writes = [];
+  const byId = (a, b) => (String(a._id) < String(b._id) ? -1 : String(a._id) > String(b._id) ? 1 : 0);
   for (const kind of SNAP_KINDS) {
-    const items = Object.values(SNAP[kind]);
+    const items = Object.values(SNAP[kind]).sort(byId);
     counts[kind] = items.length;
-    const parts = chunkItems(items);
+    let parts;
+    if (kind === 'orders') {
+      const SLOTS = 90, slots = Array.from({ length: SLOTS }, () => []), extra = [];
+      for (const it of items) { const t = Date.parse(it.purchaseDate); const d = Number.isFinite(t) ? Math.floor(t / 864e5) : 0; slots[((d % SLOTS) + SLOTS) % SLOTS].push(it); }
+      parts = slots.map((list) => { const sub = chunkItems(list); for (let j = 1; j < sub.length; j++) extra.push(sub[j]); return sub[0] || []; }).concat(extra);
+    } else parts = chunkItems(items);
     chunks[kind] = parts.length;
-    // speed (8 Nov 2026): 4 chunk writes at a time instead of one by one
-    for (let i = 0; i < parts.length; i += 4) {
-      await Promise.all(parts.slice(i, i + 4).map((items, k) => db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${sidSafe(kind)}_${run}_${i + k}`).set({
-        account: ACCOUNT_LABEL, kind, run, index: i + k, items,
-      })));
-    }
+    hashes[kind] = parts.map((p) => crypto.createHash('md5').update(JSON.stringify(p)).digest('hex').slice(0, 12));
+    parts.forEach((p, i) => {
+      if ((prevHashes[kind] || [])[i] === hashes[kind][i]) return;   // unchanged -> not rewritten, not downloaded again by anyone
+      writes.push({ id: `${ACCOUNT_LABEL}_${sidSafe(kind)}_${run}_${i}`, data: { account: ACCOUNT_LABEL, kind, run, index: i, items: p } });
+    });
   }
+  // speed (8 Nov 2026): 4 chunk writes at a time instead of one by one
+  for (let i = 0; i < writes.length; i += 4) await Promise.all(writes.slice(i, i + 4).map((w) => db.collection(SNAP_COL).doc(w.id).set(w.data)));
+  console.log(`Snapshot chunks: ${writes.length} written, ${Object.values(hashes).reduce((a, h) => a + h.length, 0) - writes.length} unchanged (not rewritten)`);
   // Switch the page over to the new chunks only after all of them are written.
   await db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_meta`).set({
-    account: ACCOUNT_LABEL, run, chunks, counts, syncedAt: Date.now(), mode: SYNC_MODE,
+    account: ACCOUNT_LABEL, run, rev, chunks, hashes, counts, syncedAt: Date.now(), mode: SYNC_MODE,
     ordersSyncedAt: ordersSyncedOk ? RUN_STARTED : ((prevSnapMeta && prevSnapMeta.ordersSyncedAt) || null),
     deliveryBackfilled: !!((prevSnapMeta && prevSnapMeta.deliveryBackfilled) || (deliveryBackfillRun && ordersSyncedOk)),
     fullSyncedAt: SYNC_MODE === 'full' ? Date.now() : ((prevSnapMeta && prevSnapMeta.fullSyncedAt) || null),
@@ -209,19 +223,19 @@ async function writeSnapshot() {
     feesPostedAt: feesPostedAt || (prevSnapMeta && prevSnapMeta.feesPostedAt) || null,
     shipAvg: (prevSnapMeta && prevSnapMeta.shipAvg) || null,
   });
-  // Remove the previous run's chunks (a little later, so an open page can finish reading).
-  if (prevSnapMeta && prevSnapMeta.run && prevSnapMeta.run !== run) {
-    await new Promise((r) => setTimeout(r, 15000));
-    const batch = db.batch();
+  // Remove chunks that are no longer used: the old per-run names (first run after this change) or indexes beyond the new count.
+  if (prevSnapMeta && prevSnapMeta.run) {
+    const batch = db.batch(); let n = 0;
     for (const kind of SNAP_KINDS) {
-      const n = (prevSnapMeta.chunks || {})[kind] || 0;
-      for (let i = 0; i < n; i++) batch.delete(db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${sidSafe(kind)}_${prevSnapMeta.run}_${i}`));
+      const was = (prevSnapMeta.chunks || {})[kind] || 0;
+      const from = prevSnapMeta.run === run ? chunks[kind] : 0;
+      for (let i = from; i < was; i++) { batch.delete(db.collection(SNAP_COL).doc(`${ACCOUNT_LABEL}_${sidSafe(kind)}_${prevSnapMeta.run}_${i}`)); n++; }
     }
-    await batch.commit();
+    if (n) { await new Promise((r) => setTimeout(r, prevSnapMeta.run === run ? 0 : 15000)); await batch.commit(); }
   }
   try {
     const fs = require('fs'); fs.mkdirSync('.cache', { recursive: true });
-    fs.writeFileSync(SNAP_CACHE_FILE, JSON.stringify({ run, account: ACCOUNT_LABEL, snap: SNAP }));
+    fs.writeFileSync(SNAP_CACHE_FILE, JSON.stringify({ run: rev, account: ACCOUNT_LABEL, snap: SNAP }));
   } catch (e) { console.log('Could not save snapshot copy:', e.message); }
   console.log(`Snapshot written: ${JSON.stringify(counts)} in ${JSON.stringify(chunks)} chunk(s)`);
 }
