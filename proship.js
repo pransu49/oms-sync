@@ -73,11 +73,25 @@ const apiMsg = (r) => clip((r.json && ((r.json.meta && r.json.meta.message) || r
 const apiOk = (r) => r.status >= 200 && r.status < 300 && r.json && (!r.json.meta || r.json.meta.success !== false) && !r.json.subCode;
 
 // ProShip's order list is a GET that takes its filters in the BODY — fetch() cannot send that, plain https can.
-function getWithBody(path, body) {
+// ProShip sometimes answers 502/503/504 or an HTML error page for a moment (27 Nov 2026) - try again up to 4 times
+async function getWithBody(path, body) {
+  let last;
+  for (let i = 0; i < 4; i++) {
+    try { return await getWithBodyOnce(path, body); }
+    catch (e) {
+      last = e;
+      if (e.status === 401) { try { await signin(); } catch (_) {} }
+      else if (e.status && e.status < 500 && e.status !== 429) throw e;
+      if (i < 3) { const w = 2000 * Math.pow(2, i); console.log('  ' + e.message + ' - retry in ' + (w / 1000) + ' s'); await new Promise((r) => setTimeout(r, w)); }
+    }
+  }
+  throw last;
+}
+function getWithBodyOnce(path, body) {
   return new Promise((resolve, reject) => {
     const u = new URL(BASE + path), data = JSON.stringify(body);
     const req = https.request({ method: 'GET', hostname: u.hostname, path: u.pathname, headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }, timeout: 60000 }, (res) => {
-      let t = ''; res.on('data', (c) => (t += c)); res.on('end', () => { try { resolve(JSON.parse(t)); } catch (e) { reject(new Error('order list: not JSON (status ' + res.statusCode + ')')); } });
+      let t = ''; res.on('data', (c) => (t += c)); res.on('end', () => { try { resolve(JSON.parse(t)); } catch (e) { const er = new Error('order list: not JSON (status ' + res.statusCode + ')'); er.status = res.statusCode; reject(er); } });
     });
     req.on('error', reject); req.on('timeout', () => req.destroy(new Error('order list timed out')));
     req.write(data); req.end();

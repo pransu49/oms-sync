@@ -260,7 +260,7 @@ Before shipping a change, estimate: *runs per day × documents read per run* (+ 
   Console re-connects its proshipIndex feed on error / after 60 min without an update. Read-only `stat` mode prints index age + counts):
   `proship.yml` runs mode `sync` (ProShip order list,
   updated last 6 days, up to 20,000 rows, stops once all open AWBs are seen; 0 ProShip calls when nothing is live). Sync has its OWN concurrency
-  queue (`proship-sync`) so it can never push a waiting ship job out. ALL index writes go through `mergeIndex()` (Firestore transaction on the
+  queue (`proship-sync`) so it can never push a waiting ship job out. ProShip's order list sometimes answers 502/503 for a moment (27 Nov 2026) -> `getWithBody` retries 4x (2/4/8 s, re-sign-in on 401). ALL index writes go through `mergeIndex()` (Firestore transaction on the
   fresh doc): ship adds only its own new AWBs, sync changes only statuses (never un-cancels), cancel marks only its AWBs — never write the
   whole in-memory index back. Firebase: ~50 reads + ~100 writes/day (index + syncHealth), console re-reads proshipIndex once per change. amazon-confirm still confirms 120 per account per run (every 10 min).
   Firebase: +1 read per oms-push-tracking / amazon-confirm run (~190/day); per ship job ~4 reads + OMS chunks, ~3 + N/10 writes; console
