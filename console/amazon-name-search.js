@@ -1594,3 +1594,24 @@
     .then(function (j) { if (done) return; done = true; clearTimeout(t); add(j && j[0] && j[0].sha ? j[0].sha : "main"); })
     .catch(function () { if (!done) { done = true; clearTimeout(t); add("main"); } });
 } catch (e) {} })();
+
+/* ===== Competitor Pricing "Buy Box" column: split "You're not selling" (owner 28 Nov 2026: column filter showed 225, the
+   "Not selling" KPI 27). The KPI counts only IN-STOCK ASINs with no active offer; the column also listed out-of-stock listings
+   (Amazon hides an offer with 0 stock). Now: "Not selling · in stock" (= the KPI) and "Out of stock". 0 Firebase. ===== */
+(function () { try {
+  var OLD = "You're not selling", NS = "Not selling · in stock", OOS = "Out of stock";
+  function wrap() {
+    if (typeof window.cmApply !== "function" || window.cmApply.__bbSplit) return !!(window.cmApply && window.cmApply.__bbSplit);
+    var orig = window.cmApply;
+    var f = function (t, rows, cols, skipKey) {
+      if (t === "pricing" && Array.isArray(rows)) {
+        var inS = {}; try { (spapiInventoryRaw || []).forEach(function (e) { if (e.asin && (e.quantity || 0) > 0) inS[e.asin] = 1; }); } catch (e) {}
+        rows.forEach(function (r) { if (r && r.v && r.v.bb === OLD) r.v.bb = inS[(r.raw || {}).asin] ? NS : OOS; });
+        try { var fs = CM.state.pricing && CM.state.pricing.filters && CM.state.pricing.filters.bb; if (fs && fs.has(OLD)) { fs.delete(OLD); fs.add(NS); fs.add(OOS); } } catch (e) {}
+      }
+      return orig.apply(this, arguments);
+    };
+    f.__bbSplit = true; window.cmApply = f; return true;
+  }
+  var n = 0, iv = setInterval(function () { if (wrap() || ++n > 120) clearInterval(iv); }, 500); wrap();
+} catch (e) {} })();

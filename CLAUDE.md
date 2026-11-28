@@ -140,6 +140,8 @@
 - **Buy Box vs sales check** (owner 28 Nov 2026 "Buy Box count up but sales dipped"): `bb-diag.yml` (manual, read-only, ~30 reads) prints per account orders/day
   (`<acct>_dash`) + today's Buy Box status of the products that SOLD (held / lost / not selling / our other account holds it) and the biggest drops.
   The Buy Box count = number of ASINs held, NOT weighted by sales (Sasta 28 Nov: 391 held, only 91 of them sold in 14 days).
+- **Buy Box column split** (owner 28 Nov 2026, "Not selling 225 in the column, KPI 27"): block at the end of `amazon-name-search.js` wraps `cmApply` for
+  "pricing": "You're not selling" becomes "Not selling · in stock" (= the KPI: in stock, no active offer) or "Out of stock" (Amazon hides 0-stock offers). Keep it.
 - **Usage meter**: every robot prints `FBMETER ...` (from `fb-meter.js`, first line of each script) and the sync prints
   `FIREBASE OPS` + `FIREBASE OPS BY COLLECTION` — use these to estimate before shipping. `usage-diag.yml` (manual) prints hourly
   Firestore ops per project from Cloud Monitoring.
