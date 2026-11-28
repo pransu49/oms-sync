@@ -137,6 +137,9 @@
   `spapiSnapshots/<acct>_priceVerify`, the price record is written only when settled. Relist log: the same "still stuck" status
   (price_issue/blocked/buyable/failed/gone/bb_skip/learn_war) per ASIN is saved at most once a day (`relistState.logged`).
   Relist history is read by document-id range of the own account only (a new account's first run read ~40,000 docs before).
+- **Buy Box vs sales check** (owner 28 Nov 2026 "Buy Box count up but sales dipped"): `bb-diag.yml` (manual, read-only, ~30 reads) prints per account orders/day
+  (`<acct>_dash`) + today's Buy Box status of the products that SOLD (held / lost / not selling / our other account holds it) and the biggest drops.
+  The Buy Box count = number of ASINs held, NOT weighted by sales (Sasta 28 Nov: 391 held, only 91 of them sold in 14 days).
 - **Usage meter**: every robot prints `FBMETER ...` (from `fb-meter.js`, first line of each script) and the sync prints
   `FIREBASE OPS` + `FIREBASE OPS BY COLLECTION` — use these to estimate before shipping. `usage-diag.yml` (manual) prints hourly
   Firestore ops per project from Cloud Monitoring.
